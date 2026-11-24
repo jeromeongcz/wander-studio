@@ -2,8 +2,8 @@ import Fastify from 'fastify';
 import type { FastifyInstance } from 'fastify';
 import { Engine, EngineError } from './engine.ts';
 import { Studio } from './services.ts';
-import { createProject } from './pipeline.ts';
-import { estimate, isPreset, PRESETS, resolveWpm } from './studios/estimator.ts';
+import { addLanguage, createProject, removeLanguage } from './pipeline.ts';
+import { estimate, isPreset, PRESETS } from './studios/estimator.ts';
 import { newResearchContent } from './studios/research.ts';
 
 const STATUS: Record<string, number> = {
@@ -47,6 +47,7 @@ export function buildApi(engine: Engine): FastifyInstance {
     if (typeof b.name !== 'string' || !b.name.trim()) throw new EngineError('VALIDATION', 'name is required');
     const languages = Array.isArray(b.languages) && b.languages.length ? (b.languages as string[]) : ['en'];
     const formats = Array.isArray(b.formats) && b.formats.length ? (b.formats as string[]) : ['vertical_9x16'];
+    studio.assertLocales(languages);
     const id = createProject(engine, { name: b.name.trim(), category: b.category, languages, formats });
     // Seed research with the fact-verification checklist (still not_started until the user saves).
     const [research] = engine.list(id, { kind: 'research' });
@@ -99,17 +100,53 @@ export function buildApi(engine: Engine): FastifyInstance {
     const sections = Array.isArray(b.sections) ? b.sections : typeof b.text === 'string' ? [{ text: b.text }] : null;
     if (!sections) throw new EngineError('VALIDATION', 'Provide sections[] or text');
     if (b.preset !== undefined && !isPreset(b.preset)) throw new EngineError('VALIDATION', 'Unknown preset');
-    return estimate({ sections, lang: b.lang, preset: b.preset, targetSeconds: b.target_seconds, samples: studio.samples(b.lang) });
+    return estimate({ sections, lang: b.lang, preset: b.preset, targetSeconds: b.target_seconds, samples: studio.samples(b.lang), defaultWpm: studio.defaultWpm(b.lang) });
   });
   app.get('/calibration/:lang', async (req) => {
     const { lang } = req.params as { lang: string };
-    return resolveWpm(lang, studio.samples(lang));
+    return studio.wpm(lang);
   });
   app.post('/calibration/:lang', async (req, reply) => {
     const { lang } = req.params as { lang: string };
     const b = body(req);
     return reply.status(201).send(studio.addCalibration(lang, Number(b.words), Number(b.seconds)));
   });
+
+  // ---- localization ----
+  app.get('/locales', async () => studio.listLocales());
+  app.post('/locales', async (req, reply) => {
+    const b = body(req);
+    return reply.status(201).send(studio.upsertLocale(String(b.code ?? ''), String(b.name ?? ''), String(b.bcp47 ?? ''), Number(b.default_wpm)));
+  });
+  app.post('/projects/:id/languages', async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const lang = String(body(req).lang ?? '');
+    studio.assertLocales([lang]);
+    addLanguage(engine, id, lang);
+    return reply.status(201).send(engine.getProject(id));
+  });
+  app.delete('/projects/:id/languages/:lang', async (req) => {
+    const { id, lang } = req.params as { id: string; lang: string };
+    return { removedArtifacts: removeLanguage(engine, id, lang) };
+  });
+  app.post('/artifacts/:id/seed-from-base', async (req, reply) => reply.status(201).send(studio.seedFromBase((req.params as { id: string }).id)));
+  app.get('/artifacts/:id/adaptation-prompt', async (req) => {
+    const q = req.query as { notes?: string };
+    return { prompt: studio.adaptationPrompt((req.params as { id: string }).id, q.notes) };
+  });
+  app.get('/artifacts/:id/compare', async (req) => studio.compare((req.params as { id: string }).id));
+  app.get('/artifacts/:id/language-mix', async (req) => studio.languageMix((req.params as { id: string }).id));
+  app.get('/artifacts/:id/tts-preview', async (req) => studio.ttsPreview((req.params as { id: string }).id));
+  app.get('/projects/:id/lexicon/:lang', async (req) => {
+    const { id, lang } = req.params as { id: string; lang: string };
+    return studio.listLexicon(id, lang);
+  });
+  app.put('/projects/:id/lexicon/:lang', async (req) => {
+    const { id, lang } = req.params as { id: string; lang: string };
+    const b = body(req);
+    return studio.setLexicon(id, lang, String(b.term ?? ''), String(b.respelling ?? ''));
+  });
+  app.delete('/lexicon/:entryId', async (req) => studio.deleteLexicon((req.params as { entryId: string }).entryId));
 
   return app;
 }

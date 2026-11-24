@@ -232,3 +232,11 @@ test('state persists across reopening a file database', () => {
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('content with undefined fields is stored as valid JSON and hashes like its defined-only twin', () => {
+  const { engine, projectId } = setup();
+  const [research] = engine.list(projectId, { kind: 'research' });
+  engine.saveVersion(research.id, { a: 1, b: undefined });
+  assert.deepEqual(engine.getContent(research.id), { a: 1 });
+  assert.equal(engine.saveVersion(research.id, { a: 1 }).changed, false);
+});

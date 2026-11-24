@@ -19,6 +19,8 @@ export interface ScriptContent {
   target_seconds?: number;
   sections: ScriptSection[];
   hook_variants?: { id: string; text: string; selected?: boolean }[];
+  source_version_id?: string; // base-script version this adaptation was made from
+  adaptation_notes?: string;
 }
 
 const bad = (message: string, details?: unknown) => new EngineError('VALIDATION', message, details);
@@ -39,6 +41,7 @@ export function validateScriptShape(content: unknown): ScriptContent {
     ids.add(s.id);
     for (const k of ['delivery_note', 'tts_text'] as const) if (s[k] !== undefined && typeof s[k] !== 'string') throw bad(`${k} must be a string`);
   }
+  for (const k of ['source_version_id', 'adaptation_notes'] as const) if (content[k] !== undefined && typeof content[k] !== 'string') throw bad(`${k} must be a string`);
   if (content.hook_variants !== undefined) {
     if (!Array.isArray(content.hook_variants) || !content.hook_variants.every((h) => isObj(h) && typeof h.id === 'string' && typeof h.text === 'string')) {
       throw bad('Invalid hook_variants');
@@ -47,11 +50,11 @@ export function validateScriptShape(content: unknown): ScriptContent {
   return content as unknown as ScriptContent;
 }
 
-export function scriptEstimate(c: ScriptContent, samples: CalibrationSample[]): Estimate {
-  return estimate({ sections: c.sections, lang: c.lang, preset: c.preset, targetSeconds: c.target_seconds, samples });
+export function scriptEstimate(c: ScriptContent, samples: CalibrationSample[], defaultWpm?: number): Estimate {
+  return estimate({ sections: c.sections, lang: c.lang, preset: c.preset, targetSeconds: c.target_seconds, samples, defaultWpm });
 }
 
-export function scriptReadiness(c: ScriptContent, samples: CalibrationSample[]): { errors: string[]; warnings: string[]; estimate: Estimate } {
+export function scriptReadiness(c: ScriptContent, samples: CalibrationSample[], defaultWpm?: number): { errors: string[]; warnings: string[]; estimate: Estimate } {
   const errors: string[] = [];
   const warnings: string[] = [];
   const filled = c.sections.filter((s) => s.text.trim());
@@ -59,7 +62,7 @@ export function scriptReadiness(c: ScriptContent, samples: CalibrationSample[]):
   const isShort = c.preset.startsWith('short_');
   if (isShort && filled.length && filled[0].kind !== 'hook') errors.push('Shorts scripts must open with a hook section');
   if (isShort && !c.sections.some((s) => s.kind === 'cta')) warnings.push('No CTA section');
-  const est = scriptEstimate(c, samples);
+  const est = scriptEstimate(c, samples, defaultWpm);
   if (est.overHardLimit) errors.push(`Estimated ${est.seconds}s exceeds the 60s Shorts limit`);
   else if (est.fit === 'over') warnings.push(`Estimated ${est.seconds}s is over the preset (${PRESETS[c.preset].label})`);
   else if (est.fit === 'under') warnings.push(`Estimated ${est.seconds}s is under the preset (${PRESETS[c.preset].label})`);

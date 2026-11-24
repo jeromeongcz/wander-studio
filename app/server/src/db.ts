@@ -86,6 +86,29 @@ const MIGRATIONS: string[] = [
   );
   CREATE INDEX idx_calibration_lang ON speech_calibration(lang_code);
   `,
+  // v3: extensible locale registry and per-project pronunciation lexicon (TTS-only, never shown in captions)
+  `
+  CREATE TABLE locales (
+    code TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    bcp47 TEXT NOT NULL,
+    default_wpm INTEGER NOT NULL CHECK (default_wpm BETWEEN 60 AND 300),
+    builtin INTEGER NOT NULL DEFAULT 0
+  );
+  INSERT INTO locales (code, name, bcp47, default_wpm, builtin) VALUES
+    ('en', 'English', 'en', 150, 1),
+    ('tl', 'Tagalog', 'fil-PH', 135, 1),
+    ('taglish', 'Taglish', 'fil-PH', 145, 1);
+  CREATE TABLE pronunciation_entries (
+    id TEXT PRIMARY KEY,
+    project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    lang_code TEXT NOT NULL,
+    term TEXT NOT NULL COLLATE NOCASE,
+    respelling TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    UNIQUE (project_id, lang_code, term)
+  );
+  `,
 ];
 
 export function openDb(path: string = ':memory:'): DatabaseSync {

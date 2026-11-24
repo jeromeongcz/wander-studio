@@ -54,11 +54,12 @@ function canonical(v: unknown): string {
   if (v && typeof v === 'object') {
     const o = v as Record<string, unknown>;
     return `{${Object.keys(o)
+      .filter((k) => o[k] !== undefined) // match JSON.stringify: undefined fields are omitted
       .sort()
       .map((k) => `${JSON.stringify(k)}:${canonical(o[k])}`)
       .join(',')}}`;
   }
-  return JSON.stringify(v);
+  return JSON.stringify(v) ?? 'null';
 }
 
 export class Engine {
@@ -87,12 +88,12 @@ export class Engine {
 
   // ---- projects / artifacts ----
 
-  createProject(name: string, languages: string[], category?: string): string {
+  createProject(name: string, languages: string[], category?: string, settings: Record<string, unknown> = {}): string {
     return this.tx(() => {
       const id = ulid();
       this.db
-        .prepare('INSERT INTO projects (id, name, category, created_at) VALUES (?,?,?,?)')
-        .run(id, name, category ?? null, now());
+        .prepare('INSERT INTO projects (id, name, category, settings_json, created_at) VALUES (?,?,?,?,?)')
+        .run(id, name, category ?? null, JSON.stringify(settings), now());
       for (const l of languages) {
         this.db.prepare('INSERT INTO project_languages (project_id, lang_code) VALUES (?,?)').run(id, l);
       }
@@ -105,10 +106,11 @@ export class Engine {
   }
 
   getProject(id: string) {
-    const p = this.db.prepare('SELECT id, name, category, created_at FROM projects WHERE id = ?').get(id) as any;
+    const p = this.db.prepare('SELECT id, name, category, settings_json, created_at FROM projects WHERE id = ?').get(id) as any;
     if (!p) throw new EngineError('NOT_FOUND', `Project ${id} not found`);
     const languages = (this.db.prepare('SELECT lang_code FROM project_languages WHERE project_id = ?').all(id) as any[]).map((r) => r.lang_code as string);
-    return { ...p, languages };
+    const { settings_json, ...rest } = p;
+    return { ...rest, settings: JSON.parse(settings_json) as Record<string, unknown>, languages };
   }
 
   /** Parsed content of the artifact's current version, or null if it has none. */
@@ -215,6 +217,22 @@ export class Engine {
       }
     }
     return hit;
+  }
+
+  /**
+   * Mark an approved/in-review artifact as needing revision because something it relies on changed
+   * outside its own content (e.g. the pronunciation lexicon), then cascade downstream.
+   */
+  invalidate(id: string, note: string): string[] {
+    return this.tx(() => {
+      const a = this.get(id);
+      const hit: string[] = [];
+      if (a.state === 'approved' || a.state === 'awaiting_review') {
+        this.transition(a, 'needs_revision', 'system', { note });
+        hit.push(a.id);
+      }
+      return [...hit, ...this.invalidateDownstream(id)];
+    });
   }
 
   /**

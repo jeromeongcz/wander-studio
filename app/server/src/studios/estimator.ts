@@ -34,12 +34,12 @@ export function median(xs: number[]): number {
   return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2;
 }
 
-export function resolveWpm(lang: string, samples: CalibrationSample[] = []): { wpm: number; source: 'calibrated' | 'default'; samples: number } {
+export function resolveWpm(lang: string, samples: CalibrationSample[] = [], defaultWpm?: number): { wpm: number; source: 'calibrated' | 'default'; samples: number } {
   const valid = samples.filter((s) => s.words >= 5 && s.seconds > 0);
   if (valid.length >= MIN_CALIBRATION_SAMPLES) {
     return { wpm: Math.round(median(valid.map((s) => (s.words / s.seconds) * 60))), source: 'calibrated', samples: valid.length };
   }
-  return { wpm: DEFAULT_WPM[lang] ?? FALLBACK_WPM, source: 'default', samples: valid.length };
+  return { wpm: defaultWpm ?? DEFAULT_WPM[lang] ?? FALLBACK_WPM, source: 'default', samples: valid.length };
 }
 
 export interface EstimateInput {
@@ -48,6 +48,7 @@ export interface EstimateInput {
   preset?: PresetId;
   targetSeconds?: number;
   samples?: CalibrationSample[];
+  defaultWpm?: number;
 }
 
 export interface Estimate {
@@ -62,7 +63,7 @@ export interface Estimate {
 }
 
 export function estimate(input: EstimateInput): Estimate {
-  const { wpm, source, samples } = resolveWpm(input.lang, input.samples);
+  const { wpm, source, samples } = resolveWpm(input.lang, input.samples, input.defaultWpm);
   const text = input.sections.map((s) => s.text).join('\n');
   const words = input.sections.reduce((n, s) => n + countWords(s.text), 0);
   const sentencePauses = (text.match(/[.!?…]+/g) ?? []).length * 0.35;
