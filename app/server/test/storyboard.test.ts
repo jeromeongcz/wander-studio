@@ -4,7 +4,7 @@ import { openDb } from '../src/db.ts';
 import { Engine } from '../src/engine.ts';
 import { buildApi } from '../src/api.ts';
 import { newResearchContent } from '../src/studios/research.ts';
-import { listCategories, profileFor, draftScenes } from '../src/studios/storyboard.ts';
+import { listCategories, profileFor, draftScenes, ASSET_TYPES, MOVEMENTS, TRANSITIONS } from '../src/studios/storyboard.ts';
 
 function boot() {
   const engine = new Engine(openDb());
@@ -50,6 +50,18 @@ test('categories: all plan categories present, recommendations differ, unknown f
   for (const n of ['Documentary', 'History', 'Mysteries', 'Science', 'Technology', 'Education', 'Psychology', 'Motivational Stories', 'Travel', 'Nature', 'Adventure', 'Biographies', 'Fictional Storytelling', 'Interesting Facts']) {
     assert.ok(names.includes(n), n);
   }
+  for (const n of ['Horror & Folklore', 'Filipino Folklore', 'Urban Legends', 'Mythology', 'True Crime', 'Space & Astronomy', 'Health & Wellness', 'Finance & Business', 'Sports', 'Food & Cooking', 'Animals & Pets', 'Gaming', 'Movies & TV', 'Music & Arts', 'Philosophy', 'How-To & Life Hacks', 'News & Current Events', 'Comedy & Skits', 'Philippine History']) {
+    assert.ok(names.includes(n), n);
+    assert.equal(profileFor(n).custom, false, n);
+  }
+  // every profile is well-formed: valid asset types, camera moves and transition
+  for (const c of listCategories()) {
+    assert.ok(c.profile.assets.length >= 3 && c.profile.assets.every((a) => ASSET_TYPES.includes(a)), `${c.name} assets`);
+    assert.ok(c.profile.cameras.length >= 2 && c.profile.cameras.every((m) => MOVEMENTS.includes(m)), `${c.name} cameras`);
+    assert.ok(TRANSITIONS.includes(c.profile.transition), `${c.name} transition`);
+    assert.ok(c.profile.styles.length >= 1 && c.profile.hint.length > 5, `${c.name} text`);
+  }
+  assert.equal(new Set(names.map((n) => n.toLowerCase())).size, names.length, 'no duplicate names');
   assert.ok(profileFor('history').profile.assets.includes('map'));
   assert.ok(profileFor('Science').profile.assets.includes('infographic'));
   assert.ok(profileFor('Fictional_Storytelling').profile.assets.includes('character'));
