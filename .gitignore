@@ -1,0 +1,12 @@
+node_modules/
+data/*.db
+data/*.db-*
+projects/*
+!projects/.gitkeep
+cache/*
+!cache/.gitkeep
+.env
+.env.local
+dist/
+*.log
+.DS_Store
