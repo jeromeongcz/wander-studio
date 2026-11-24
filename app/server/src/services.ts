@@ -29,6 +29,14 @@ import type { CaptionTrack } from './captions/track.ts';
 import { runWhisper, whisperStatus } from './captions/whisper.ts';
 import { computeSceneTimes } from './render/timing.ts';
 import { ffmpegBinary, detectSilences } from './media.ts';
+import { ArchiveService } from './archive.ts';
+import { PublishService } from './publish/service.ts';
+import { CacheService } from './cache.ts';
+import { TemplateService } from './templates.ts';
+import { JobRunner } from './jobs.ts';
+import type { JobHandler } from './jobs.ts';
+import { requireHealthy, runPreflight } from './preflight.ts';
+import { scriptEstimate } from './studios/script.ts';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { AppConfig } from './config.ts';
@@ -43,12 +51,99 @@ export class Studio {
   assets: AssetService;
   audio: AudioService;
   render: RenderService;
+  archive: ArchiveService;
+  publish: PublishService;
+  cache: CacheService;
+  templates: TemplateService;
+  jobs: JobRunner;
   constructor(engine: Engine, config: Partial<AppConfig> = {}) {
     this.engine = engine;
     this.config = resolveConfig(config);
     this.assets = new AssetService(engine, this.config);
     this.audio = new AudioService(engine, this.config);
     this.render = new RenderService(engine, this.assets, this.audio, this.config);
+    this.archive = new ArchiveService(engine, this.config);
+    this.publish = new PublishService(this);
+    this.cache = new CacheService(this.config);
+    this.templates = new TemplateService(engine);
+    this.jobs = new JobRunner(engine, this.jobHandlers());
+  }
+
+  estimateScript(sc: ScriptContent): number {
+    return scriptEstimate(sc, this.samples(sc.lang), this.defaultWpm(sc.lang)).seconds;
+  }
+
+  preflight(needBytes?: number) {
+    return runPreflight(this.config, {
+      needBytes,
+      fontsOk: () => {
+        const have = this.render.listFonts().some((f) => f.family.toLowerCase().replace(/[^a-z0-9]/g, '') === DEFAULT_STYLE.font_family.toLowerCase().replace(/[^a-z0-9]/g, ''));
+        return { ok: have, detail: have ? `"${DEFAULT_STYLE.font_family}" found` : `"${DEFAULT_STYLE.font_family}" not found in ${this.render.fontDirs().join(', ')}` };
+      },
+    });
+  }
+
+  /** Background job kinds. Heavy ones run a preflight first and report readable diagnostics when the environment cannot cope. */
+  private jobHandlers(): Record<string, JobHandler> {
+    const guard = (ctx: { signal: AbortSignal }) => {
+      if (ctx.signal.aborted) throw new EngineError('CANCELLED', 'Cancelled');
+    };
+    return {
+      render_composition: async (ctx) => {
+        await requireHealthy(this.config, { fontsOk: undefined });
+        ctx.log(`Rendering ${ctx.params.compositionId}`);
+        return this.renderComposition(ctx.params.compositionId, ctx.params.variants ?? ['captioned', 'clean'], { reopen: ctx.params.reopen === true, signal: ctx.signal, onProgress: ctx.progress });
+      },
+      batch_render: async (ctx) => {
+        await requireHealthy(this.config);
+        const { langs, formats } = ctx.params as { langs?: string[]; formats?: string[] };
+        const comps = this.engine.list(ctx.job.project_id, { kind: 'composition', state: 'approved' }).filter((c) => (!langs || langs.includes(c.lang_code!)) && (!formats || formats.includes(c.format!)));
+        const items: { id: string; label: string; ok: boolean; error?: { code: string; message: string } }[] = [];
+        for (const [i, c] of comps.entries()) {
+          guard(ctx);
+          ctx.progress(i / Math.max(1, comps.length), `Rendering ${c.label}`);
+          try {
+            await this.renderComposition(c.id, ctx.params.variants ?? ['captioned', 'clean'], { reopen: ctx.params.reopen === true, signal: ctx.signal });
+            items.push({ id: c.id, label: c.label, ok: true });
+            ctx.log(`${c.label}: rendered`);
+          } catch (e) {
+            if ((e as EngineError).code === 'CANCELLED') throw e;
+            const err = e as EngineError;
+            items.push({ id: c.id, label: c.label, ok: false, error: { code: err.code ?? 'INTERNAL', message: err.message } });
+            ctx.log(`${c.label}: ${err.message}`, 'error');
+          }
+        }
+        const failed = items.filter((x) => !x.ok);
+        if (failed.length) throw new EngineError('BATCH_PARTIAL', `${failed.length} of ${items.length} renders failed; the others finished`, items);
+        return { items, note: comps.length ? undefined : 'No approved compositions to render' };
+      },
+      align_captions: async (ctx) => {
+        guard(ctx);
+        return this.alignCaptions(ctx.params.captionId, { method: ctx.params.method, reopen: ctx.params.reopen === true });
+      },
+      synthesize_narration: async (ctx) => {
+        guard(ctx);
+        return this.synthesizeNarration(ctx.params.audioId, { voice: ctx.params.voice, sectionIds: ctx.params.sectionIds, reopen: ctx.params.reopen === true });
+      },
+    };
+  }
+
+  applyCaptionStyle(captionId: string, templateId: string, opts: { reopen?: boolean } = {}) {
+    const t = this.templates.get(templateId);
+    if (t.kind !== 'caption_style') throw new EngineError('VALIDATION', 'Not a caption style template');
+    const track = this.engine.getContent(captionId) as CaptionTrack | null;
+    if (!track) throw new EngineError('NO_VERSION', 'Align captions before choosing a style');
+    return this.save(captionId, { ...track, style: t.content }, { actor: 'user', reopen: opts.reopen });
+  }
+
+  applyScriptOutline(scriptId: string, templateId: string, o: { title: string; lang: string; preset: string }) {
+    const a = this.engine.get(scriptId);
+    if (a.kind !== 'script_base') throw new EngineError('VALIDATION', 'Outlines apply to the base script');
+    if (a.current_version_id) throw new EngineError('VALIDATION', 'The base script already has content');
+    const t = this.templates.get(templateId);
+    if (t.kind !== 'script_outline') throw new EngineError('VALIDATION', 'Not a script outline template');
+    const sections = (t.content.sections as { kind: string; guidance?: string }[]).map((s, i) => ({ id: `s${i + 1}`, kind: s.kind, text: '', delivery_note: s.guidance }));
+    return this.save(scriptId, { title: o.title, lang: o.lang, preset: o.preset, sections }, { actor: 'user' });
   }
 
   // ---- locale registry ----
@@ -609,13 +704,13 @@ export class Studio {
     return this.save(compId, { ...this.render.build(compId), overrides }, { actor: 'user', reopen: opts.reopen });
   }
 
-  async renderComposition(compId: string, variants: ('captioned' | 'clean')[], opts: { reopen?: boolean } = {}) {
+  async renderComposition(compId: string, variants: ('captioned' | 'clean')[], opts: { reopen?: boolean; signal?: AbortSignal; onProgress?: (pct: number, msg: string) => void } = {}) {
     const comp = this.engine.get(compId);
     if (comp.kind !== 'composition') throw new EngineError('VALIDATION', 'Not a composition artifact');
     const finalArt = this.engine.list(comp.project_id, { kind: 'final_render', lang_code: comp.lang_code ?? undefined, format: comp.format ?? undefined })[0];
     if (finalArt?.state === 'approved' && !opts.reopen) throw new EngineError('PROTECTED', 'The final render is approved; pass reopen to render again');
     if (this.render.isStale(compId)) throw new EngineError('VALIDATION', 'The timeline is out of date; rebuild it before rendering');
-    const result = await this.render.render(compId, variants);
+    const result = await this.render.render(compId, variants, { signal: opts.signal, onProgress: opts.onProgress });
     if (finalArt) {
       const prev = (this.engine.getContent(finalArt.id) as { renders?: Record<string, unknown>[] } | null)?.renders ?? [];
       const latest = new Map<string, Record<string, unknown>>(prev.map((r) => [String(r.variant), r]));

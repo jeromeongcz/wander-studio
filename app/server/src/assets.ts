@@ -14,6 +14,8 @@ import { licenseApprovalCheck, validateLicenseShape } from './license.ts';
 import type { LicenseRecord } from './license.ts';
 import type { AppConfig } from './config.ts';
 import { ProviderRegistry } from './providers/registry.ts';
+import { I2V_PROVIDERS, parseMotionPrompt } from './providers/i2v.ts';
+import { ffmpegBinary } from './media.ts';
 
 export interface Asset {
   id: string;
@@ -399,6 +401,31 @@ export class AssetService {
       const a = this.get(l.asset_id);
       if (a.scope === 'shared') throw bad('Reuse shared assets into the project before linking them');
       if (a.project_id !== projectId) throw bad(`Asset ${l.asset_id} belongs to a different project`);
+    }
+  }
+
+  /** Turn an approved still into a short motion clip with the built-in camera-motion provider. The new asset needs its own approval. */
+  async makeMotionClip(projectId: string, sourceId: string, o: { motionPrompt: string; seconds: number; width?: number; height?: number; fps?: number; name?: string; provider?: string }): Promise<Asset> {
+    const provider = I2V_PROVIDERS.find((p) => p.id === (o.provider ?? 'still-motion'));
+    if (!provider) throw new EngineError('NOT_FOUND', `Unknown image-to-video provider ${o.provider}`);
+    const avail = await provider.available();
+    if (!avail.ok) throw new EngineError('PROVIDER_ERROR', `${provider.name} is not available: ${avail.detail}`);
+    const src = this.get(sourceId);
+    if (src.project_id !== projectId) throw bad('Source asset belongs to a different project');
+    if (src.media_kind !== 'image') throw bad('Motion clips are made from still images');
+    if (!(o.seconds >= 1 && o.seconds <= 30)) throw bad('seconds must be between 1 and 30');
+    const portrait = src.height > src.width * 1.2;
+    const width = o.width ?? (portrait ? 1080 : 1920);
+    const height = o.height ?? (portrait ? 1920 : 1080);
+    const fps = o.fps ?? 30;
+    if (width % 2 || height % 2 || width < 240 || height < 240 || width > 3840 || height > 3840 || !(fps >= 10 && fps <= 60)) throw bad('Invalid clip size or fps');
+    const tmp = join(this.config.root, 'cache', `motion_${ulid()}.mp4`);
+    try {
+      await provider.generate({ spec: { asset: { path: this.absPath(src), kind: 'image', width: src.width, height: src.height, sha256: src.sha256 }, focal: src.focal, camera: parseMotionPrompt(o.motionPrompt), duration: o.seconds, width, height, fps }, outPath: tmp, ffmpeg: ffmpegBinary(this.config.ffprobePath) });
+      return await this.importLocal(projectId, tmp, { type: 'motion_graphic', name: o.name ?? `${src.name} (motion)`, license: { ...src.license, notes: `${src.license.notes ? src.license.notes + '; ' : ''}Derived from asset ${src.id} with ${provider.id}` }, provider: provider.id, prompt: o.motionPrompt, params: { source_asset_id: src.id, seconds: o.seconds, fps }, tags: [...src.tags, 'motion'] }, { moveSource: true });
+    } catch (e) {
+      await unlink(tmp).catch(() => {});
+      throw e;
     }
   }
 }

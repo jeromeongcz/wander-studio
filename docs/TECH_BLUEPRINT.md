@@ -36,3 +36,15 @@ Phases 1–10 as in the v2.2 plan, with one addition: a throwaway vertical slice
 1. Install FFmpeg and pnpm via Homebrew (awaiting approval).
 2. Confirm web app vs desktop shell (default: web app).
 3. Bundle OFL caption fonts (including Tagalog-safe Latin coverage) in `templates/fonts`.
+
+## Build status (all roadmap phases implemented, backend only)
+Phases 0-10 are built and tested (`npm test`, includes a real 10-second, 3-format end-to-end run).
+
+Known gaps, stated plainly:
+- No web UI yet; everything is exposed as a loopback-only HTTP API (`npm run dev:server`).
+- Tagalog TTS needs Edge TTS (online), Piper with your own model, or your own recording. Edge/Piper adapters are tested only against stub programs.
+- Whisper alignment is implemented but unrun: no model file is installed. Default alignment is silence-anchored and always reported as approximate.
+- AI image-to-video and cloud GPU adapters are not bundled; the provider interface and a built-in still-image-motion fallback exist.
+- True parallax layers are approximated (slow zoom plus drift). Stock video clips play as-is.
+- Caption font defaults to macOS Arial Black, which cannot be redistributed; add an open-licensed font to `templates/fonts`.
+- Archives use plain zip (no zip64): files over 4 GB are refused.

@@ -192,6 +192,48 @@ const MIGRATIONS: string[] = [
   );
   CREATE INDEX idx_renders_project ON renders(project_id, lang_code, format);
   `,
+  // v7: publishing kits, thumbnails, reusable templates, and a real job queue
+  `
+  CREATE TABLE publishing_kits (
+    id TEXT PRIMARY KEY,
+    project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    lang_code TEXT NOT NULL,
+    content_json TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    UNIQUE (project_id, lang_code)
+  );
+  CREATE TABLE thumbnails (
+    id TEXT PRIMARY KEY,
+    project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    lang_code TEXT NOT NULL,
+    rel_path TEXT NOT NULL,
+    width INTEGER NOT NULL,
+    height INTEGER NOT NULL,
+    bytes INTEGER NOT NULL,
+    sha256 TEXT NOT NULL,
+    text TEXT,
+    source_asset_id TEXT,
+    created_at TEXT NOT NULL
+  );
+  CREATE TABLE templates (
+    id TEXT PRIMARY KEY,
+    kind TEXT NOT NULL CHECK (kind IN ('caption_style','script_outline')),
+    name TEXT NOT NULL,
+    content_json TEXT NOT NULL,
+    builtin INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL,
+    UNIQUE (kind, name)
+  );
+  ALTER TABLE jobs ADD COLUMN params_json TEXT NOT NULL DEFAULT '{}';
+  ALTER TABLE jobs ADD COLUMN result_json TEXT;
+  ALTER TABLE jobs ADD COLUMN log_json TEXT NOT NULL DEFAULT '[]';
+  ALTER TABLE jobs ADD COLUMN attempts INTEGER NOT NULL DEFAULT 0;
+  ALTER TABLE jobs ADD COLUMN started_at TEXT;
+  ALTER TABLE jobs ADD COLUMN finished_at TEXT;
+  ALTER TABLE jobs ADD COLUMN retry_of TEXT;
+  ALTER TABLE jobs ADD COLUMN message TEXT;
+  `,
 ];
 
 export function openDb(path: string = ':memory:'): DatabaseSync {

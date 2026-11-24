@@ -10,3 +10,4 @@ cache/*
 dist/
 *.log
 .DS_Store
+exports/

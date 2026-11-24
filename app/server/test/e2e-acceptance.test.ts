@@ -4,6 +4,8 @@ import { execFileSync } from 'node:child_process';
 import { existsSync, mkdtempSync, readFileSync, rmSync, readdirSync, writeFileSync, mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
+import { createHash } from 'node:crypto';
+import { statSync as statSync2 } from 'node:fs';
 import { openDb } from '../src/db.ts';
 import { Engine } from '../src/engine.ts';
 import { buildApi } from '../src/api.ts';
@@ -284,6 +286,133 @@ test('10-second multi-format captioned video: research -> script -> storyboard -
   // Taglish stays independent: its own audio/caption approvals untouched by the English work
   assert.equal(state(one('audio', 'taglish').id), 'approved');
   assert.equal(state(one('caption', 'taglish').id), 'approved');
+
+  // ===== Phase 9: publishing package =====
+  const vfinal = one('final_render', 'en', 'vertical_9x16');
+  assert.equal(state(vfinal.id), 'in_progress');
+  await approve(vfinal.id, 'vertical final re-approve');
+
+  const th = await ok(call('POST', `/projects/${pid}/thumbnails`, { lang: 'en', scene_id: scenes[0].scene_id, text: 'Three hearts?!' }), 'thumbnail');
+  assert.deepEqual([th.json.width, th.json.height], [1280, 720]);
+  assert.equal(probe(join(root, th.json.rel_path)).streams[0].codec_name, 'mjpeg');
+  if (OUT) writeFileSync(join(OUT, 'thumbnail.jpg'), readFileSync(join(root, th.json.rel_path)));
+
+  const kitRes = await ok(call('POST', `/projects/${pid}/kit/en/generate`), 'kit');
+  assert.ok(kitRes.json.title_options[0].startsWith('Did you know octopuses'));
+  assert.ok(kitRes.json.hashtags.includes('#Shorts'));
+  assert.equal(kitRes.json.chapters.length, 0);
+  const kitEdit = { ...kitRes.json, title_options: ['Octopuses have THREE hearts', ...kitRes.json.title_options], generated_by: 'manual' };
+  await ok(call('PUT', `/projects/${pid}/kit/en`, { content: kitEdit }), 'kit edit');
+  assert.equal((await call('GET', `/projects/${pid}/kit/en`)).json.content.generated_by, 'manual');
+  assert.match((await call('GET', `/projects/${pid}/kit/taglish/prompt`)).json.prompt, /Taglish/);
+  assert.equal((await call('PUT', `/projects/${pid}/kit/en`, { content: { ...kitEdit, tags: ['x'.repeat(40)] } })).status, 422);
+
+  const man = (await call('GET', `/projects/${pid}/license-manifest`)).json;
+  assert.ok(man.items.some((i: any) => i.kind === 'narration' && i.provider.startsWith('macos-say')));
+  assert.ok(man.items.some((i: any) => i.kind === 'font'));
+  assert.ok(man.items.filter((i: any) => i.kind === 'visual').length >= scenes.length);
+  assert.ok(man.warnings.some((w: string) => /macos-say.*terms|commercial/i.test(w)), JSON.stringify(man.warnings));
+
+  const exp = await ok(call('POST', `/projects/${pid}/export`, { archive: true }), 'export');
+  const dir = exp.json.dir as string;
+  const names = exp.json.files.map((f: any) => f.path) as string[];
+  const mp4s = names.filter((n) => n.endsWith('.mp4')).sort();
+  assert.deepEqual(mp4s.map((n) => n.split('/').pop()), ['octopus-10s_en_vertical_9x16_captioned.mp4', 'octopus-10s_en_vertical_9x16_clean.mp4']);
+  for (const want of ['subtitles/octopus-10s_en.srt', 'subtitles/octopus-10s_en.vtt', 'thumbnails/octopus-10s_en.jpg', 'publishing/kit_en.json', 'publishing/kit_en.md', 'licenses/license_manifest.json', 'licenses/CREDITS.txt', 'project_archive.wander.zip']) assert.ok(names.includes(want), `export has ${want}`);
+  for (const f of exp.json.files) {
+    assert.ok(existsSync(join(dir, f.path)), f.path);
+    assert.equal(statSync2(join(dir, f.path)).size, f.bytes, `${f.path} size`);
+  }
+  const rec = (await call('GET', `/projects/${pid}/renders?lang=en&format=vertical_9x16`)).json as any[];
+  for (const v of ['captioned', 'clean']) {
+    const latest = rec.find((r) => r.variant === v);
+    assert.equal(createHash('sha256').update(readFileSync(join(dir, 'videos', `octopus-10s_en_vertical_9x16_${v}.mp4`))).digest('hex'), latest.sha256, `${v}: export is byte-identical to the verified render`);
+  }
+  const skipped = exp.json.skipped.map((x: any) => x.item);
+  assert.ok(skipped.includes('en horizontal_16x9 video'), 'unapproved formats are reported, not silently dropped');
+  assert.ok(skipped.includes('taglish vertical_9x16 video'));
+  const summary = readFileSync(join(dir, 'EXPORT_SUMMARY.md'), 'utf8');
+  assert.match(summary, /upload manually/);
+  assert.match(summary, /Not included/);
+  assert.match(readFileSync(join(dir, 'subtitles', 'octopus-10s_en.srt'), 'utf8'), /Did you know octopuses/);
+  assert.match(readFileSync(join(dir, 'licenses', 'CREDITS.txt'), 'utf8'), /Credits for "Octopus 10s"/);
+  const unapproved = await call('POST', `/projects/${(await ok(call('POST', '/projects', { name: 'Empty', languages: ['en'], formats: ['vertical_9x16'] }), 'empty project')).json.id}/export`, {});
+  assert.equal(unapproved.status, 422, 'nothing approved, nothing exported');
+
+  // archive round trip with real renders: restore as a copy and compare bytes
+  const zipPath = join(dir, 'project_archive.wander.zip');
+  const restored = await ok(call('POST', '/archive/restore', { path: zipPath, as_copy: true }), 'restore copy');
+  const nid = restored.json.projectId as string;
+  assert.notEqual(nid, pid);
+  assert.equal(engine.list(nid).length, engine.list(pid).length);
+  const origRenders = (await call('GET', `/projects/${pid}/renders`)).json as any[];
+  const copyRenders = (await call('GET', `/projects/${nid}/renders`)).json as any[];
+  assert.equal(copyRenders.length, origRenders.length);
+  for (const r of copyRenders) assert.equal(createHash('sha256').update(readFileSync(join(root, r.rel_path))).digest('hex'), r.sha256, 'restored render is byte-identical');
+  assert.equal((await call('POST', '/archive/restore', { path: zipPath })).status, 409, 'cannot restore over the original');
+  assert.equal(engine.getProject(nid).name, 'Octopus 10s');
+
+  // ===== Phase 10: jobs, batch, preflight, cache =====
+  const pf = (await call('GET', '/preflight')).json;
+  assert.equal(pf.ok, true, JSON.stringify(pf.checks.filter((c: any) => !c.ok)));
+  const waitJob = async (id: string, until: string[] = ['succeeded', 'failed', 'cancelled'], ms = 180_000) => {
+    const t0 = Date.now();
+    for (;;) {
+      const j = (await call('GET', `/jobs/${id}`)).json;
+      if (until.includes(j.state)) return j;
+      assert.ok(Date.now() - t0 < ms, `job ${id} stuck in ${j.state}`);
+      await new Promise((r) => setTimeout(r, 60));
+    }
+  };
+  const vcomp2 = one('composition', 'en', 'vertical_9x16');
+  assert.equal(state(vcomp2.id), 'approved');
+
+  // batch render job: only approved compositions, cached scenes, progress reported
+  const batch = await ok(call('POST', '/jobs', { kind: 'batch_render', project_id: pid, params: { formats: ['vertical_9x16'], variants: ['clean'], reopen: true } }), 'enqueue batch');
+  assert.equal(batch.status, 202);
+  const bdone = await waitJob(batch.json.id);
+  assert.equal(bdone.state, 'succeeded', JSON.stringify(bdone.error));
+  assert.equal(bdone.progress, 1);
+  assert.deepEqual(bdone.result.items.map((i: any) => [i.label, i.ok]), [['Composition (en, vertical_9x16)', true]]);
+
+  // a job that cannot work reports why, with a recovery hint, and does not disturb anything else
+  const hcomp = one('composition', 'en', 'horizontal_16x9');
+  const bad = await waitJob((await ok(call('POST', '/jobs', { kind: 'render_composition', project_id: pid, artifact_id: hcomp.id, params: { compositionId: hcomp.id, variants: ['clean'] } }), 'enqueue stale')).json.id);
+  assert.equal(bad.state, 'failed');
+  assert.equal(bad.error.code, 'VALIDATION');
+  assert.match(bad.error.message, /out of date/);
+  assert.ok(bad.error.recovery);
+  const retried = (await call('POST', `/jobs/${bad.id}/retry`)).json;
+  assert.equal(retried.retry_of, bad.id);
+  await waitJob(retried.id);
+
+  // cancel a RUNNING render: ffmpeg is stopped, no partial master or database row is left
+  const rendersBefore = (await call('GET', `/projects/${pid}/renders`)).json.length;
+  const mp4Count = () => readdirSync(join(root, 'projects', `proj_${pid}`, 'renders', 'vertical_9x16')).filter((f) => f.endsWith('.mp4')).length;
+  const mp4Before = mp4Count();
+  const slow = (await ok(call('POST', '/jobs', { kind: 'render_composition', project_id: pid, artifact_id: vcomp2.id, params: { compositionId: vcomp2.id, variants: ['captioned', 'clean'], reopen: true } }), 'enqueue slow')).json;
+  const queued = (await ok(call('POST', '/jobs', { kind: 'batch_render', project_id: pid, params: {} }), 'enqueue queued')).json;
+  await waitJob(slow.id, ['running']);
+  await new Promise((r) => setTimeout(r, 400));
+  assert.equal((await call('POST', `/jobs/${queued.id}/cancel`)).json.state, 'cancelled', 'queued job cancelled before it starts');
+  const cancelling = await call('POST', `/jobs/${slow.id}/cancel`);
+  assert.equal(cancelling.status, 200);
+  const cdone = await waitJob(slow.id);
+  assert.equal(cdone.state, 'cancelled');
+  assert.equal((await call('GET', `/projects/${pid}/renders`)).json.length, rendersBefore, 'no render recorded');
+  assert.equal(mp4Count(), mp4Before, 'no partial master left on disk');
+
+  // cache housekeeping
+  const cs = (await call('GET', '/cache')).json;
+  assert.ok(cs.total_bytes > 0 && cs.dirs.some((d: any) => d.name === 'scene_clips' && d.files > 0));
+  const pruned = (await call('POST', '/cache/prune', { max_bytes: 0 })).json;
+  assert.ok(pruned.removed_files > 0 && pruned.freed_bytes > 0);
+  assert.equal((await call('GET', '/cache')).json.total_bytes, 0);
+  assert.ok(existsSync(join(root, (await call('GET', `/projects/${pid}/renders`)).json[0].rel_path)), 'pruning the cache never touches finished masters');
+  // and an emptied cache simply re-renders
+  const rebuilt = await waitJob((await ok(call('POST', '/jobs', { kind: 'render_composition', project_id: pid, artifact_id: vcomp2.id, params: { compositionId: vcomp2.id, variants: ['clean'], reopen: true } }), 'rerender after prune')).json.id);
+  assert.equal(rebuilt.state, 'succeeded', JSON.stringify(rebuilt.error));
+  assert.ok(rebuilt.result.scenes.every((x: any) => x.cached === false), 'cache was really empty');
 
   // no stray temp files from failed or partial work
   const cacheFiles = readdirSync(join(root, 'cache', 'scene_clips')).filter((f) => f.endsWith('.tmp.mp4'));

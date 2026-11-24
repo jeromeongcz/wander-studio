@@ -25,10 +25,11 @@ export function ffmpegBinary(ffprobeOverride?: string): string {
 }
 
 /** Run a binary without a shell. Resolves with stdout/stderr; rejects with a short, human-readable message. */
-export function run(bin: string, args: string[], opts: { timeout?: number; input?: string } = {}): Promise<{ stdout: string; stderr: string }> {
+export function run(bin: string, args: string[], opts: { timeout?: number; input?: string; signal?: AbortSignal } = {}): Promise<{ stdout: string; stderr: string }> {
   return new Promise((resolve, reject) => {
-    const child = execFile(bin, args, { timeout: opts.timeout ?? 120_000, maxBuffer: 64 * 1024 * 1024 }, (err, stdout, stderr) => {
+    const child = execFile(bin, args, { timeout: opts.timeout ?? 120_000, maxBuffer: 64 * 1024 * 1024, signal: opts.signal }, (err, stdout, stderr) => {
       if (err) {
+        if (opts.signal?.aborted) return reject(new EngineError('CANCELLED', 'Cancelled'));
         const tail = String(stderr || err.message).trim().split('\n').slice(-4).join(' | ');
         return reject(new EngineError('TOOL_FAILED', `${bin.split('/').pop()} failed: ${tail}`));
       }

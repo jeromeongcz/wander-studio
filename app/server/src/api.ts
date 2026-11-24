@@ -10,6 +10,7 @@ import { addLanguage, createProject, removeLanguage } from './pipeline.ts';
 import { estimate, isPreset, PRESETS } from './studios/estimator.ts';
 import { newResearchContent } from './studios/research.ts';
 import { listCategories } from './studios/storyboard.ts';
+import { I2V_PROVIDERS } from './providers/i2v.ts';
 
 const STATUS: Record<string, number> = {
   NOT_FOUND: 404,
@@ -29,6 +30,10 @@ const STATUS: Record<string, number> = {
   TOOL_FAILED: 500,
   RENDER_INPUT: 422,
   RENDER_VERIFY: 500,
+  DUPLICATE_PROJECT: 409,
+  PREFLIGHT: 503,
+  CANCELLED: 409,
+  BATCH_PARTIAL: 500,
 };
 
 const body = (req: { body: unknown }): Record<string, any> => (req.body && typeof req.body === 'object' ? (req.body as Record<string, any>) : {});
@@ -292,6 +297,93 @@ export function buildApi(engine: Engine, config: Partial<AppConfig> = {}): Fasti
   app.get('/renders/:id/file', async (req, reply) => {
     const r = studio.render.getRender((req.params as { id: string }).id);
     return reply.type('video/mp4').send(createReadStream(join(studio.config.root, r.rel_path)));
+  });
+
+  // ---- publishing ----
+  app.get('/projects/:id/license-manifest', async (req) => {
+    const m = studio.publish.licenseManifest((req.params as { id: string }).id);
+    return { ...m, credits_text: studio.publish.creditsText(m) };
+  });
+  app.get('/projects/:id/kit/:lang', async (req) => {
+    const { id, lang } = req.params as { id: string; lang: string };
+    const k = studio.publish.getKit(id, lang);
+    if (!k) throw new EngineError('NOT_FOUND', 'No kit yet; generate one first');
+    return k;
+  });
+  app.post('/projects/:id/kit/:lang/generate', async (req, reply) => {
+    const { id, lang } = req.params as { id: string; lang: string };
+    return reply.status(201).send(await studio.publish.generateKit(id, lang));
+  });
+  app.put('/projects/:id/kit/:lang', async (req) => {
+    const { id, lang } = req.params as { id: string; lang: string };
+    return studio.publish.saveKit(id, lang, body(req).content);
+  });
+  app.get('/projects/:id/kit/:lang/prompt', async (req) => {
+    const { id, lang } = req.params as { id: string; lang: string };
+    return { prompt: studio.publish.kitPrompt(id, lang) };
+  });
+  app.post('/projects/:id/thumbnails', async (req, reply) => {
+    const b = body(req);
+    return reply.status(201).send(await studio.publish.createThumbnail((req.params as { id: string }).id, { lang: String(b.lang ?? ''), sceneId: b.scene_id, assetId: b.asset_id, text: b.text, size: b.size }));
+  });
+  app.get('/projects/:id/thumbnails', async (req) => studio.publish.listThumbnails((req.params as { id: string }).id, (req.query as { lang?: string }).lang));
+  app.get('/thumbnails/:id/file', async (req, reply) => {
+    const t = studio.engine.db.prepare('SELECT rel_path FROM thumbnails WHERE id = ?').get((req.params as { id: string }).id) as { rel_path: string } | undefined;
+    if (!t) throw new EngineError('NOT_FOUND', 'Thumbnail not found');
+    return reply.type('image/jpeg').send(createReadStream(join(studio.config.root, t.rel_path)));
+  });
+  app.post('/projects/:id/export', async (req, reply) => {
+    const b = body(req);
+    return reply.status(201).send(await studio.publish.exportPackage((req.params as { id: string }).id, { langs: b.langs, variants: b.variants, archive: b.archive === true }));
+  });
+  app.post('/projects/:id/archive', async (req, reply) => reply.status(201).send(await studio.archive.create((req.params as { id: string }).id, typeof body(req).path === 'string' ? body(req).path : undefined)));
+  app.post('/archive/restore', async (req, reply) => {
+    const b = body(req);
+    if (typeof b.path !== 'string') throw new EngineError('VALIDATION', 'path is required');
+    return reply.status(201).send(await studio.archive.restore(b.path, { asCopy: b.as_copy === true }));
+  });
+
+  // ---- operations: preflight, jobs, cache ----
+  app.get('/preflight', async () => studio.preflight());
+  app.get('/jobs', async (req) => {
+    const q = req.query as { project_id?: string; state?: string };
+    return studio.jobs.list(q.project_id, q.state);
+  });
+  app.post('/jobs', async (req, reply) => {
+    const b = body(req);
+    if (typeof b.project_id !== 'string' || typeof b.kind !== 'string') throw new EngineError('VALIDATION', 'project_id and kind are required');
+    return reply.status(202).send(studio.jobs.enqueue(b.kind, { projectId: b.project_id, artifactId: b.artifact_id, params: b.params }));
+  });
+  app.get('/jobs/:id', async (req) => studio.jobs.get((req.params as { id: string }).id));
+  app.post('/jobs/:id/cancel', async (req) => studio.jobs.cancel((req.params as { id: string }).id));
+  app.post('/jobs/:id/retry', async (req, reply) => reply.status(202).send(studio.jobs.retry((req.params as { id: string }).id)));
+  app.get('/cache', async () => studio.cache.stats());
+  app.post('/cache/prune', async (req) => {
+    const b = body(req);
+    return studio.cache.prune({ olderThanDays: b.older_than_days, maxBytes: b.max_bytes });
+  });
+
+  // ---- templates and motion clips ----
+  app.get('/templates', async (req) => studio.templates.list((req.query as { kind?: string }).kind));
+  app.post('/templates', async (req, reply) => {
+    const b = body(req);
+    return reply.status(201).send(studio.templates.create(String(b.kind ?? ''), String(b.name ?? ''), b.content));
+  });
+  app.delete('/templates/:id', async (req) => {
+    studio.templates.remove((req.params as { id: string }).id);
+    return { ok: true };
+  });
+  app.post('/artifacts/:id/apply-caption-style', async (req) => studio.applyCaptionStyle((req.params as { id: string }).id, String(body(req).template_id ?? ''), { reopen: body(req).reopen === true }));
+  app.post('/artifacts/:id/apply-script-outline', async (req) => {
+    const b = body(req);
+    return studio.applyScriptOutline((req.params as { id: string }).id, String(b.template_id ?? ''), { title: String(b.title ?? 'Untitled'), lang: String(b.lang ?? 'en'), preset: String(b.preset ?? 'short_lt30') });
+  });
+  app.get('/providers/image-to-video', async () =>
+    Promise.all(I2V_PROVIDERS.map(async (p) => ({ id: p.id, name: p.name, requirements: p.requirements, terms: p.terms, status: await p.available() }))),
+  );
+  app.post('/projects/:id/assets/motion-clip', async (req, reply) => {
+    const b = body(req);
+    return reply.status(201).send(await studio.assets.makeMotionClip((req.params as { id: string }).id, String(b.asset_id ?? ''), { motionPrompt: String(b.motion_prompt ?? ''), seconds: Number(b.seconds), width: b.width, height: b.height, fps: b.fps, name: b.name, provider: b.provider }));
   });
 
   return app;

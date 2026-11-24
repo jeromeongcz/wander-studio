@@ -186,7 +186,7 @@ export class RenderService {
   }
 
   // ---- rendering ----
-  private async ensureSceneClip(tl: Timeline, s: TimelineScene): Promise<{ path: string; cached: boolean }> {
+  private async ensureSceneClip(tl: Timeline, s: TimelineScene, signal?: AbortSignal): Promise<{ path: string; cached: boolean }> {
     if (!s.asset) throw new EngineError('RENDER_INPUT', `Scene "${s.title}" has no asset`);
     const src = join(this.config.root, s.asset.rel_path);
     if (!existsSync(src)) throw new EngineError('RENDER_INPUT', `Asset file for scene "${s.title}" is missing`);
@@ -206,7 +206,7 @@ export class RenderService {
     await mkdir(dirname(out), { recursive: true });
     const tmp = `${out}.${ulid()}.tmp.mp4`;
     try {
-      await run(this.ffmpeg, ['-hide_banner', '-nostats', '-y', ...sceneClipArgs(spec, tmp)], { timeout: 300_000 });
+      await run(this.ffmpeg, ['-hide_banner', '-nostats', '-y', ...sceneClipArgs(spec, tmp)], { timeout: 300_000, signal });
       await rename(tmp, out);
     } catch (e) {
       await unlink(tmp).catch(() => {});
@@ -215,7 +215,7 @@ export class RenderService {
     return { path: out, cached: false };
   }
 
-  private async ensureMix(tl: Timeline): Promise<string> {
+  private async ensureMix(tl: Timeline, signal?: AbortSignal): Promise<string> {
     const abs = (rel: string) => join(this.config.root, rel);
     const byId = (list: { clip_id: string; rel_path: string }[], id: string) => abs(list.find((x) => x.clip_id === id)!.rel_path);
     const graph = buildMixGraph({
@@ -232,7 +232,7 @@ export class RenderService {
     await mkdir(dirname(out), { recursive: true });
     const tmp = `${out}.${ulid()}.tmp.wav`;
     try {
-      await run(this.ffmpeg, ['-hide_banner', '-nostats', '-y', ...graph.inputs.flatMap((p) => ['-i', p]), '-filter_complex', graph.filter, '-map', graph.out, '-ar', '44100', '-ac', '2', '-c:a', 'pcm_s16le', tmp], { timeout: 300_000 });
+      await run(this.ffmpeg, ['-hide_banner', '-nostats', '-y', ...graph.inputs.flatMap((p) => ['-i', p]), '-filter_complex', graph.filter, '-map', graph.out, '-ar', '44100', '-ac', '2', '-c:a', 'pcm_s16le', tmp], { timeout: 300_000, signal });
       await rename(tmp, out);
     } catch (e) {
       await unlink(tmp).catch(() => {});
@@ -250,7 +250,7 @@ export class RenderService {
     return { path, fontsDir: await this.prepareFonts(tl.captions.style.font_family) };
   }
 
-  private async compose(tl: Timeline, clips: string[], mix: string, variant: 'captioned' | 'clean', out: string) {
+  private async compose(tl: Timeline, clips: string[], mix: string, variant: 'captioned' | 'clean', out: string, signal?: AbortSignal) {
     const { fps } = tl.format;
     const filters: string[] = clips.map((_, i) => `[${i}:v]settb=AVTB,fps=${fps},setpts=PTS-STARTPTS,setsar=1[s${i}]`);
     let last = 's0';
@@ -271,7 +271,7 @@ export class RenderService {
     await run(
       this.ffmpeg,
       ['-hide_banner', '-nostats', '-y', ...clips.flatMap((c) => ['-i', c]), '-i', mix, '-filter_complex', filters.join(';'), '-map', '[vout]', '-map', `${clips.length}:a`, '-t', tl.duration.toFixed(3), '-c:v', 'libx264', '-preset', 'medium', ...rate, '-pix_fmt', 'yuv420p', '-r', String(fps), '-c:a', 'aac', '-b:a', '192k', '-movflags', '+faststart', out],
-      { timeout: 900_000 },
+      { timeout: 900_000, signal },
     );
   }
 
@@ -294,15 +294,21 @@ export class RenderService {
   }
 
   /** Render a composition's stored timeline to verified MP4 masters. Scene clips are cached, so unchanged scenes are not re-rendered. */
-  async render(compId: string, variants: ('captioned' | 'clean')[]): Promise<{ renders: RenderRow[]; scenes: { scene_id: string; cached: boolean }[] }> {
+  async render(compId: string, variants: ('captioned' | 'clean')[], opts: { signal?: AbortSignal; onProgress?: (pct: number, msg: string) => void } = {}): Promise<{ renders: RenderRow[]; scenes: { scene_id: string; cached: boolean }[] }> {
     const comp = this.engine.get(compId);
     const tl = validateTimelineShape(this.engine.getContent(compId));
     if (!variants.length || !variants.every((v) => v === 'captioned' || v === 'clean')) throw new EngineError('VALIDATION', 'variants must be captioned and/or clean');
-    const mix = await this.ensureMix(tl);
+    const { signal, onProgress } = opts;
+    const total = tl.scenes.length + 1 + variants.length;
+    let done = 0;
+    const tick = (msg: string) => onProgress?.(++done / total, msg);
+    const mix = await this.ensureMix(tl, signal);
+    tick('Mixed audio');
     const sceneInfo: { scene_id: string; cached: boolean }[] = [];
     const clips: string[] = [];
     for (const s of tl.scenes) {
-      const r = await this.ensureSceneClip(tl, s);
+      const r = await this.ensureSceneClip(tl, s, signal);
+      tick(`Scene ${s.index + 1}/${tl.scenes.length}${r.cached ? ' (cached)' : ''}`);
       clips.push(r.path);
       sceneInfo.push({ scene_id: s.scene_id, cached: r.cached });
     }
@@ -315,13 +321,14 @@ export class RenderService {
       const out = join(this.config.root, rel);
       await mkdir(dirname(out), { recursive: true });
       try {
-        await this.compose(tl, clips, mix, variant, out);
+        await this.compose(tl, clips, mix, variant, out, signal);
         const v = await this.verify(out, tl);
         const row: RenderRow = { id, project_id: comp.project_id, lang_code: tl.lang, format: tl.format.id, variant, rel_path: rel, width: v.width, height: v.height, fps: tl.format.fps, duration_seconds: v.duration, bytes: v.bytes, sha256: await sha256File(out), has_audio: 1, timeline_hash: hash, created_at: new Date().toISOString() };
         this.engine.db
           .prepare('INSERT INTO renders (id, project_id, lang_code, format, variant, rel_path, width, height, fps, duration_seconds, bytes, sha256, has_audio, timeline_hash, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)')
           .run(row.id, row.project_id, row.lang_code, row.format, row.variant, row.rel_path, row.width, row.height, row.fps, row.duration_seconds, row.bytes, row.sha256, row.has_audio, row.timeline_hash, row.created_at);
         rows.push(row);
+        tick(`${variant} master verified`);
       } catch (e) {
         await rm(out, { force: true });
         throw e;
