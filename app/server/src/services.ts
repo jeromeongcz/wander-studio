@@ -10,6 +10,9 @@ import { resolveWpm, FALLBACK_WPM } from './studios/estimator.ts';
 import type { CalibrationSample } from './studios/estimator.ts';
 import { buildAdaptationPrompt, compareScripts, detectMix, languageFitWarnings, ttsText } from './studios/locales.ts';
 import type { LexiconEntry, Locale } from './studios/locales.ts';
+import { validateStoryboardShape, storyboardReadiness, draftScenes, buildStoryboardPrompt, profileFor } from './studios/storyboard.ts';
+import type { StoryboardContent } from './studios/storyboard.ts';
+import { addScene } from './pipeline.ts';
 
 const LOCALE_CODE = /^[a-z][a-z0-9_-]{1,15}$/;
 
@@ -68,10 +71,40 @@ export class Studio {
 
   // ---- saving and review ----
   save(id: string, content: unknown, opts: { actor?: Actor; reopen?: boolean } = {}) {
-    const a = this.engine.get(id);
-    const actor = opts.actor ?? 'user';
-    this.validateShape(a, content, actor);
-    return this.engine.saveVersion(id, content, { ...opts, actor });
+    return this.engine.tx(() => {
+      const a = this.engine.get(id);
+      const actor = opts.actor ?? 'user';
+      this.validateShape(a, content, actor);
+      // A refused or failing save rolls back everything, including scene-artifact sync.
+      const toSave = a.kind === 'storyboard' ? this.prepareStoryboard(a, content) : content;
+      return this.engine.saveVersion(id, toSave, { ...opts, actor });
+    });
+  }
+
+  /** Assign scene ids and order, and keep one scene_asset artifact per scene. Runs inside save()'s transaction. */
+  private prepareStoryboard(a: Artifact, content: unknown): StoryboardContent {
+    const sb = JSON.parse(JSON.stringify(validateStoryboardShape(content))) as StoryboardContent;
+    sb.scenes.forEach((sc, i) => {
+      if (!sc.scene_id) sc.scene_id = ulid();
+      sc.order_index = i;
+    });
+    const keep = new Set(sb.scenes.map((sc) => sc.scene_id!));
+    const assets = this.engine.list(a.project_id, { kind: 'scene_asset' });
+    const existing = new Map(assets.map((x) => [x.scene_id, x]));
+
+    for (const x of assets) {
+      if (keep.has(x.scene_id!)) continue;
+      const approvedBefore = (this.engine.db.prepare('SELECT COUNT(*) AS n FROM versions WHERE artifact_id = ? AND approved_at IS NOT NULL').get(x.id) as { n: number }).n > 0;
+      if (x.state === 'approved' || x.state === 'awaiting_review' || approvedBefore) {
+        throw new EngineError('PROTECTED', `Scene asset "${x.label}" has approved or in-review work; reopen and discard it before removing the scene`);
+      }
+      this.engine.db.prepare('DELETE FROM artifacts WHERE id = ?').run(x.id);
+      this.engine.db.prepare('DELETE FROM scene_timing WHERE scene_id = ?').run(x.scene_id);
+    }
+    for (const sc of sb.scenes) {
+      if (!existing.has(sc.scene_id!)) addScene(this.engine, a.project_id, sc.title, { sceneId: sc.scene_id, invalidate: false });
+    }
+    return sb;
   }
 
   private validateShape(a: Artifact, content: unknown, actor: Actor) {
@@ -110,6 +143,11 @@ export class Studio {
         const c = validateScriptShape(content);
         r = scriptReadiness(c, this.samples(c.lang), this.defaultWpm(c.lang));
       } else if (a.kind === 'script_lang') r = this.languageReadiness(a, validateScriptShape(content));
+      else if (a.kind === 'storyboard') {
+        const base = this.storyboardBase(a);
+        const sb = validateStoryboardShape(content);
+        r = base.content ? storyboardReadiness(sb, base.content, { samples: this.samples(base.content.lang), defaultWpm: this.defaultWpm(base.content.lang) }) : { errors: ['The base script has no content yet'], warnings: [] };
+      }
       if (r) {
         if (r.errors.length) throw new EngineError('NOT_READY', `${a.label} is not ready for review`, r.errors);
         warnings = r.warnings;
@@ -223,5 +261,59 @@ export class Studio {
       const tts = ttsText(s, entries);
       return { id: s.id, display: s.text, tts, differs: tts !== s.text };
     });
+  }
+
+  // ---- storyboard ----
+  private storyboardBase(sb: Artifact): { artifact: Artifact; content: ScriptContent | null } {
+    if (sb.kind !== 'storyboard') throw new EngineError('VALIDATION', 'Not a storyboard artifact');
+    const base = this.engine.upstreamDirect(sb.id).find((u) => u.kind === 'script_base');
+    if (!base) throw new EngineError('NOT_FOUND', 'Base script not found');
+    return { artifact: base, content: this.engine.getContent(base.id) as ScriptContent | null };
+  }
+
+  /** Create a deterministic draft storyboard from the approved base script. Visual descriptions are skeletons (draft: true) for a human or pasted-LLM creative pass. */
+  seedStoryboard(storyboardId: string, sceneSeconds?: number) {
+    const a = this.engine.get(storyboardId);
+    const { artifact: base, content: b } = this.storyboardBase(a);
+    if (a.current_version_id) throw new EngineError('VALIDATION', 'This storyboard already has content; edit it instead of reseeding');
+    if (base.state !== 'approved' || !b) throw new EngineError('UNMET_DEPENDENCY', 'Approve the base script before generating a storyboard');
+    const category = this.engine.getProject(a.project_id).category ?? undefined;
+    const draft = draftScenes(b, category, { samples: this.samples(b.lang), defaultWpm: this.defaultWpm(b.lang), sceneSeconds });
+    return this.save(storyboardId, draft, { actor: 'system' });
+  }
+
+  storyboardPrompt(storyboardId: string, notes?: string): string {
+    const a = this.engine.get(storyboardId);
+    const { content: b } = this.storyboardBase(a);
+    if (!b) throw new EngineError('NO_VERSION', 'The base script has no content yet');
+    return buildStoryboardPrompt({ category: this.engine.getProject(a.project_id).category ?? undefined, base: b, notes });
+  }
+
+  recommendations(category?: string) {
+    return profileFor(category);
+  }
+
+  /** Narration length per scene is stored apart from the storyboard so audio changes never invalidate it. */
+  setSceneTiming(sceneId: string, lang: string, audioSeconds: number) {
+    if (!(audioSeconds > 0)) throw new EngineError('VALIDATION', 'audio_seconds must be positive');
+    const exists = this.engine.db.prepare("SELECT 1 FROM artifacts WHERE scene_id = ? AND kind = 'scene_asset'").get(sceneId);
+    if (!exists) throw new EngineError('NOT_FOUND', `Scene ${sceneId} not found`);
+    this.engine.db
+      .prepare('INSERT INTO scene_timing (scene_id, lang_code, audio_seconds, updated_at) VALUES (?,?,?,?) ON CONFLICT(scene_id, lang_code) DO UPDATE SET audio_seconds = excluded.audio_seconds, updated_at = excluded.updated_at')
+      .run(sceneId, lang, audioSeconds, new Date().toISOString());
+    return { sceneId, lang, audio_seconds: audioSeconds };
+  }
+
+  /** Effective scene durations for one language: measured audio when known, otherwise the storyboard estimate. */
+  timeline(storyboardId: string, lang: string) {
+    const a = this.engine.get(storyboardId);
+    if (a.kind !== 'storyboard') throw new EngineError('VALIDATION', 'Not a storyboard artifact');
+    const sb = this.engine.getContent(storyboardId) as StoryboardContent | null;
+    if (!sb) throw new EngineError('NO_VERSION', 'This storyboard has no content yet');
+    const rows = sb.scenes.map((s) => {
+      const t = this.engine.db.prepare('SELECT audio_seconds FROM scene_timing WHERE scene_id = ? AND lang_code = ?').get(s.scene_id ?? '', lang) as { audio_seconds: number } | undefined;
+      return { scene_id: s.scene_id, title: s.title, seconds: t ? t.audio_seconds : s.target_duration, source: t ? ('audio' as const) : ('estimate' as const) };
+    });
+    return { lang, total_seconds: Math.round(rows.reduce((n, r) => n + r.seconds, 0) * 10) / 10, scenes: rows, fully_anchored: rows.every((r) => r.source === 'audio') };
   }
 }

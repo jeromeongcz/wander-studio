@@ -109,6 +109,17 @@ const MIGRATIONS: string[] = [
     UNIQUE (project_id, lang_code, term)
   );
   `,
+  // v4: measured narration length per scene and language. Kept outside the storyboard so that
+  // audio changes never invalidate the storyboard itself (they feed composition instead).
+  `
+  CREATE TABLE scene_timing (
+    scene_id TEXT NOT NULL,
+    lang_code TEXT NOT NULL,
+    audio_seconds REAL NOT NULL CHECK (audio_seconds > 0),
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY (scene_id, lang_code)
+  );
+  `,
 ];
 
 export function openDb(path: string = ':memory:'): DatabaseSync {

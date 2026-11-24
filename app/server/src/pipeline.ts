@@ -85,15 +85,21 @@ export function removeLanguage(engine: Engine, projectId: string, lang: string):
 }
 
 /** Adds a scene's visual-asset artifact and wires it into the storyboard and every composition. */
-export function addScene(engine: Engine, projectId: string, title: string): { sceneId: string; assetArtifactId: string } {
+export function addScene(
+  engine: Engine,
+  projectId: string,
+  title: string,
+  opts: { sceneId?: string; invalidate?: boolean } = {},
+): { sceneId: string; assetArtifactId: string } {
   return engine.tx(() => {
-    const sceneId = ulid();
+    const sceneId = opts.sceneId ?? ulid();
     const asset = engine.createArtifact({ projectId, kind: 'scene_asset', label: `Scene asset: ${title}`, sceneId });
     const [storyboard] = engine.list(projectId, { kind: 'storyboard' });
     engine.addDependency(asset, storyboard.id);
     for (const c of engine.list(projectId, { kind: 'composition' })) engine.addDependency(c.id, asset);
-    // A new scene changes what approved compositions contain.
-    for (const c of engine.list(projectId, { kind: 'composition' })) {
+    // A new scene changes what approved compositions contain (callers that already save the
+    // storyboard pass invalidate:false because that save invalidates downstream itself).
+    if (opts.invalidate !== false) for (const c of engine.list(projectId, { kind: 'composition' })) {
       if (c.state === 'approved' || c.state === 'awaiting_review') engine.saveVersion(c.id, { note: 'scene added', scene: sceneId, prev: c.current_version_id }, { actor: 'system', reopen: true });
     }
     return { sceneId, assetArtifactId: asset };

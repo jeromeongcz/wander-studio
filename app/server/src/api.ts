@@ -5,6 +5,7 @@ import { Studio } from './services.ts';
 import { addLanguage, createProject, removeLanguage } from './pipeline.ts';
 import { estimate, isPreset, PRESETS } from './studios/estimator.ts';
 import { newResearchContent } from './studios/research.ts';
+import { listCategories } from './studios/storyboard.ts';
 
 const STATUS: Record<string, number> = {
   NOT_FOUND: 404,
@@ -147,6 +148,23 @@ export function buildApi(engine: Engine): FastifyInstance {
     return studio.setLexicon(id, lang, String(b.term ?? ''), String(b.respelling ?? ''));
   });
   app.delete('/lexicon/:entryId', async (req) => studio.deleteLexicon((req.params as { entryId: string }).entryId));
+
+  // ---- storyboard ----
+  app.get('/categories', async () => listCategories());
+  app.get('/categories/:name/recommendations', async (req) => studio.recommendations((req.params as { name: string }).name));
+  app.post('/artifacts/:id/seed-storyboard', async (req, reply) => {
+    const s = body(req).scene_seconds;
+    return reply.status(201).send(studio.seedStoryboard((req.params as { id: string }).id, typeof s === 'number' ? s : undefined));
+  });
+  app.get('/artifacts/:id/storyboard-prompt', async (req) => ({ prompt: studio.storyboardPrompt((req.params as { id: string }).id, (req.query as { notes?: string }).notes) }));
+  app.get('/artifacts/:id/timeline/:lang', async (req) => {
+    const { id, lang } = req.params as { id: string; lang: string };
+    return studio.timeline(id, lang);
+  });
+  app.put('/scenes/:sceneId/timing/:lang', async (req) => {
+    const { sceneId, lang } = req.params as { sceneId: string; lang: string };
+    return studio.setSceneTiming(sceneId, lang, Number(body(req).audio_seconds));
+  });
 
   return app;
 }
