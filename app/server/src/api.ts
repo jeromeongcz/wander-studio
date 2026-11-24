@@ -1,4 +1,7 @@
 import Fastify from 'fastify';
+import { createReadStream } from 'node:fs';
+import { MIME } from './media.ts';
+import type { AppConfig } from './config.ts';
 import type { FastifyInstance } from 'fastify';
 import { Engine, EngineError } from './engine.ts';
 import { Studio } from './services.ts';
@@ -18,6 +21,10 @@ const STATUS: Record<string, number> = {
   BAD_TRANSITION: 409,
   CYCLE: 409,
   NO_VERSION: 409,
+  MEDIA_INVALID: 422,
+  LICENSE: 422,
+  DUPLICATE_ASSET: 409,
+  PROVIDER_ERROR: 502,
 };
 
 const body = (req: { body: unknown }): Record<string, any> => (req.body && typeof req.body === 'object' ? (req.body as Record<string, any>) : {});
@@ -27,8 +34,9 @@ const body = (req: { body: unknown }): Record<string, any> => (req.body && typeo
  * created by internal provider code calling the service layer with actor 'ai', never via
  * these routes, so approval can never be performed by a provider.
  */
-export function buildApi(engine: Engine): FastifyInstance {
-  const studio = new Studio(engine);
+export function buildApi(engine: Engine, config: Partial<AppConfig> = {}): FastifyInstance {
+  const studio = new Studio(engine, config);
+  const assets = studio.assets;
   const app = Fastify({ logger: false });
 
   app.setErrorHandler((err, _req, reply) => {
@@ -165,6 +173,56 @@ export function buildApi(engine: Engine): FastifyInstance {
     const { sceneId, lang } = req.params as { sceneId: string; lang: string };
     return studio.setSceneTiming(sceneId, lang, Number(body(req).audio_seconds));
   });
+
+  // ---- providers ----
+  app.get('/providers', async () => assets.providers.list().map((p) => ({ id: p.id, kind: p.kind, name: p.name, terms: p.terms })));
+  app.post('/providers/:id/health', async (req) => assets.providers.get((req.params as { id: string }).id).healthCheck());
+  app.get('/providers/:id/search', async (req) => {
+    const q = req.query as { q?: string; page?: string; restricted?: string };
+    return assets.providers.stock((req.params as { id: string }).id).search({ query: q.q ?? '', page: Number(q.page ?? 1), includeRestricted: q.restricted === 'true' });
+  });
+
+  // ---- assets ----
+  app.post('/projects/:id/assets/import', async (req, reply) => {
+    const b = body(req);
+    if (typeof b.path !== 'string') throw new EngineError('VALIDATION', 'path is required');
+    const a = await assets.importLocal((req.params as { id: string }).id, b.path, { type: b.type, name: b.name, license: b.license, prompt: b.prompt, provider: typeof b.provider === 'string' ? b.provider : undefined, params: b.params, tags: b.tags });
+    return reply.status(201).send(a);
+  });
+  app.post('/projects/:id/assets/import-remote', async (req, reply) => {
+    const b = body(req);
+    return reply.status(201).send(await assets.importRemote((req.params as { id: string }).id, String(b.provider ?? ''), String(b.result_id ?? ''), b.type));
+  });
+  app.post('/projects/:id/assets/reuse', async (req, reply) => reply.status(201).send(await assets.reuse(String(body(req).asset_id ?? ''), (req.params as { id: string }).id)));
+  app.get('/projects/:id/assets', async (req) => {
+    const q = req.query as { type?: string; status?: string };
+    return assets.list({ projectId: (req.params as { id: string }).id, type: q.type, status: q.status });
+  });
+  app.get('/library', async (req) => assets.list({ shared: true, type: (req.query as { type?: string }).type }));
+  app.get('/assets/:id', async (req) => {
+    const a = assets.get((req.params as { id: string }).id);
+    return { ...a, used_by: assets.usage(a).map((u) => ({ id: u.id, label: u.label, state: u.state })) };
+  });
+  app.patch('/assets/:id', async (req) => {
+    const b = body(req);
+    return assets.update((req.params as { id: string }).id, { name: b.name, type: b.type, focal: b.focal, license: b.license, tags: b.tags, prompt: b.prompt }, { reopen: b.reopen === true });
+  });
+  app.post('/assets/:id/approve', async (req) => assets.approve((req.params as { id: string }).id));
+  app.post('/assets/:id/reject', async (req) => assets.reject((req.params as { id: string }).id));
+  app.post('/assets/:id/promote', async (req, reply) => reply.status(201).send(await assets.promote((req.params as { id: string }).id)));
+  app.delete('/assets/:id', async (req) => {
+    await assets.remove((req.params as { id: string }).id);
+    return { ok: true };
+  });
+  app.get('/assets/:id/file', async (req, reply) => {
+    const a = assets.get((req.params as { id: string }).id);
+    return reply.type(MIME[a.rel_path.slice(a.rel_path.lastIndexOf('.')).toLowerCase()] ?? 'application/octet-stream').send(createReadStream(assets.absPath(a)));
+  });
+  app.put('/scenes/:sceneId/assets', async (req) => {
+    const b = body(req);
+    return studio.setSceneAssets((req.params as { sceneId: string }).sceneId, b.assets, String(b.primary_asset_id ?? ''), { reopen: b.reopen === true });
+  });
+  app.get('/scenes/:sceneId/image-prompt', async (req) => studio.sceneImagePrompt((req.params as { sceneId: string }).sceneId, (req.query as { provider?: string }).provider));
 
   return app;
 }

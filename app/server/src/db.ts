@@ -120,6 +120,39 @@ const MIGRATIONS: string[] = [
     PRIMARY KEY (scene_id, lang_code)
   );
   `,
+  // v5: asset library. project_id NULL means the shared cross-project library.
+  `
+  CREATE TABLE assets (
+    id TEXT PRIMARY KEY,
+    project_id TEXT REFERENCES projects(id) ON DELETE CASCADE,
+    scope TEXT NOT NULL CHECK (scope IN ('project','shared')),
+    type TEXT NOT NULL,
+    name TEXT NOT NULL,
+    rel_path TEXT NOT NULL,
+    mime TEXT NOT NULL,
+    bytes INTEGER NOT NULL,
+    sha256 TEXT NOT NULL,
+    media_kind TEXT NOT NULL CHECK (media_kind IN ('image','video')),
+    width INTEGER NOT NULL,
+    height INTEGER NOT NULL,
+    duration_seconds REAL,
+    aspect_ratio REAL NOT NULL,
+    focal_x REAL NOT NULL DEFAULT 0.5 CHECK (focal_x BETWEEN 0 AND 1),
+    focal_y REAL NOT NULL DEFAULT 0.5 CHECK (focal_y BETWEEN 0 AND 1),
+    prompt TEXT,
+    provider TEXT NOT NULL,
+    params_json TEXT NOT NULL DEFAULT '{}',
+    license_json TEXT NOT NULL,
+    tags_json TEXT NOT NULL DEFAULT '[]',
+    approval_status TEXT NOT NULL DEFAULT 'pending' CHECK (approval_status IN ('pending','approved','rejected')),
+    approved_at TEXT,
+    source_asset_id TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  );
+  CREATE INDEX idx_assets_project ON assets(project_id, type);
+  CREATE INDEX idx_assets_hash ON assets(sha256);
+  `,
 ];
 
 export function openDb(path: string = ':memory:'): DatabaseSync {

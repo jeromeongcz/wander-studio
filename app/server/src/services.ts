@@ -13,14 +13,22 @@ import type { LexiconEntry, Locale } from './studios/locales.ts';
 import { validateStoryboardShape, storyboardReadiness, draftScenes, buildStoryboardPrompt, profileFor } from './studios/storyboard.ts';
 import type { StoryboardContent } from './studios/storyboard.ts';
 import { addScene } from './pipeline.ts';
+import { AssetService } from './assets.ts';
+import { resolveConfig } from './config.ts';
+import type { AppConfig } from './config.ts';
+import type { AssetType } from './studios/storyboard.ts';
 
 const LOCALE_CODE = /^[a-z][a-z0-9_-]{1,15}$/;
 
 /** Studio service layer: kind-specific validation on top of the generic engine. */
 export class Studio {
   engine: Engine;
-  constructor(engine: Engine) {
+  config: AppConfig;
+  assets: AssetService;
+  constructor(engine: Engine, config: Partial<AppConfig> = {}) {
     this.engine = engine;
+    this.config = resolveConfig(config);
+    this.assets = new AssetService(engine, this.config);
   }
 
   // ---- locale registry ----
@@ -143,6 +151,7 @@ export class Studio {
         const c = validateScriptShape(content);
         r = scriptReadiness(c, this.samples(c.lang), this.defaultWpm(c.lang));
       } else if (a.kind === 'script_lang') r = this.languageReadiness(a, validateScriptShape(content));
+      else if (a.kind === 'scene_asset') r = this.assets.sceneReadiness(a.project_id, content, this.plannedAssetType(a));
       else if (a.kind === 'storyboard') {
         const base = this.storyboardBase(a);
         const sb = validateStoryboardShape(content);
@@ -315,5 +324,39 @@ export class Studio {
       return { scene_id: s.scene_id, title: s.title, seconds: t ? t.audio_seconds : s.target_duration, source: t ? ('audio' as const) : ('estimate' as const) };
     });
     return { lang, total_seconds: Math.round(rows.reduce((n, r) => n + r.seconds, 0) * 10) / 10, scenes: rows, fully_anchored: rows.every((r) => r.source === 'audio') };
+  }
+
+  // ---- scene visuals ----
+  private sceneArtifact(sceneId: string): Artifact {
+    const row = this.engine.db.prepare("SELECT id FROM artifacts WHERE scene_id = ? AND kind = 'scene_asset'").get(sceneId) as { id: string } | undefined;
+    if (!row) throw new EngineError('NOT_FOUND', `Scene ${sceneId} not found`);
+    return this.engine.get(row.id);
+  }
+
+  private storyboardScene(projectId: string, sceneId: string) {
+    const [sb] = this.engine.list(projectId, { kind: 'storyboard' });
+    const content = sb ? (this.engine.getContent(sb.id) as StoryboardContent | null) : null;
+    return content?.scenes.find((s) => s.scene_id === sceneId);
+  }
+
+  private plannedAssetType(a: Artifact): AssetType | undefined {
+    return a.scene_id ? this.storyboardScene(a.project_id, a.scene_id)?.asset_type : undefined;
+  }
+
+  /** Link assets to a scene. Saving the scene's asset artifact invalidates its compositions; an approved scene needs reopen. */
+  setSceneAssets(sceneId: string, links: { asset_id: string; role?: string }[], primary: string, opts: { reopen?: boolean } = {}) {
+    const art = this.sceneArtifact(sceneId);
+    this.assets.checkSceneLinks(art.project_id, links, primary);
+    const content = { assets: links.map((l) => ({ asset_id: l.asset_id, role: l.role ?? (l.asset_id === primary ? 'primary' : 'overlay') })), primary_asset_id: primary };
+    return this.save(art.id, content, { actor: 'user', reopen: opts.reopen });
+  }
+
+  sceneImagePrompt(sceneId: string, providerId = 'manual-prompt') {
+    const art = this.sceneArtifact(sceneId);
+    const scene = this.storyboardScene(art.project_id, sceneId);
+    if (!scene) throw new EngineError('NOT_FOUND', 'Scene is not in the storyboard');
+    const fmt = (this.engine.getProject(art.project_id).settings.formats as string[] | undefined)?.[0] ?? 'vertical_9x16';
+    const aspect = fmt.includes('9x16') ? '9:16' : fmt.includes('1x1') ? '1:1' : '16:9';
+    return { aspect, ...this.assets.providers.imagePrompt(providerId).buildPrompt({ description: scene.visual_description, style: scene.visual_style, assetType: scene.asset_type, aspect }) };
   }
 }
