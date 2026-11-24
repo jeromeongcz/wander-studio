@@ -10,7 +10,7 @@ interface F {
   tmp: boolean;
 }
 
-const PRUNABLE = ['scene_clips', 'mix', 'ass', 'preview'];
+const PRUNABLE = ['scene_clips', 'mix', 'ass', 'preview', 'uploads'];
 
 /** Scene clips, mixes and caption scripts are rebuildable, so pruning them only costs re-render time. Nothing outside cache/ is ever touched. */
 export class CacheService {

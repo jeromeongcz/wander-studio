@@ -678,6 +678,9 @@ export class Studio {
     await writeFile(join(dir, 'exports', `${track.lang}.srt`), srt, 'utf8');
     await writeFile(join(dir, 'exports', `${track.lang}.vtt`), vtt, 'utf8');
     await writeFile(join(dir, 'tracks', `${track.lang}.json`), JSON.stringify(track, null, 2), 'utf8');
+    // Record the export as a reviewable step (it depends on the captions, so caption edits invalidate it).
+    const rec = this.engine.list(a.project_id, { kind: 'subtitle_export', lang_code: track.lang })[0];
+    if (rec && rec.state !== 'approved') this.engine.saveVersion(rec.id, { srt: `captions/exports/${track.lang}.srt`, vtt: `captions/exports/${track.lang}.vtt`, caption_version: a.current_version_id, words: track.words.length }, { actor: 'user' });
     return { srt, vtt, files: [`captions/exports/${track.lang}.srt`, `captions/exports/${track.lang}.vtt`, `captions/tracks/${track.lang}.json`] };
   }
 

@@ -260,10 +260,11 @@ test('10-second multi-format captioned video: research -> script -> storyboard -
   await ok(call('POST', `/assets/${na.json.id}/approve`), 'replacement approve');
   await ok(call('PUT', `/scenes/${target.scene_id}/assets`, { assets: [{ asset_id: na.json.id }], primary_asset_id: na.json.id, reopen: true }), 'swap asset');
 
-  for (const k of ['research', 'script_base', 'storyboard', 'script_lang', 'audio', 'caption', 'subtitle_export']) {
-    assert.ok(arts().filter((a) => a.kind === k && a.state === 'not_started').length === (k === 'subtitle_export' ? 2 : 0));
-    assert.ok(arts().filter((a) => a.kind === k).every((a) => a.state === 'approved' || a.state === 'not_started'), `${k} untouched`);
+  for (const k of ['research', 'script_base', 'storyboard', 'script_lang', 'audio', 'caption']) {
+    assert.ok(arts().filter((a) => a.kind === k).every((a) => a.state === 'approved'), `${k} untouched`);
   }
+  // exporting subtitles recorded each export as a step awaiting the user's review; a visual swap does not touch it
+  assert.ok(arts().filter((a) => a.kind === 'subtitle_export').every((a) => a.state === 'in_progress'), 'subtitle exports recorded, never auto-approved, unaffected by a visual change');
   assert.equal(state(target.id), 'in_progress');
   assert.ok(arts().filter((a) => a.kind === 'composition').every((a) => a.state === 'needs_revision' || a.state === 'not_started' || a.state === 'approved'));
   assert.equal(state(one('composition', 'en', 'vertical_9x16').id), 'needs_revision');

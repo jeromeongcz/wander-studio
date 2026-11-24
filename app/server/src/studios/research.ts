@@ -70,9 +70,9 @@ export function validateResearchShape(content: unknown, actor: Actor, previous: 
   if (!Array.isArray(sources) || !Array.isArray(claims) || !Array.isArray(checklist)) throw bad('sources, claims and checklist must be arrays');
 
   const ids = new Set<string>();
-  for (const s of sources) {
+  for (const [i, s] of sources.entries()) {
     if (!isObj(s) || typeof s.id !== 'string' || !s.id) throw bad('Each source needs an id');
-    if (!isHttpUrl(s.url)) throw bad(`Source ${s.id} needs a valid http(s) URL`);
+    if (!isHttpUrl(s.url)) throw bad(`Source ${i + 1} needs a valid http(s) URL (include https://)`);
     if (ids.has(s.id)) throw bad(`Duplicate source id ${s.id}`);
     ids.add(s.id);
   }

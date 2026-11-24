@@ -1,6 +1,9 @@
 import Fastify from 'fastify';
 import { createReadStream } from 'node:fs';
-import { join } from 'node:path';
+import { join, basename, extname } from 'node:path';
+import { mkdir, unlink, writeFile } from 'node:fs/promises';
+import { ulid } from '../../shared/src/index.ts';
+import { AUDIO_EXT, IMAGE_EXT, VIDEO_EXT } from './media.ts';
 import { MIME } from './media.ts';
 import type { AppConfig } from './config.ts';
 import type { FastifyInstance } from 'fastify';
@@ -46,7 +49,26 @@ const body = (req: { body: unknown }): Record<string, any> => (req.body && typeo
 export function buildApi(engine: Engine, config: Partial<AppConfig> = {}): FastifyInstance {
   const studio = new Studio(engine, config);
   const assets = studio.assets;
-  const app = Fastify({ logger: false });
+  // The UI calls /api/...; strip the prefix so every route works with or without it.
+  const app = Fastify({ logger: false, rewriteUrl: (req) => (req.url?.startsWith('/api/') ? req.url.slice(4) : (req.url ?? '/')) });
+
+  // The API has no login, so it must only answer the local UI. This blocks DNS-rebinding (wrong Host)
+  // and other websites making your browser call it (cross-origin Origin on state-changing requests).
+  const LOCAL = /^(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$/;
+  app.addHook('onRequest', async (req, reply) => {
+    if (!LOCAL.test(String(req.headers.host ?? ''))) return reply.status(403).send({ error: { code: 'FORBIDDEN_HOST', message: 'This app only answers on localhost' } });
+    const origin = req.headers.origin;
+    if (origin && req.method !== 'GET' && req.method !== 'HEAD') {
+      let host = '';
+      try {
+        host = new URL(String(origin)).host;
+      } catch {
+        /* invalid origin */
+      }
+      if (host !== req.headers.host) return reply.status(403).send({ error: { code: 'FORBIDDEN_ORIGIN', message: 'Cross-origin requests are not allowed' } });
+    }
+  });
+  app.addContentTypeParser('application/octet-stream', { parseAs: 'buffer', bodyLimit: 512 * 1024 * 1024 }, (_req, body, done) => done(null, body));
 
   app.setErrorHandler((err, _req, reply) => {
     if (err instanceof EngineError) {
@@ -57,6 +79,28 @@ export function buildApi(engine: Engine, config: Partial<AppConfig> = {}): Fasti
   });
 
   app.get('/health', async () => ({ ok: true }));
+
+  // ---- uploads (the browser cannot give the server a local path) ----
+  const uploadsDir = () => join(studio.config.root, 'cache', 'uploads');
+  const isUpload = (p: unknown) => typeof p === 'string' && p.startsWith(uploadsDir() + '/');
+  /** Imports accept an uploaded temp file; it is always removed afterwards, success or failure. */
+  const withUpload = async <T>(path: unknown, fn: () => Promise<T>): Promise<T> => {
+    try {
+      return await fn();
+    } finally {
+      if (isUpload(path)) await unlink(path as string).catch(() => {});
+    }
+  };
+  app.post('/uploads', async (req, reply) => {
+    if (!Buffer.isBuffer(req.body) || !req.body.length) throw new EngineError('VALIDATION', 'Send the file bytes as application/octet-stream');
+    const name = basename(decodeURIComponent(String(req.headers['x-filename'] ?? 'upload.bin'))).replace(/[^\w.-]+/g, '_').slice(-80) || 'upload.bin';
+    const ext = extname(name).toLowerCase();
+    if (![...IMAGE_EXT, ...VIDEO_EXT, ...AUDIO_EXT].includes(ext)) throw new EngineError('VALIDATION', `Unsupported file type "${ext || 'none'}"`);
+    await mkdir(uploadsDir(), { recursive: true });
+    const path = join(uploadsDir(), `${ulid()}_${name}`);
+    await writeFile(path, req.body);
+    return reply.status(201).send({ path, bytes: req.body.length, name });
+  });
 
   // ---- projects ----
   app.get('/projects', async () => engine.listProjects());
@@ -195,7 +239,7 @@ export function buildApi(engine: Engine, config: Partial<AppConfig> = {}): Fasti
   app.post('/projects/:id/assets/import', async (req, reply) => {
     const b = body(req);
     if (typeof b.path !== 'string') throw new EngineError('VALIDATION', 'path is required');
-    const a = await assets.importLocal((req.params as { id: string }).id, b.path, { type: b.type, name: b.name, license: b.license, prompt: b.prompt, provider: typeof b.provider === 'string' ? b.provider : undefined, params: b.params, tags: b.tags });
+    const a = await withUpload(b.path, () => assets.importLocal((req.params as { id: string }).id, b.path, { type: b.type, name: b.name, license: b.license, prompt: b.prompt, provider: typeof b.provider === 'string' ? b.provider : undefined, params: b.params, tags: b.tags }));
     return reply.status(201).send(a);
   });
   app.post('/projects/:id/assets/import-remote', async (req, reply) => {
@@ -245,13 +289,13 @@ export function buildApi(engine: Engine, config: Partial<AppConfig> = {}): Fasti
   app.post('/artifacts/:id/narration/import', async (req) => {
     const b = body(req);
     if (typeof b.path !== 'string') throw new EngineError('VALIDATION', 'path is required');
-    return studio.importNarration((req.params as { id: string }).id, { path: b.path, sectionIds: b.section_ids, name: b.name, license: b.license, reopen: b.reopen === true });
+    return withUpload(b.path, () => studio.importNarration((req.params as { id: string }).id, { path: b.path, sectionIds: b.section_ids, name: b.name, license: b.license, reopen: b.reopen === true }));
   });
   app.put('/artifacts/:id/mix', async (req) => studio.setMix((req.params as { id: string }).id, body(req).mix, { reopen: body(req).reopen === true }));
   app.post('/projects/:id/audio/import', async (req, reply) => {
     const b = body(req);
     if (typeof b.path !== 'string') throw new EngineError('VALIDATION', 'path is required');
-    return reply.status(201).send(await studio.audio.importClip((req.params as { id: string }).id, b.path, { kind: b.kind, lang: b.lang, name: b.name, license: b.license, provider: typeof b.provider === 'string' ? b.provider : undefined }));
+    return reply.status(201).send(await withUpload(b.path, () => studio.audio.importClip((req.params as { id: string }).id, b.path, { kind: b.kind, lang: b.lang, name: b.name, license: b.license, provider: typeof b.provider === 'string' ? b.provider : undefined })));
   });
   app.get('/projects/:id/audio', async (req) => {
     const q = req.query as { kind?: string; lang?: string };
@@ -278,6 +322,12 @@ export function buildApi(engine: Engine, config: Partial<AppConfig> = {}): Fasti
   app.get('/fonts', async () => studio.render.listFonts());
 
   // ---- composition and rendering ----
+  app.get('/artifacts/:id/timeline-status', async (req) => {
+    const id = (req.params as { id: string }).id;
+    const content = studio.engine.getContent(id) as { version?: number; duration?: number; scenes?: unknown[]; captions?: { enabled?: boolean }; format?: unknown } | null;
+    const has = !!content && content.version === 1;
+    return { has_timeline: has, stale: has ? studio.render.isStale(id) : true, duration: has ? content!.duration : null, scenes: has ? content!.scenes?.length : 0, captions: has ? !!content!.captions?.enabled : false };
+  });
   app.post('/artifacts/:id/build-timeline', async (req) => studio.buildComposition((req.params as { id: string }).id, { reopen: body(req).reopen === true }));
   app.put('/artifacts/:id/scenes/:sceneId/override', async (req) => {
     const { id, sceneId } = req.params as { id: string; sceneId: string };

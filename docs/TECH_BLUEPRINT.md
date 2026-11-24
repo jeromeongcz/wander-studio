@@ -41,7 +41,7 @@ Phases 1–10 as in the v2.2 plan, with one addition: a throwaway vertical slice
 Phases 0-10 are built and tested (`npm test`, includes a real 10-second, 3-format end-to-end run).
 
 Known gaps, stated plainly:
-- No web UI yet; everything is exposed as a loopback-only HTTP API (`npm run dev:server`).
+- The web UI covers every stage (checked by hand in a browser against a seeded demo project, not by automated UI tests). The UI has no accounts: it binds to loopback only and refuses non-localhost Host headers and cross-origin writes.
 - Tagalog TTS needs Edge TTS (online), Piper with your own model, or your own recording. Edge/Piper adapters are tested only against stub programs.
 - Whisper alignment is implemented but unrun: no model file is installed. Default alignment is silence-anchored and always reported as approximate.
 - AI image-to-video and cloud GPU adapters are not bundled; the provider interface and a built-in still-image-motion fallback exist.
