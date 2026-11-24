@@ -75,6 +75,17 @@ const MIGRATIONS: string[] = [
     updated_at TEXT NOT NULL
   );
   `,
+  // v2: measured speech samples used to calibrate words-per-minute per language
+  `
+  CREATE TABLE speech_calibration (
+    id TEXT PRIMARY KEY,
+    lang_code TEXT NOT NULL,
+    words INTEGER NOT NULL CHECK (words > 0),
+    seconds REAL NOT NULL CHECK (seconds > 0),
+    created_at TEXT NOT NULL
+  );
+  CREATE INDEX idx_calibration_lang ON speech_calibration(lang_code);
+  `,
 ];
 
 export function openDb(path: string = ':memory:'): DatabaseSync {

@@ -9,7 +9,8 @@
   "scripts": {
     "preflight": "node scripts/preflight.mjs",
     "test": "npm test -w @wander/server",
-    "typecheck": "npm run typecheck -w @wander/server"
+    "typecheck": "npm run typecheck -w @wander/server",
+    "dev:server": "node app/server/src/server.ts"
   },
   "engines": {
     "node": ">=22"
@@ -17,5 +18,8 @@
   "devDependencies": {
     "@types/node": "^26.6.7",
     "typescript": "^7.0.2"
+  },
+  "dependencies": {
+    "fastify": "^5.12.8"
   }
 }

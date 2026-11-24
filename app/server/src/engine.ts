@@ -5,10 +5,12 @@ import type { Actor, ArtifactKind, State } from '../../shared/src/index.ts';
 
 export class EngineError extends Error {
   code: string;
-  constructor(code: string, message: string) {
+  details?: unknown;
+  constructor(code: string, message: string, details?: unknown) {
     super(message);
     this.name = 'EngineError';
     this.code = code;
+    this.details = details;
   }
 }
 
@@ -96,6 +98,25 @@ export class Engine {
       }
       return id;
     });
+  }
+
+  listProjects(): { id: string; name: string; category: string | null; created_at: string }[] {
+    return (this.db.prepare('SELECT id, name, category, created_at FROM projects ORDER BY id DESC').all() as any[]).map((r) => ({ ...r }));
+  }
+
+  getProject(id: string) {
+    const p = this.db.prepare('SELECT id, name, category, created_at FROM projects WHERE id = ?').get(id) as any;
+    if (!p) throw new EngineError('NOT_FOUND', `Project ${id} not found`);
+    const languages = (this.db.prepare('SELECT lang_code FROM project_languages WHERE project_id = ?').all(id) as any[]).map((r) => r.lang_code as string);
+    return { ...p, languages };
+  }
+
+  /** Parsed content of the artifact's current version, or null if it has none. */
+  getContent(id: string): unknown | null {
+    const a = this.get(id);
+    if (!a.current_version_id) return null;
+    const v = this.db.prepare('SELECT content_json FROM versions WHERE id = ?').get(a.current_version_id) as { content_json: string };
+    return JSON.parse(v.content_json);
   }
 
   createArtifact(a: NewArtifact): string {
