@@ -15,6 +15,22 @@ import type { StoryboardContent } from './studios/storyboard.ts';
 import { addScene } from './pipeline.ts';
 import { AssetService } from './assets.ts';
 import { resolveConfig } from './config.ts';
+import { AudioService, validateNarrationShape } from './audio/service.ts';
+import type { NarrationContent } from './audio/service.ts';
+import { RenderService } from './render/service.ts';
+import { validateTimelineShape } from './render/timeline.ts';
+import type { Timeline } from './render/timeline.ts';
+import { validateMixShape } from './audio/mix.ts';
+import type { MixSpec } from './audio/mix.ts';
+import { alignHeuristic, alignWithAsr, tokenize } from './captions/align.ts';
+import type { Confidence } from './captions/align.ts';
+import { DEFAULT_STYLE, checkAgainstScript, toSrt, toVtt, validateTrackShape } from './captions/track.ts';
+import type { CaptionTrack } from './captions/track.ts';
+import { runWhisper, whisperStatus } from './captions/whisper.ts';
+import { computeSceneTimes } from './render/timing.ts';
+import { ffmpegBinary, detectSilences } from './media.ts';
+import { mkdir, writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
 import type { AppConfig } from './config.ts';
 import type { AssetType } from './studios/storyboard.ts';
 
@@ -25,10 +41,14 @@ export class Studio {
   engine: Engine;
   config: AppConfig;
   assets: AssetService;
+  audio: AudioService;
+  render: RenderService;
   constructor(engine: Engine, config: Partial<AppConfig> = {}) {
     this.engine = engine;
     this.config = resolveConfig(config);
     this.assets = new AssetService(engine, this.config);
+    this.audio = new AudioService(engine, this.config);
+    this.render = new RenderService(engine, this.assets, this.audio, this.config);
   }
 
   // ---- locale registry ----
@@ -118,6 +138,18 @@ export class Studio {
   private validateShape(a: Artifact, content: unknown, actor: Actor) {
     if (a.kind === 'research') validateResearchShape(content, actor, this.engine.getContent(a.id));
     else if (a.kind === 'script_base') validateScriptShape(content);
+    else if (a.kind === 'audio') {
+      const n = validateNarrationShape(content);
+      this.audio.checkContent(a, n, this.scriptSectionIds(a));
+    } else if (a.kind === 'caption') {
+      const t = validateTrackShape(content);
+      if (t.lang !== a.lang_code) throw new EngineError('VALIDATION', `This artifact holds "${a.lang_code}" captions but content says "${t.lang}"`);
+      const script = this.scriptSections(a);
+      if (script) {
+        const problems = checkAgainstScript(t.words, script);
+        if (problems.length) throw new EngineError('VALIDATION', 'Caption text must match the approved script', problems);
+      }
+    } else if (a.kind === 'composition') validateTimelineShape(content);
     else if (a.kind === 'script_lang') {
       const s = validateScriptShape(content);
       // Per-language isolation: a language's script artifact only ever holds that language.
@@ -140,7 +172,7 @@ export class Studio {
   }
 
   /** Submit for review after kind-specific readiness checks. Returns non-blocking warnings. */
-  submit(id: string, actor: Actor = 'user'): { warnings: string[] } {
+  async submit(id: string, actor: Actor = 'user'): Promise<{ warnings: string[] }> {
     const a = this.engine.get(id);
     const content = this.engine.getContent(id);
     let warnings: string[] = [];
@@ -151,6 +183,9 @@ export class Studio {
         const c = validateScriptShape(content);
         r = scriptReadiness(c, this.samples(c.lang), this.defaultWpm(c.lang));
       } else if (a.kind === 'script_lang') r = this.languageReadiness(a, validateScriptShape(content));
+      else if (a.kind === 'audio') r = this.audio.readiness(validateNarrationShape(content), this.scriptSections(a) ?? []);
+      else if (a.kind === 'caption') r = await this.captionReadiness(a, content as CaptionTrack);
+      else if (a.kind === 'composition') r = this.compositionReadiness(a, content);
       else if (a.kind === 'scene_asset') r = this.assets.sceneReadiness(a.project_id, content, this.plannedAssetType(a));
       else if (a.kind === 'storyboard') {
         const base = this.storyboardBase(a);
@@ -358,5 +393,235 @@ export class Studio {
     const fmt = (this.engine.getProject(art.project_id).settings.formats as string[] | undefined)?.[0] ?? 'vertical_9x16';
     const aspect = fmt.includes('9x16') ? '9:16' : fmt.includes('1x1') ? '1:1' : '16:9';
     return { aspect, ...this.assets.providers.imagePrompt(providerId).buildPrompt({ description: scene.visual_description, style: scene.visual_style, assetType: scene.asset_type, aspect }) };
+  }
+
+  // ---- narration, captions, composition, rendering ----
+  private scriptSections(a: Artifact): { id: string; text: string }[] | null {
+    const art = this.engine.list(a.project_id, { kind: 'script_lang', lang_code: a.lang_code ?? undefined })[0];
+    const c = art ? (this.engine.getContent(art.id) as ScriptContent | null) : null;
+    return c ? c.sections.map(({ id, text }) => ({ id, text })) : null;
+  }
+
+  private scriptSectionIds(a: Artifact): Set<string> | null {
+    const s = this.scriptSections(a);
+    return s ? new Set(s.map((x) => x.id)) : null;
+  }
+
+  private async captionReadiness(a: Artifact, raw: CaptionTrack) {
+    const errors: string[] = [];
+    const warnings: string[] = [];
+    const t = validateTrackShape(raw);
+    if (!t.words.length) errors.push('Caption track has no words; align captions first');
+    const audioArt = this.engine.list(a.project_id, { kind: 'audio', lang_code: a.lang_code ?? undefined })[0];
+    const narration = audioArt ? (this.engine.getContent(audioArt.id) as NarrationContent | null) : null;
+    if (!narration) errors.push('No narration audio to align to');
+    else if (JSON.stringify(narration.chunks.map((c) => c.clip_id)) !== JSON.stringify(t.audio_ref)) errors.push('Captions were aligned to different audio than the current narration; align again');
+    const script = this.scriptSections(a);
+    if (script) errors.push(...checkAgainstScript(t.words, script));
+    try {
+      await this.render.prepareFonts(t.style.font_family);
+    } catch (e) {
+      errors.push((e as Error).message);
+    }
+    if (t.confidence !== 'high') warnings.push(`Word timing is ${t.confidence}-confidence (${t.method}); check it in the caption editor`);
+    return { errors, warnings };
+  }
+
+  private compositionReadiness(a: Artifact, content: unknown) {
+    const errors: string[] = [];
+    const warnings: string[] = [];
+    let tl: Timeline;
+    try {
+      tl = validateTimelineShape(content);
+    } catch (e) {
+      return { errors: [`No valid timeline yet: ${(e as Error).message}. Build the timeline first.`], warnings };
+    }
+    if (this.render.isStale(a.id)) errors.push('The timeline is out of date with its storyboard, narration, captions or scene assets; rebuild it');
+    const noAsset = tl.scenes.filter((s) => !s.asset).map((s) => s.title);
+    if (noAsset.length) errors.push(`Scene(s) without an asset: ${noAsset.join(', ')}`);
+    if (!tl.captions.enabled) warnings.push('No captions in this composition (clean render only)');
+    const estimated = tl.scenes.filter((s) => s.timing_source === 'estimate').length;
+    if (estimated) warnings.push(`${estimated} scene(s) are timed from estimates, not narration`);
+    return { errors, warnings };
+  }
+
+  /** User approval plus the follow-ups it implies: audio approval anchors scene timing and calibrates speech rate. */
+  approve(id: string, note?: string) {
+    const a = this.engine.get(id);
+    this.engine.approve(id, { actor: 'user', note });
+    if (a.kind === 'audio' || a.kind === 'caption') this.anchorScenes(a.project_id, a.lang_code!);
+    if (a.kind === 'audio') this.calibrateFromAudio(a);
+  }
+
+  private calibrateFromAudio(a: Artifact) {
+    const n = this.engine.getContent(a.id) as NarrationContent | null;
+    const script = this.scriptSections(a);
+    if (!n || !script) return;
+    const byId = new Map(script.map((s) => [s.id, s.text]));
+    for (const c of n.chunks) {
+      const words = c.section_ids.reduce((sum, id) => sum + tokenize([{ id, text: byId.get(id) ?? '' }]).length, 0);
+      const secs = this.audio.get(c.clip_id).duration_seconds;
+      if (words >= 5 && secs > 0) this.addCalibration(a.lang_code!, words, secs);
+    }
+  }
+
+  /** Write measured per-scene durations (scene_timing) from the narration's real word times. */
+  anchorScenes(projectId: string, lang: string) {
+    const sb = this.engine.list(projectId, { kind: 'storyboard' })[0];
+    const sbc = sb ? (this.engine.getContent(sb.id) as StoryboardContent | null) : null;
+    const nw = this.render.narrationWords(projectId, lang);
+    if (!sbc || !nw) return [];
+    const times = computeSceneTimes(sbc.scenes.map((s) => ({ scene_id: s.scene_id!, script_segment_id: s.script_segment_id, segment_text: s.segment_text, target_duration: s.target_duration })), nw.words, nw.total);
+    for (const t of times) if (t.source === 'audio') this.setSceneTiming(t.scene_id, lang, Math.max(0.1, t.duration));
+    return times;
+  }
+
+  /** Generate narration with a TTS provider, one clip per script section (so a section can be redone alone). */
+  async synthesizeNarration(audioId: string, opts: { voice: { provider: string; voice: string; rate?: number }; sectionIds?: string[]; reopen?: boolean }) {
+    const a = this.engine.get(audioId);
+    if (a.kind !== 'audio') throw new EngineError('VALIDATION', 'Not an audio artifact');
+    const script = this.engine.list(a.project_id, { kind: 'script_lang', lang_code: a.lang_code ?? undefined })[0];
+    const sc = script ? (this.engine.getContent(script.id) as ScriptContent | null) : null;
+    if (!sc) throw new EngineError('NO_VERSION', `Write the "${a.lang_code}" script first`);
+    const entries = this.listLexicon(a.project_id, a.lang_code!);
+    const wanted = (opts.sectionIds ?? sc.sections.map((s) => s.id)).map((id) => {
+      const sec = sc.sections.find((x) => x.id === id);
+      if (!sec) throw new EngineError('VALIDATION', `Section ${id} is not in the script`);
+      return sec;
+    }).filter((s) => s.text.trim());
+    if (!wanted.length) throw new EngineError('VALIDATION', 'No script text to narrate');
+    if (a.state === 'approved' && !opts.reopen) throw new EngineError('PROTECTED', 'Narration is approved; pass reopen to regenerate it');
+    const prev = (this.engine.getContent(audioId) as NarrationContent | null) ?? { chunks: [] };
+    const made = new Map<string, string>();
+    for (const sec of wanted) {
+      const clip = await this.audio.synthesize(a.project_id, a.lang_code!, ttsText(sec, entries), opts.voice, `${a.lang_code}-${sec.id}`);
+      made.set(sec.id, clip.id);
+    }
+    const kept = prev.chunks.filter((c) => !c.section_ids.some((s) => made.has(s)));
+    const chunks = [...kept, ...[...made].map(([sid, clip_id]) => ({ clip_id, section_ids: [sid] }))].sort((x, y) => sc.sections.findIndex((s) => s.id === x.section_ids[0]) - sc.sections.findIndex((s) => s.id === y.section_ids[0]));
+    return this.save(audioId, { ...prev, chunks, voice: opts.voice }, { actor: 'user', reopen: opts.reopen });
+  }
+
+  /** Manual voiceover: one recording for the whole script, or for specific sections. */
+  async importNarration(audioId: string, opts: { path: string; sectionIds?: string[]; name?: string; license?: unknown; reopen?: boolean }) {
+    const a = this.engine.get(audioId);
+    if (a.kind !== 'audio') throw new EngineError('VALIDATION', 'Not an audio artifact');
+    const script = this.scriptSections(a);
+    if (!script) throw new EngineError('NO_VERSION', `Write the "${a.lang_code}" script first`);
+    const ids = opts.sectionIds ?? script.filter((s) => s.text.trim()).map((s) => s.id);
+    if (a.state === 'approved' && !opts.reopen) throw new EngineError('PROTECTED', 'Narration is approved; pass reopen to replace it');
+    const clip = await this.audio.importClip(a.project_id, opts.path, { kind: 'narration', lang: a.lang_code!, name: opts.name, license: opts.license ?? { type: 'own', commercial_use: 'yes', notes: 'Own voiceover recording' }, provider: 'manual-import' });
+    const prev = (this.engine.getContent(audioId) as NarrationContent | null) ?? { chunks: [] };
+    const kept = prev.chunks.map((c) => ({ ...c, section_ids: c.section_ids.filter((s) => !ids.includes(s)) })).filter((c) => c.section_ids.length);
+    const chunks = [...kept, { clip_id: clip.id, section_ids: ids }].sort((x, y) => script.findIndex((s) => s.id === x.section_ids[0]) - script.findIndex((s) => s.id === y.section_ids[0]));
+    return { clip, ...this.save(audioId, { ...prev, chunks }, { actor: 'user', reopen: opts.reopen }) };
+  }
+
+  setMix(audioId: string, mix: unknown, opts: { reopen?: boolean } = {}) {
+    const prev = this.engine.getContent(audioId) as NarrationContent | null;
+    if (!prev) throw new EngineError('NO_VERSION', 'Add narration before configuring the mix');
+    return this.save(audioId, { ...prev, mix: validateMixShape(mix) as MixSpec }, { actor: 'user', reopen: opts.reopen });
+  }
+
+  whisperStatus() {
+    return whisperStatus(this.config.whisper);
+  }
+
+  /** Build the canonical caption track: words come from the approved script, only timestamps come from the audio. */
+  async alignCaptions(captionId: string, opts: { method?: 'heuristic' | 'asr'; reopen?: boolean } = {}) {
+    const a = this.engine.get(captionId);
+    if (a.kind !== 'caption') throw new EngineError('VALIDATION', 'Not a caption artifact');
+    const audioArt = this.engine.list(a.project_id, { kind: 'audio', lang_code: a.lang_code ?? undefined })[0];
+    const narration = audioArt ? (this.engine.getContent(audioArt.id) as NarrationContent | null) : null;
+    if (!narration) throw new EngineError('NO_VERSION', `No narration audio for "${a.lang_code}" yet`);
+    const script = this.scriptSections(a);
+    if (!script) throw new EngineError('NO_VERSION', `No "${a.lang_code}" script yet`);
+    const layout = this.audio.layout(narration);
+    const ff = ffmpegBinary(this.config.ffprobePath);
+    const method = opts.method ?? 'heuristic';
+    const ws = this.whisperStatus();
+    if (method === 'asr' && !ws.ready) throw new EngineError('VALIDATION', 'Whisper is not ready: set a model file you have downloaded (see GET /alignment/whisper for sizes and licenses)', ws);
+
+    const words: CaptionTrack['words'] = [];
+    const ranks: Record<Confidence, number> = { low: 0, medium: 1, high: 2 };
+    let worst: Confidence = 'high';
+    const notes: string[] = [];
+    for (const c of layout.chunks) {
+      const sw = tokenize(c.section_ids.flatMap((id) => script.filter((s) => s.id === id)));
+      let timings;
+      let conf: Confidence;
+      if (method === 'asr') {
+        const asr = await runWhisper({ ffmpeg: ff, bin: ws.binary!, model: ws.model!, clip: c.path, lang: a.lang_code! });
+        const r = alignWithAsr(sw, asr, c.duration);
+        timings = r.timings;
+        conf = r.confidence;
+        notes.push(`${r.matched}/${sw.length} words matched ASR`);
+      } else {
+        const h = alignHeuristic(sw, c.duration, await detectSilences(c.path, ff));
+        timings = h.timings;
+        conf = h.confidence;
+        notes.push(h.note);
+      }
+      if (ranks[conf] < ranks[worst]) worst = conf;
+      sw.forEach((w, i) => words.push({ text: w.text, start: Math.round((c.start + timings[i].start) * 1000) / 1000, end: Math.round((c.start + timings[i].end) * 1000) / 1000, section_id: w.section_id }));
+    }
+    const prev = this.engine.getContent(captionId) as CaptionTrack | null;
+    const track: CaptionTrack = { lang: a.lang_code!, method: method === 'asr' ? 'asr-assisted' : 'heuristic', confidence: worst, note: [...new Set(notes)].join('; '), audio_ref: layout.chunks.map((c) => c.clip_id), duration: layout.total, words, style: prev?.style ?? DEFAULT_STYLE };
+    return this.save(captionId, track, { actor: 'user', reopen: opts.reopen });
+  }
+
+  /** Write .srt/.vtt sidecars and the canonical track JSON into the project folder. */
+  async exportSubtitles(captionId: string) {
+    const a = this.engine.get(captionId);
+    const track = this.engine.getContent(captionId) as CaptionTrack | null;
+    if (a.kind !== 'caption' || !track) throw new EngineError('NO_VERSION', 'No caption track to export');
+    const dir = join(this.config.root, 'projects', `proj_${a.project_id}`, 'captions');
+    await mkdir(join(dir, 'exports'), { recursive: true });
+    await mkdir(join(dir, 'tracks'), { recursive: true });
+    const srt = toSrt(track.words);
+    const vtt = toVtt(track.words);
+    await writeFile(join(dir, 'exports', `${track.lang}.srt`), srt, 'utf8');
+    await writeFile(join(dir, 'exports', `${track.lang}.vtt`), vtt, 'utf8');
+    await writeFile(join(dir, 'tracks', `${track.lang}.json`), JSON.stringify(track, null, 2), 'utf8');
+    return { srt, vtt, files: [`captions/exports/${track.lang}.srt`, `captions/exports/${track.lang}.vtt`, `captions/tracks/${track.lang}.json`] };
+  }
+
+  buildComposition(compId: string, opts: { reopen?: boolean } = {}) {
+    return { ...this.save(compId, this.render.build(compId), { actor: 'user', reopen: opts.reopen }) };
+  }
+
+  setSceneOverride(compId: string, sceneId: string, override: { crop?: { x: number; y: number; w: number; h: number }; caption_y_pct?: number | null }, opts: { reopen?: boolean } = {}) {
+    const tl = validateTimelineShape(this.engine.getContent(compId));
+    const cur = { ...(tl.overrides[sceneId] ?? {}) } as Record<string, unknown>;
+    if (override.crop !== undefined) {
+      const c = override.crop;
+      if (!(c && c.w > 0.05 && c.h > 0.05 && c.x >= 0 && c.y >= 0 && c.x + c.w <= 1.0001 && c.y + c.h <= 1.0001)) throw new EngineError('VALIDATION', 'crop must be normalized x,y,w,h inside the image');
+      cur.crop = c;
+    }
+    if (override.caption_y_pct !== undefined) {
+      if (override.caption_y_pct === null) delete cur.caption_y_pct;
+      else if (!(override.caption_y_pct >= 0.2 && override.caption_y_pct <= 0.98)) throw new EngineError('VALIDATION', 'caption_y_pct must be between 0.2 and 0.98');
+      else cur.caption_y_pct = override.caption_y_pct;
+    }
+    if (!tl.scenes.some((s) => s.scene_id === sceneId)) throw new EngineError('NOT_FOUND', `Scene ${sceneId} is not in this timeline`);
+    const overrides = { ...tl.overrides, [sceneId]: cur };
+    // rebuild so placement ranges pick up the change
+    return this.save(compId, { ...this.render.build(compId), overrides }, { actor: 'user', reopen: opts.reopen });
+  }
+
+  async renderComposition(compId: string, variants: ('captioned' | 'clean')[], opts: { reopen?: boolean } = {}) {
+    const comp = this.engine.get(compId);
+    if (comp.kind !== 'composition') throw new EngineError('VALIDATION', 'Not a composition artifact');
+    const finalArt = this.engine.list(comp.project_id, { kind: 'final_render', lang_code: comp.lang_code ?? undefined, format: comp.format ?? undefined })[0];
+    if (finalArt?.state === 'approved' && !opts.reopen) throw new EngineError('PROTECTED', 'The final render is approved; pass reopen to render again');
+    if (this.render.isStale(compId)) throw new EngineError('VALIDATION', 'The timeline is out of date; rebuild it before rendering');
+    const result = await this.render.render(compId, variants);
+    if (finalArt) {
+      const prev = (this.engine.getContent(finalArt.id) as { renders?: Record<string, unknown>[] } | null)?.renders ?? [];
+      const latest = new Map<string, Record<string, unknown>>(prev.map((r) => [String(r.variant), r]));
+      for (const r of result.renders) latest.set(r.variant, { render_id: r.id, variant: r.variant, rel_path: r.rel_path, sha256: r.sha256, duration_seconds: r.duration_seconds, width: r.width, height: r.height });
+      this.save(finalArt.id, { renders: [...latest.values()], timeline_hash: result.renders[0].timeline_hash, composition_version: comp.current_version_id }, { actor: 'user', reopen: opts.reopen });
+    }
+    return result;
   }
 }

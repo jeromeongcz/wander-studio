@@ -49,7 +49,7 @@ export interface NewArtifact {
 
 const now = () => new Date().toISOString();
 
-function canonical(v: unknown): string {
+export function canonical(v: unknown): string {
   if (Array.isArray(v)) return `[${v.map(canonical).join(',')}]`;
   if (v && typeof v === 'object') {
     const o = v as Record<string, unknown>;

@@ -1,5 +1,6 @@
 import Fastify from 'fastify';
 import { createReadStream } from 'node:fs';
+import { join } from 'node:path';
 import { MIME } from './media.ts';
 import type { AppConfig } from './config.ts';
 import type { FastifyInstance } from 'fastify';
@@ -25,6 +26,9 @@ const STATUS: Record<string, number> = {
   LICENSE: 422,
   DUPLICATE_ASSET: 409,
   PROVIDER_ERROR: 502,
+  TOOL_FAILED: 500,
+  RENDER_INPUT: 422,
+  RENDER_VERIFY: 500,
 };
 
 const body = (req: { body: unknown }): Record<string, any> => (req.body && typeof req.body === 'object' ? (req.body as Record<string, any>) : {});
@@ -44,7 +48,7 @@ export function buildApi(engine: Engine, config: Partial<AppConfig> = {}): Fasti
       return reply.status(STATUS[err.code] ?? 400).send({ error: { code: err.code, message: err.message, details: err.details } });
     }
     const status = (err as { statusCode?: number }).statusCode ?? 500;
-    return reply.status(status).send({ error: { code: status === 500 ? 'INTERNAL' : 'BAD_REQUEST', message: status === 500 ? 'Internal error' : (err as Error).message } });
+    return reply.status(status).send({ error: { code: status === 500 ? 'INTERNAL' : 'BAD_REQUEST', message: status === 500 && !process.env.WANDER_DEBUG ? 'Internal error' : (err as Error).message } });
   });
 
   app.get('/health', async () => ({ ok: true }));
@@ -80,7 +84,7 @@ export function buildApi(engine: Engine, config: Partial<AppConfig> = {}): Fasti
   });
   app.post('/artifacts/:id/submit', async (req) => studio.submit((req.params as { id: string }).id, 'user'));
   app.post('/artifacts/:id/approve', async (req) => {
-    engine.approve((req.params as { id: string }).id, { actor: 'user', note: body(req).note });
+    studio.approve((req.params as { id: string }).id, body(req).note);
     return { ok: true };
   });
   app.post('/artifacts/:id/reject', async (req) => {
@@ -223,6 +227,72 @@ export function buildApi(engine: Engine, config: Partial<AppConfig> = {}): Fasti
     return studio.setSceneAssets((req.params as { sceneId: string }).sceneId, b.assets, String(b.primary_asset_id ?? ''), { reopen: b.reopen === true });
   });
   app.get('/scenes/:sceneId/image-prompt', async (req) => studio.sceneImagePrompt((req.params as { sceneId: string }).sceneId, (req.query as { provider?: string }).provider));
+
+  // ---- audio: voices, narration, mix ----
+  app.get('/tts/providers', async () =>
+    Promise.all(studio.audio.tts.list().map(async (p) => ({ id: p.id, name: p.name, languages: p.languages, terms: p.terms, status: await p.available() }))),
+  );
+  app.get('/tts/providers/:id/voices', async (req) => studio.audio.tts.get((req.params as { id: string }).id).voices());
+  app.post('/artifacts/:id/narration/synthesize', async (req) => {
+    const b = body(req);
+    return studio.synthesizeNarration((req.params as { id: string }).id, { voice: b.voice, sectionIds: b.section_ids, reopen: b.reopen === true });
+  });
+  app.post('/artifacts/:id/narration/import', async (req) => {
+    const b = body(req);
+    if (typeof b.path !== 'string') throw new EngineError('VALIDATION', 'path is required');
+    return studio.importNarration((req.params as { id: string }).id, { path: b.path, sectionIds: b.section_ids, name: b.name, license: b.license, reopen: b.reopen === true });
+  });
+  app.put('/artifacts/:id/mix', async (req) => studio.setMix((req.params as { id: string }).id, body(req).mix, { reopen: body(req).reopen === true }));
+  app.post('/projects/:id/audio/import', async (req, reply) => {
+    const b = body(req);
+    if (typeof b.path !== 'string') throw new EngineError('VALIDATION', 'path is required');
+    return reply.status(201).send(await studio.audio.importClip((req.params as { id: string }).id, b.path, { kind: b.kind, lang: b.lang, name: b.name, license: b.license, provider: typeof b.provider === 'string' ? b.provider : undefined }));
+  });
+  app.get('/projects/:id/audio', async (req) => {
+    const q = req.query as { kind?: string; lang?: string };
+    return studio.audio.list((req.params as { id: string }).id, q);
+  });
+  app.get('/audio/:id/peaks', async (req) => studio.audio.peaks((req.params as { id: string }).id, Number((req.query as { buckets?: string }).buckets ?? 200)));
+  app.get('/audio/:id/file', async (req, reply) => {
+    const c = studio.audio.get((req.params as { id: string }).id);
+    const ext = c.rel_path.slice(c.rel_path.lastIndexOf('.')).toLowerCase();
+    return reply.type({ '.wav': 'audio/wav', '.mp3': 'audio/mpeg', '.m4a': 'audio/mp4', '.flac': 'audio/flac', '.ogg': 'audio/ogg' }[ext] ?? 'application/octet-stream').send(createReadStream(studio.audio.absPath(c)));
+  });
+  app.delete('/audio/:id', async (req) => {
+    await studio.audio.remove((req.params as { id: string }).id);
+    return { ok: true };
+  });
+
+  // ---- captions ----
+  app.get('/alignment/whisper', async () => studio.whisperStatus());
+  app.post('/artifacts/:id/captions/align', async (req) => {
+    const b = body(req);
+    return studio.alignCaptions((req.params as { id: string }).id, { method: b.method, reopen: b.reopen === true });
+  });
+  app.post('/artifacts/:id/captions/export', async (req) => studio.exportSubtitles((req.params as { id: string }).id));
+  app.get('/fonts', async () => studio.render.listFonts());
+
+  // ---- composition and rendering ----
+  app.post('/artifacts/:id/build-timeline', async (req) => studio.buildComposition((req.params as { id: string }).id, { reopen: body(req).reopen === true }));
+  app.put('/artifacts/:id/scenes/:sceneId/override', async (req) => {
+    const { id, sceneId } = req.params as { id: string; sceneId: string };
+    const b = body(req);
+    return studio.setSceneOverride(id, sceneId, { crop: b.crop, caption_y_pct: b.caption_y_pct }, { reopen: b.reopen === true });
+  });
+  app.get('/artifacts/:id/preview-frame', async (req, reply) => {
+    const q = req.query as { t?: string; captions?: string };
+    return reply.type('image/png').send(await studio.render.previewFrame((req.params as { id: string }).id, Number(q.t ?? 0), q.captions !== 'false'));
+  });
+  app.post('/artifacts/:id/render', async (req, reply) => {
+    const b = body(req);
+    const variants = Array.isArray(b.variants) && b.variants.length ? b.variants : ['captioned', 'clean'];
+    return reply.status(201).send(await studio.renderComposition((req.params as { id: string }).id, variants, { reopen: b.reopen === true }));
+  });
+  app.get('/projects/:id/renders', async (req) => studio.render.listRenders((req.params as { id: string }).id, req.query as { lang?: string; format?: string }));
+  app.get('/renders/:id/file', async (req, reply) => {
+    const r = studio.render.getRender((req.params as { id: string }).id);
+    return reply.type('video/mp4').send(createReadStream(join(studio.config.root, r.rel_path)));
+  });
 
   return app;
 }

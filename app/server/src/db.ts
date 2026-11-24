@@ -153,6 +153,45 @@ const MIGRATIONS: string[] = [
   CREATE INDEX idx_assets_project ON assets(project_id, type);
   CREATE INDEX idx_assets_hash ON assets(sha256);
   `,
+  // v6: audio clips (narration, music, sfx) and verified renders
+  `
+  CREATE TABLE audio_clips (
+    id TEXT PRIMARY KEY,
+    project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    lang_code TEXT,
+    kind TEXT NOT NULL CHECK (kind IN ('narration','music','sfx')),
+    name TEXT NOT NULL,
+    rel_path TEXT NOT NULL,
+    sha256 TEXT NOT NULL,
+    duration_seconds REAL NOT NULL CHECK (duration_seconds > 0),
+    sample_rate INTEGER,
+    channels INTEGER,
+    provider TEXT NOT NULL,
+    voice TEXT,
+    params_json TEXT NOT NULL DEFAULT '{}',
+    license_json TEXT NOT NULL,
+    created_at TEXT NOT NULL
+  );
+  CREATE INDEX idx_audio_project ON audio_clips(project_id, kind, lang_code);
+  CREATE TABLE renders (
+    id TEXT PRIMARY KEY,
+    project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    lang_code TEXT NOT NULL,
+    format TEXT NOT NULL,
+    variant TEXT NOT NULL CHECK (variant IN ('captioned','clean')),
+    rel_path TEXT NOT NULL,
+    width INTEGER NOT NULL,
+    height INTEGER NOT NULL,
+    fps REAL NOT NULL,
+    duration_seconds REAL NOT NULL,
+    bytes INTEGER NOT NULL,
+    sha256 TEXT NOT NULL,
+    has_audio INTEGER NOT NULL,
+    timeline_hash TEXT NOT NULL,
+    created_at TEXT NOT NULL
+  );
+  CREATE INDEX idx_renders_project ON renders(project_id, lang_code, format);
+  `,
 ];
 
 export function openDb(path: string = ':memory:'): DatabaseSync {
