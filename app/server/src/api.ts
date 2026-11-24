@@ -115,6 +115,10 @@ export function buildApi(engine: Engine, config: Partial<AppConfig> = {}): Fasti
     const [research] = engine.list(id, { kind: 'research' });
     return reply.status(201).send({ id, researchArtifactId: research.id, researchTemplate: newResearchContent(b.topic ?? b.name, b.category) });
   });
+  app.patch('/projects/:id', async (req) => {
+    const b = body(req);
+    return engine.updateProject((req.params as { id: string }).id, { name: b.name, category: b.category });
+  });
   app.get('/projects/:id', async (req) => {
     const { id } = req.params as { id: string };
     return { ...engine.getProject(id), artifacts: engine.list(id) };

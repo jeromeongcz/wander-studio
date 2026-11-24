@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { api } from '../api';
-import { Btn, Field, Pill, fmtSec } from '../ui';
+import { Btn, Field, Pill, fmtSec, useToast } from '../ui';
 import { SECTION_KINDS } from '../types';
 
 export const sid = () => `s${Math.random().toString(36).slice(2, 7)}`;
@@ -65,6 +65,35 @@ export function EstimateBar({ sections, lang, preset, target }: { sections: Sect
       <Pill tone={tone}>≈ {fmtSec(est.seconds)}{est.fit !== 'unknown' ? ` · ${est.fit === 'ok' ? 'fits the preset' : est.fit === 'over' ? 'over the preset' : 'under the preset'}` : ''}</Pill>
       {est.overHardLimit && <Pill tone="bad">over the 60s Shorts limit</Pill>}
       <span className="muted small">{est.note}</span>
+    </div>
+  );
+}
+
+
+/** Change a project's category (and optionally name). Drives the storyboard's visual recommendations; approvals are unaffected. */
+export function ProjectDetailsEditor({ project, onSaved, compact }: { project: { id: string; name: string; category: string | null }; onSaved: () => void; compact?: boolean }) {
+  const { push } = useToast();
+  const [cats, setCats] = useState<{ name: string; profile: { assets: string[] } }[]>([]);
+  const [name, setName] = useState(project.name);
+  const [category, setCategory] = useState(project.category ?? '');
+  useEffect(() => { api.get('/categories').then(setCats).catch(() => {}); }, []);
+  useEffect(() => { setName(project.name); setCategory(project.category ?? ''); }, [project.name, project.category]);
+  const dirty = name.trim() !== project.name || category.trim() !== (project.category ?? '');
+  const known = cats.some((c) => c.name.toLowerCase() === category.trim().toLowerCase());
+  return (
+    <div className="stack">
+      <div className="form">
+        {!compact && <Field label="Project name"><input value={name} onChange={(e) => setName(e.target.value)} maxLength={120} /></Field>}
+        <Field label="Category" hint={category.trim() ? (known ? 'Uses this category’s visual recommendations' : 'Custom category: general recommendations') : 'No category: general recommendations'}>
+          <input list="proj-cats" value={category} onChange={(e) => setCategory(e.target.value)} maxLength={60} placeholder="Pick one or type your own" />
+          <datalist id="proj-cats">{cats.map((c) => <option key={c.name} value={c.name} />)}</datalist>
+        </Field>
+      </div>
+      <div className="row gap">
+        <Btn kind="primary" disabled={!dirty || !name.trim()} onClick={async () => { await api.patch(`/projects/${project.id}`, { name: name.trim(), category: category.trim() }); push('ok', 'Project updated'); onSaved(); }}>Save</Btn>
+        {dirty && <Btn kind="ghost" onClick={() => { setName(project.name); setCategory(project.category ?? ''); }}>Reset</Btn>}
+        <span className="muted small">Changing the category does not change anything already approved.</span>
+      </div>
     </div>
   );
 }

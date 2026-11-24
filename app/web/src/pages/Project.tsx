@@ -4,6 +4,7 @@ import { useAsync } from '../hooks';
 import { Card, ErrorBox, Loading, Pill, StateBadge } from '../ui';
 import { formatName, langName } from '../types';
 import type { Artifact, Project, State } from '../types';
+import { ProjectDetailsEditor } from '../stages/shared';
 import { ResearchStage } from '../stages/Research';
 import { ScriptStage } from '../stages/Script';
 import { LocalizeStage } from '../stages/Localize';
@@ -116,6 +117,7 @@ function Overview() {
         <div className="row gap wrap">{counts.map(([s, n]) => <span key={s} className="row gap"><StateBadge state={s} /> {n}</span>)}</div>
         {next && <p style={{ margin: '12px 0 0' }}>Next up: <a href={`#/p/${project.id}/${next.id}`}><strong>{next.label}</strong></a>. Every stage needs your explicit approval before the next can be approved.</p>}
       </Card>
+      <Card title="Project details"><ProjectDetailsEditor project={project} onSaved={reload} /></Card>
       {attention.length > 0 && (
         <Card title="Needs your attention">
           <table><tbody>

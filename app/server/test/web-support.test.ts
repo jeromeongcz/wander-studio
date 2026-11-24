@@ -96,3 +96,31 @@ test('timeline-status reports whether a composition has a timeline', async () =>
   const r = JSON.parse((await app.inject({ method: 'GET', url: `/artifacts/${comp.id}/timeline-status` })).body);
   assert.deepEqual(r, { has_timeline: false, stale: true, duration: null, scenes: 0, captions: false });
 });
+
+test('a project can be renamed and its category changed; this never touches approvals', async () => {
+  const { app, engine } = boot();
+  const p = JSON.parse((await app.inject({ method: 'POST', url: '/projects', payload: { name: 'Old', category: 'Science', languages: ['en'] } })).body);
+  const research = engine.list(p.id, { kind: 'research' })[0];
+  engine.saveVersion(research.id, { topic: 'x' });
+  const before = engine.list(p.id).map((a) => `${a.id}:${a.state}:${a.current_version_id}`);
+  const patch = (payload: unknown) => app.inject({ method: 'PATCH', url: `/projects/${p.id}`, payload: payload as any });
+
+  let r = await patch({ category: 'Horror & Folklore' });
+  assert.equal(r.statusCode, 200);
+  assert.equal(JSON.parse(r.body).category, 'Horror & Folklore');
+  assert.equal(JSON.parse(r.body).name, 'Old', 'name untouched when not sent');
+  r = await patch({ name: '  New name  ', category: 'My own category' });
+  assert.equal(JSON.parse(r.body).name, 'New name');
+  assert.equal(JSON.parse(r.body).category, 'My own category', 'custom categories are allowed');
+  r = await patch({ category: '' });
+  assert.equal(JSON.parse(r.body).category, null, 'empty clears it');
+  assert.equal((await patch({ name: '   ' })).statusCode, 422);
+  assert.equal((await patch({ name: 'x'.repeat(121) })).statusCode, 422);
+  assert.equal((await patch({ category: 'x'.repeat(61) })).statusCode, 422);
+  assert.equal((await app.inject({ method: 'PATCH', url: '/projects/NOPE', payload: { category: 'Sports' } })).statusCode, 404);
+  assert.deepEqual(engine.list(p.id).map((a) => `${a.id}:${a.state}:${a.current_version_id}`), before, 'no artifact changed');
+  // recommendations follow the new category
+  await patch({ category: 'Sports' });
+  const recs = JSON.parse((await app.inject({ method: 'GET', url: '/categories/Sports/recommendations' })).body);
+  assert.equal(recs.custom, false);
+});

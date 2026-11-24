@@ -105,6 +105,28 @@ export class Engine {
     return (this.db.prepare('SELECT id, name, category, created_at FROM projects ORDER BY id DESC').all() as any[]).map((r) => ({ ...r }));
   }
 
+  /** Rename a project or change its category. The category only drives suggestions, so nothing is invalidated. */
+  updateProject(id: string, patch: { name?: string; category?: string | null }) {
+    this.getProject(id);
+    const bad = (m: string) => new EngineError('VALIDATION', m);
+    const sets: string[] = [];
+    const args: (string | null)[] = [];
+    if (patch.name !== undefined) {
+      const n = String(patch.name).trim();
+      if (!n || n.length > 120) throw bad('name must be 1-120 characters');
+      sets.push('name = ?');
+      args.push(n);
+    }
+    if (patch.category !== undefined) {
+      const c = patch.category === null ? '' : String(patch.category).trim();
+      if (c.length > 60) throw bad('category must be 60 characters or fewer');
+      sets.push('category = ?');
+      args.push(c || null);
+    }
+    if (sets.length) this.db.prepare(`UPDATE projects SET ${sets.join(', ')} WHERE id = ?`).run(...args, id);
+    return this.getProject(id);
+  }
+
   getProject(id: string) {
     const p = this.db.prepare('SELECT id, name, category, settings_json, created_at FROM projects WHERE id = ?').get(id) as any;
     if (!p) throw new EngineError('NOT_FOUND', `Project ${id} not found`);

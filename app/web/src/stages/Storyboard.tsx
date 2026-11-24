@@ -5,6 +5,7 @@ import { useProject } from '../pages/Project';
 import { useAsync } from '../hooks';
 import { Btn, Card, CopyBtn, Empty, Field, Loading, Modal, Pill, fmtSec, useToast } from '../ui';
 import { ASSET_TYPES } from '../types';
+import { ProjectDetailsEditor } from './shared';
 
 const MOVES = ['static', 'pan', 'zoom', 'ken_burns', 'parallax'];
 const TRANS = ['cut', 'fade', 'dissolve', 'slide', 'zoom', 'wipe'];
@@ -22,6 +23,7 @@ export function StoryboardStage() {
   const [dirty, setDirty] = useState(false);
   const [prompt, setPrompt] = useState<string | null>(null);
   const [secs, setSecs] = useState(4);
+  const [pickCat, setPickCat] = useState(false);
   useEffect(() => { if (loaded.data) { setC(loaded.data.content); setDirty(false); } }, [loaded.data]);
   const done = () => { reload(); loaded.reload(); };
   if (loaded.loading && !loaded.data) return <Loading />;
@@ -40,7 +42,8 @@ export function StoryboardStage() {
     <>
       <ArtifactBar artifact={art} onChanged={done}>{dirty && <Pill tone="warn">unsaved</Pill>}</ArtifactBar>
       {recs.data && (
-        <Card title={`Visual approach: ${recs.data.name}`}>
+        <Card title={`Visual approach: ${recs.data.name}`} actions={<Btn small kind="ghost" onClick={() => setPickCat(!pickCat)}>{pickCat ? 'Close' : 'Change category'}</Btn>}>
+          {pickCat && <div style={{ marginBottom: 12 }}><ProjectDetailsEditor compact project={project} onSaved={() => { setPickCat(false); reload(); recs.reload(); }} /></div>}
           <div className="row gap wrap small">
             <span className="muted">Suggested sources:</span>{recs.data.profile.assets.map((a: string) => <Pill key={a} tone="info">{a.replace(/_/g, ' ')}</Pill>)}
             <span className="muted">Looks:</span>{recs.data.profile.styles.map((a: string) => <Pill key={a}>{a}</Pill>)}
