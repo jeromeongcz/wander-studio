@@ -131,11 +131,12 @@ export class Studio {
       sketch_scenes: async (ctx) => this.sketches.run(ctx),
       align_captions: async (ctx) => {
         guard(ctx);
+        ctx.progress(0.1, 'Matching the script words to the narration');
         return this.alignCaptions(ctx.params.captionId, { method: ctx.params.method, reopen: ctx.params.reopen === true });
       },
       synthesize_narration: async (ctx) => {
         guard(ctx);
-        return this.synthesizeNarration(ctx.params.audioId, { voice: ctx.params.voice, sectionIds: ctx.params.sectionIds, reopen: ctx.params.reopen === true });
+        return this.synthesizeNarration(ctx.params.audioId, { voice: ctx.params.voice, sectionIds: ctx.params.sectionIds, reopen: ctx.params.reopen === true, signal: ctx.signal, onProgress: ctx.progress });
       },
     };
   }
@@ -584,7 +585,7 @@ export class Studio {
   }
 
   /** Generate narration with a TTS provider, one clip per script section (so a section can be redone alone). */
-  async synthesizeNarration(audioId: string, opts: { voice: { provider: string; voice: string; rate?: number }; sectionIds?: string[]; reopen?: boolean }) {
+  async synthesizeNarration(audioId: string, opts: { voice: { provider: string; voice: string; rate?: number }; sectionIds?: string[]; reopen?: boolean; signal?: AbortSignal; onProgress?: (done: number, message?: string) => void }) {
     const a = this.engine.get(audioId);
     if (a.kind !== 'audio') throw new EngineError('VALIDATION', 'Not an audio artifact');
     const script = this.engine.list(a.project_id, { kind: 'script_lang', lang_code: a.lang_code ?? undefined })[0];
@@ -600,9 +601,18 @@ export class Studio {
     if (a.state === 'approved' && !opts.reopen) throw new EngineError('PROTECTED', 'Narration is approved; pass reopen to regenerate it');
     const prev = (this.engine.getContent(audioId) as NarrationContent | null) ?? { chunks: [] };
     const made = new Map<string, string>();
-    for (const sec of wanted) {
-      const clip = await this.audio.synthesize(a.project_id, a.lang_code!, ttsText(sec, entries), opts.voice, `${a.lang_code}-${sec.id}`);
-      made.set(sec.id, clip.id);
+    try {
+      for (const [i, sec] of wanted.entries()) {
+        if (opts.signal?.aborted) throw new EngineError('CANCELLED', 'Cancelled');
+        opts.onProgress?.(i / wanted.length, `Speaking section ${i + 1} of ${wanted.length}`);
+        const clip = await this.audio.synthesize(a.project_id, a.lang_code!, ttsText(sec, entries), opts.voice, `${a.lang_code}-${sec.id}`);
+        made.set(sec.id, clip.id);
+      }
+      if (opts.signal?.aborted) throw new EngineError('CANCELLED', 'Cancelled');
+    } catch (e) {
+      // a cancelled or failed run leaves no half-made clips behind
+      for (const id of made.values()) await this.audio.remove(id).catch(() => {});
+      throw e;
     }
     const kept = prev.chunks.filter((c) => !c.section_ids.some((s) => made.has(s)));
     const chunks = [...kept, ...[...made].map(([sid, clip_id]) => ({ clip_id, section_ids: [sid] }))].sort((x, y) => sc.sections.findIndex((s) => s.id === x.section_ids[0]) - sc.sections.findIndex((s) => s.id === y.section_ids[0]));

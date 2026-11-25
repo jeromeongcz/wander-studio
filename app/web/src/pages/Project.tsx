@@ -49,17 +49,19 @@ const stepItems = (infos: StepInfo[], projectId: string) =>
   });
 
 /** Shows the running work for this video in the floating footer: the script being written, or a background job. Otherwise the step's own footer. */
-function LiveFooter({ projectId, scriptId, reload, children }: { projectId: string; scriptId?: string; reload: () => void; children: React.ReactNode }) {
-  const writing = useTask(scriptId ?? '');
+const JOB_LABEL: Record<string, string> = { sketch_scenes: 'Drawing storyboard pictures', synthesize_narration: 'Generating narration', align_captions: 'Aligning captions', render_composition: 'Rendering the video', batch_render: 'Rendering videos' };
+
+function LiveFooter({ projectId, artifactIds, reload, children }: { projectId: string; artifactIds: string[]; reload: () => void; children: React.ReactNode }) {
+  const task = useTask(...artifactIds);
   const jobs = useAsync(() => api.get<any[]>(`/jobs?project_id=${projectId}`), [projectId]);
-  useInterval(jobs.reload, 2000);
+  useInterval(jobs.reload, 1000);
   const active = (jobs.data ?? []).filter((j) => j.state === 'running' || j.state === 'queued');
   const job = active.find((j) => j.state === 'running') ?? active[0];
   // a finished job changes the project, so refresh it once
   const wasActive = useRef(0);
   useEffect(() => { if (wasActive.current > active.length) reload(); wasActive.current = active.length; }, [active.length, reload]);
-  if (writing) return <ProgressFooter label={writing.label} detail={writing.detail} startedAt={writing.startedAt} />;
-  if (job) return <ProgressFooter label={`${job.kind === 'sketch_scenes' ? 'Drawing storyboard pictures' : job.kind.replace(/_/g, ' ')}${job.state === 'queued' ? ' (waiting)' : ''}${active.length > 1 ? ` · ${active.length - 1} more` : ''}`} detail={job.message ?? undefined} progress={job.progress} onCancel={async () => { await api.post(`/jobs/${job.id}/cancel`); jobs.reload(); }} />;
+  if (task) return <ProgressFooter label={task.label} detail={task.detail} startedAt={task.startedAt} />;
+  if (job) return <ProgressFooter label={`${JOB_LABEL[job.kind] ?? job.kind.replace(/_/g, ' ')}${job.state === 'queued' ? ' (waiting)' : ''}${active.length > 1 ? ` · ${active.length - 1} more` : ''}`} detail={job.message ?? undefined} progress={job.progress} onCancel={async () => { await api.post(`/jobs/${job.id}/cancel`); jobs.reload(); }} />;
   return <>{children}</>;
 }
 
@@ -240,7 +242,7 @@ export function ProjectPage({ id, stage }: { id: string; stage: string }) {
                 {part.id === 'captions' && <CaptionsStage />}
                 {part.id === 'compose' && <ComposeStage />}
                 {part.id === 'publish' && <PublishStage />}
-                <LiveFooter projectId={id} scriptId={ctx.find('script_base')?.id} reload={p.reload}>
+                <LiveFooter projectId={id} artifactIds={proj.artifacts.map((a) => a.id)} reload={p.reload}>
                   <StepFooter info={info} next={next} partId={part.id} projectId={id} reload={p.reload} />
                 </LiveFooter>
               </>

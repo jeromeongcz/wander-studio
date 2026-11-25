@@ -5,6 +5,7 @@ import { useProject } from '../pages/Project';
 import { useAsync } from '../hooks';
 import { Btn, Card, Empty, Field, FilePick, Loading, Pill, Tabs, fmtSec, useToast } from '../ui';
 import { langName } from '../types';
+import { runJob, startTask } from '../progress';
 
 export function AudioStage() {
   const { project } = useProject();
@@ -86,8 +87,9 @@ function LangAudio({ lang }: { lang: string }) {
       if (!confirm(`${provInfo.name} is an online service.\n\nThe text of your script is sent to the provider's servers to make the audio. Continue?`)) return;
       sessionStorage.setItem('wander-online-tts-ok', '1');
     }
-    const call = (reopen: boolean) => api.post(`/artifacts/${art.id}/narration/synthesize`, { voice: { provider: prov, voice, rate }, section_ids: ids, reopen });
-    try { await call(false); } catch (e: any) { if (e.code === 'PROTECTED' && confirm('Narration is approved. Regenerate it anyway?\n\nCaptions and renders for this language will need revision.')) await call(true); else throw e; }
+    const reopen = art.state === 'approved';
+    if (reopen && !confirm('Narration is approved. Regenerate it anyway?\n\nCaptions and renders for this language will need revision.')) return;
+    await runJob(project.id, 'synthesize_narration', art.id, { audioId: art.id, voice: { provider: prov, voice, rate }, sectionIds: ids, reopen });
     push('ok', 'Narration generated');
     done();
   };
@@ -150,7 +152,8 @@ function LangAudio({ lang }: { lang: string }) {
           <FilePick accept="audio/*,.wav,.mp3,.m4a,.aiff,.flac,.ogg" label="Import my own voiceover…" onFile={async (f) => {
             const u = await api.upload(f);
             const call = (reopen: boolean) => api.post(`/artifacts/${art.id}/narration/import`, { path: u.path, name: f.name, section_ids: picked.length ? picked : undefined, reopen });
-            try { await call(false); } catch (e: any) { if (e.code === 'PROTECTED' && confirm('Narration is approved. Replace it?')) await call(true); else throw e; }
+            const finished = startTask(art.id, 'Importing your voiceover…', f.name);
+            try { await call(false); } catch (e: any) { if (e.code === 'PROTECTED' && confirm('Narration is approved. Replace it?')) await call(true); else throw e; } finally { finished(); }
             push('ok', 'Voiceover imported'); done();
           }} />
         </div>

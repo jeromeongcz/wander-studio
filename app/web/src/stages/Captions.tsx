@@ -5,6 +5,7 @@ import { useProject } from '../pages/Project';
 import { useAsync } from '../hooks';
 import { Btn, Card, CopyBtn, Empty, Field, Loading, Modal, Pill, Tabs, fmtSec, useToast } from '../ui';
 import { langName } from '../types';
+import { runJob } from '../progress';
 
 export function CaptionsStage() {
   const { project } = useProject();
@@ -37,8 +38,9 @@ function LangCaptions({ lang }: { lang: string }) {
   if (doc.loading && !doc.data) return <Loading />;
 
   const align = (method: 'heuristic' | 'asr') => async () => {
-    const call = (reopen: boolean) => api.post(`/artifacts/${art.id}/captions/align`, { method, reopen });
-    try { await call(false); } catch (e: any) { if (e.code === 'PROTECTED' && confirm('Captions are approved. Align again?\n\nThis replaces word timings and marks renders as needing revision.')) await call(true); else throw e; }
+    const reopen = art.state === 'approved';
+    if (reopen && !confirm('Captions are approved. Align again?\n\nThis replaces word timings and marks renders as needing revision.')) return;
+    await runJob(project.id, 'align_captions', art.id, { captionId: art.id, method, reopen });
     push('ok', 'Captions aligned to the narration');
     done();
   };

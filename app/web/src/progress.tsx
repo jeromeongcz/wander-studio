@@ -1,5 +1,6 @@
 import { useEffect, useState, useSyncExternalStore } from 'react';
 import { Btn } from './ui';
+import { api, ApiError } from './api';
 
 /** A long request the page is waiting on (no server job). Kept outside React so it survives moving between steps. */
 export interface Task { scope: string; label: string; detail: string; startedAt: number }
@@ -12,8 +13,18 @@ export function startTask(scope: string, label: string, detail: string): () => v
   emit();
   return () => { tasks = tasks.filter((x) => x !== t); emit(); };
 }
-export const useTask = (scope: string): Task | undefined =>
-  useSyncExternalStore((l) => { listeners.add(l); return () => listeners.delete(l); }, () => tasks).find((t) => t.scope === scope);
+export const useTask = (...scopes: string[]): Task | undefined =>
+  useSyncExternalStore((l) => { listeners.add(l); return () => listeners.delete(l); }, () => tasks).find((t) => scopes.includes(t.scope));
+
+/** Start a background job and wait for it. The floating footer shows its progress; a failure comes back as an error. */
+export async function runJob(projectId: string, kind: string, artifactId: string, params: Record<string, unknown>): Promise<void> {
+  let job = await api.post(`/jobs`, { project_id: projectId, kind, artifact_id: artifactId, params });
+  while (job.state === 'queued' || job.state === 'running') {
+    await new Promise((r) => setTimeout(r, 700));
+    job = await api.get(`/jobs/${job.id}`);
+  }
+  if (job.state !== 'succeeded') throw new ApiError(0, job.error?.code ?? job.state.toUpperCase(), job.state === 'cancelled' ? 'Cancelled' : (job.error?.message ?? 'The job failed'), job.error?.details);
+}
 
 const clock = (s: number) => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
 
