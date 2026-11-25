@@ -94,12 +94,14 @@ export function fontFullName(path: string): string | null {
   return found;
 }
 
-/** How to turn a drawing (SVG) into a PNG here: the first command that works wins. */
+/**
+ * How to turn a drawing (SVG) into a PNG here: the first command that works wins.
+ * librsvg (via FFmpeg or rsvg-convert) renders gradients, filters, masks and text faithfully. macOS `sips` is kept only as
+ * the last resort because it implements only part of SVG (not verified here: no Mac), which can flatten detailed art.
+ */
 export function rasterCommands(svg: string, png: string, ffmpeg: string, platform: Platform = process.platform): { bin: string; args: string[] }[] {
-  if (platform === 'darwin') return [{ bin: '/usr/bin/sips', args: ['-s', 'format', 'png', svg, '--out', png] }];
-  return [
-    // FFmpeg builds with librsvg (for example the "full" Windows builds) read SVG directly
-    { bin: ffmpeg, args: ['-hide_banner', '-nostats', '-loglevel', 'error', '-y', '-i', svg, '-frames:v', '1', png] },
-    { bin: exeName('rsvg-convert', platform), args: ['-o', png, svg] },
-  ];
+  const viaFfmpeg = { bin: ffmpeg, args: ['-hide_banner', '-nostats', '-loglevel', 'error', '-y', '-i', svg, '-frames:v', '1', png] };
+  const viaRsvg = { bin: exeName('rsvg-convert', platform), args: ['-o', png, svg] };
+  if (platform === 'darwin') return [viaFfmpeg, viaRsvg, { bin: '/usr/bin/sips', args: ['-s', 'format', 'png', svg, '--out', png] }];
+  return [viaFfmpeg, viaRsvg];
 }

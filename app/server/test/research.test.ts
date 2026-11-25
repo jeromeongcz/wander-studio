@@ -9,7 +9,9 @@ import { buildApi } from '../src/api.ts';
 import { buildResearchPrompt, parseModelJson, validateTopics } from '../src/research/topics.ts';
 import { checkLinks } from '../src/research/links.ts';
 import { researchFromTopic } from '../src/research/service.ts';
-import { checkSvg } from '../src/research/sketch.ts';
+import { buildSketchPrompt, checkSvg, rasterize } from '../src/research/sketch.ts';
+import { ffmpegBinary, run } from '../src/media.ts';
+import { spawnSync } from 'node:child_process';
 
 // ---- a stand-in for the `claude` command ----
 function stubDir() {
@@ -667,6 +669,63 @@ test('model drawings are checked: anything that could run code or reach outside 
   ]) assert.throws(() => checkSvg(evil, size), Error, evil);
 });
 
+const richDrawing = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1080 1920"><defs>
+<radialGradient id="glow" cx="50%" cy="40%" r="60%"><stop offset="0" stop-color="#ffd27a"/><stop offset="1" stop-color="#1a0f2e"/></radialGradient>
+<filter id="soft" x="-20%" y="-20%" width="140%" height="140%"><feGaussianBlur stdDeviation="12"/><feComponentTransfer><feFuncA type="linear" slope="0.8"/></feComponentTransfer></filter>
+<filter id="lit"><feTurbulence type="fractalNoise" baseFrequency="0.02" numOctaves="2" result="n"/><feDiffuseLighting in="n" lighting-color="#fff" surfaceScale="2"><feDistantLight azimuth="45" elevation="60"/></feDiffuseLighting></filter>
+<path id="p" d="M0 0 L60 0 L30 90 Z"/></defs>
+<rect width="1080" height="1920" fill="url(#glow)"/><rect width="1080" height="1920" filter="url(#lit)" opacity="0.15"/>
+<g filter="url(#soft)"><circle cx="540" cy="700" r="260" fill="#ffb347"/></g>
+<use href="#p" x="400" y="1200" fill="#301"/>
+<text x="540" y="1500" text-anchor="middle" font-family="Georgia, serif" font-size="96" fill="#fff"><tspan>SARI-SARI</tspan></text></svg>`;
+
+test('detailed drawings (text, lighting filters, masks) pass the check; the safety rules still hold', () => {
+  const size = { w: 1080, h: 1920 };
+  const ok = checkSvg(richDrawing, size);
+  assert.match(ok, /<text /);
+  assert.match(ok, /feDiffuseLighting/);
+  const wrap = (inner: string) => `<svg>${inner}</svg>`;
+  for (const evil of [
+    wrap('<text><script>alert(1)</script></text>'),
+    wrap('<text><a href="#x">x</a></text>'),
+    wrap('<defs><path id="p" d="M0 0"/></defs><text><textPath href="https://example.org/p">x</textPath></text>'),
+    wrap('<filter id="f"><feImage href="https://example.org/x.png"/></filter>'),
+    wrap('<filter id="f"><feImage href="data:image/png;base64,AAAA"/></filter>'),
+    wrap('<text onclick="alert(1)">x</text>'),
+    wrap('<text style="fill:url(https://example.org/x)">x</text>'),
+    wrap('<animate attributeName="x"/>'),
+    wrap('<style>text{fill:red}</style>'),
+    wrap('<image href="#x"/>'),
+  ]) assert.throws(() => checkSvg(evil, size), Error, evil);
+});
+
+test('sketch prompt: art direction is open, technical rules stay, caption space only when asked', () => {
+  const scene = { title: 't', script_segment_id: 's', target_duration: 4, visual_description: 'A fisherman mends a net under a paper lantern.', asset_type: 'illustration', camera: { movement: 'static' } } as any;
+  const base = { size: { w: 1080, h: 1920 }, number: 1, total: 3 };
+  const p = buildSketchPrompt(scene, base);
+  assert.match(p, /professional 2D illustrator and art director/);
+  assert.match(p, /A fisherman mends a net/);
+  assert.match(p, /anatomy/);
+  assert.match(p, /gradients, highlights/);
+  assert.match(p, /Signs, labels, writing/);
+  assert.match(p, /Answer with the SVG only/);
+  assert.match(p, /No <style> blocks, CSS classes, scripts/, 'technical rules are kept');
+  for (const gone of [/Flat, layered/i, /No text, letters/i, /lower fifth/i, /bottom fifth/i, /Keep it under 60 kilobytes/i]) assert.doesNotMatch(p, gone);
+  assert.match(buildSketchPrompt(scene, { ...base, captionSpace: true }), /bottom fifth/);
+  assert.match(buildSketchPrompt(scene, { ...base, styleNotes: 'ink and watercolour' }), /ink and watercolour/);
+});
+
+test('a detailed drawing is rasterized with its gradients, filters and text intact', { skip: !/svg/.test(spawnSync('ffmpeg', ['-hide_banner', '-decoders'], { encoding: 'utf8' }).stdout ?? '') && 'this FFmpeg has no SVG (librsvg) support' }, async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'wander-raster-'));
+  const svg = join(dir, 'a.svg');
+  const png = join(dir, 'a.png');
+  writeFileSync(svg, checkSvg(richDrawing, { w: 1080, h: 1920 }));
+  await rasterize(svg, png, ffmpegBinary());
+  const probe = await run('ffprobe', ['-v', 'error', '-show_entries', 'stream=width,height', '-of', 'csv=p=0', png]);
+  assert.equal(probe.stdout.trim(), '1080,1920');
+  assert.ok(readFileSync(png).length > 20_000, 'a filtered, lit picture is not a flat fill');
+});
+
 test('sketches: build the storyboard from the approved script, draw one or all scenes as a job, and leave approval to the person', async () => {
   const t = await approvedResearch();
   await approveResearch(t);
@@ -698,6 +757,13 @@ test('sketches: build the storyboard from the approved script, draw one or all s
   assert.match(job.error.message, /Drew 1 of 2/);
   rows = (await t.call('GET', `/artifacts/${storyboard.id}/sketches`)).json;
   assert.deepEqual(rows.map((r: any) => !!r.asset_id), [true, true, false]);
+  assert.doesNotMatch(t.stub.read('prompt_2'), /bottom fifth/, 'no caption space unless the project asks for it');
+  t.stub.answer(4, drawing('#00f'));
+  const again = await t.call('POST', `/artifacts/${storyboard.id}/sketches`, { captionSpace: true });
+  assert.equal((await t.waitJob(again.json.job.id)).state, 'succeeded');
+  assert.match(t.stub.read('prompt_4'), /bottom fifth/, 'asked for, so the prompt reserves it');
+  const last = (await t.call('GET', `/artifacts/${storyboard.id}/sketches`)).json;
+  assert.equal((await t.call('GET', `/assets/${last[2].asset_id}`)).json.params.caption_space, true);
   assert.equal((await t.call('POST', `/artifacts/${storyboard.id}/sketches`, { indexes: [9] })).status, 422);
   assert.deepEqual(readdirSync(join(t.root, 'cache')).filter((f) => f.startsWith('sketch_')), [], 'no temporary files left');
 });
