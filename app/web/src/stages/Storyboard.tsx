@@ -24,6 +24,11 @@ export function StoryboardStage() {
   const [dirty, setDirty] = useState(false);
   const [prompt, setPrompt] = useState<string | null>(null);
   const [pickCat, setPickCat] = useState(false);
+  // how the scenes are laid out; remembered in this browser
+  const [view, setView] = useState<'list' | 'grid'>(() => { try { return localStorage.getItem('wander-storyboard-view') === 'grid' ? 'grid' : 'list'; } catch { return 'list'; } });
+  const layout = (v: 'list' | 'grid') => { setView(v); try { localStorage.setItem('wander-storyboard-view', v); } catch { /* storage unavailable */ } };
+  const listClass = view === 'grid' ? 'board board-grid' : 'stack';
+  const cardClass = view === 'grid' ? 'scene-card tall' : 'scene-card wide';
   const sketches = useAsync(() => api.get<any[]>(`/artifacts/${art.id}/sketches`), [art.id, art.current_version_id, project.artifacts.map((a) => a.current_version_id).join()]);
   const jobs = useAsync(() => api.get<any[]>(`/jobs?project_id=${project.id}`), [project.id]);
   const drawing = (jobs.data ?? []).find((j) => j.kind === 'sketch_scenes' && (j.state === 'queued' || j.state === 'running'));
@@ -102,6 +107,9 @@ export function StoryboardStage() {
           <p className="muted small">{have} of {total} have a picture{c ? ` · about ${fmtSec(c.scenes.reduce((n: number, s: any) => n + s.target_duration, 0))}` : ''}. Pictures are sketches drawn by Claude; approve each one under Visuals.</p>
           <div className="bar-prog"><i style={{ width: `${total ? (have / total) * 100 : 0}%` }} /></div>
         </div>
+        <div className="seg" role="group" aria-label="Scene layout">
+          {([['list', 'rows', 'Horizontal'], ['grid', 'grid', 'Grid']] as const).map(([v, icon, label]) => <button key={v} type="button" className={view === v ? 'on' : ''} aria-pressed={view === v} onClick={() => layout(v)}><Icon name={icon} small /> {label}</button>)}
+        </div>
         <Btn kind="primary" disabled={!ready || !!drawing || !total || have === total} onClick={() => generate()}><Icon name="spark" small /> {drawing ? 'Drawing…' : have === total && total ? 'All drawn' : have ? `Generate ${total - have} remaining` : `Generate all ${total}`}</Btn>
       </section>
       {base.state !== 'approved' && <div className="notice warn">Approve the base script first: the scenes come from it.</div>}
@@ -109,9 +117,9 @@ export function StoryboardStage() {
       {!drawing && lastDraw?.state === 'failed' && have < total && <div className="notice bad"><strong>Last drawing run had problems.</strong> {lastDraw.error?.message}</div>}
       {!c ? (
         <>
-          <div className="stack">
+          <div className={listClass}>
             {preview.map((s, i) => (
-              <article key={s.id} className="scene-card wide">
+              <article key={s.id} className={cardClass}>
                 {picture(i)}
                 <div className="scene-body">
                   <div className="row gap"><span className="scene-n">{i + 1}</span><strong className="grow">{s.kind}</strong></div>
@@ -129,9 +137,9 @@ export function StoryboardStage() {
             <Btn small onClick={async () => setPrompt((await api.get(`/artifacts/${art.id}/storyboard-prompt`)).prompt)}>Prompt for my own AI</Btn>
             <Btn small onClick={() => edit({ scenes: [...c.scenes, { title: 'New scene', script_segment_id: sections[0]?.id ?? '', target_duration: 3, visual_description: '', asset_type: 'stock_photo', camera: { movement: 'ken_burns', direction: 'in', intensity: 'subtle' }, transition_in: 'dissolve', sfx_cues: [] }] })}>Add scene</Btn>
           </div>
-          <div className="stack">
+          <div className={listClass}>
             {c.scenes.map((s: any, i: number) => (
-              <div key={s.scene_id ?? i} className="scene-card wide">
+              <div key={s.scene_id ?? i} className={cardClass}>
                 {picture(i)}
                 <div className="scene-body">
                 <div className="row gap wrap">
