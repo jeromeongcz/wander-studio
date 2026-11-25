@@ -76,10 +76,11 @@ export function ResearchWorkspace({ approvedOnly }: { approvedOnly?: boolean } =
         <div className="row gap wrap" style={{ marginTop: 'auto' }}>
           {t.status === 'new' && <Btn small kind="primary" onClick={() => setApproving(t)}><Icon name="check" small /> Approve topic</Btn>}
           {t.status === 'new' && <Btn small kind="ghost" onClick={async () => { await api.post(`/topic-ideas/${t.id}/dismiss`); data.reload(); }}>Dismiss</Btn>}
-          {t.status === 'approved' && <Btn small kind="primary" onClick={() => setStarting(t)}>Start a video from this <Icon name="arrow" small /></Btn>}
+          {!approvedOnly && (t.status === 'approved' || t.status === 'used') && <a className="btn btn-sm btn-primary" href="#/projects/topic">Proceed to Topic <Icon name="arrow" small /></a>}
+          {approvedOnly && t.status === 'approved' && <Btn small kind="primary" onClick={() => setStarting(t)}>Start a video from this <Icon name="arrow" small /></Btn>}
           {t.status === 'approved' && <Btn small kind="ghost" onClick={async () => { await api.post(`/topic-ideas/${t.id}/restore`); data.reload(); }}>Undo approval</Btn>}
           {t.status === 'dismissed' && <Btn small onClick={async () => { await api.post(`/topic-ideas/${t.id}/restore`); data.reload(); }}>Restore</Btn>}
-          {t.status === 'used' && <><Pill tone="good">video started</Pill>{t.video_project_id && <a className="btn btn-sm btn-primary" href={`#/p/${t.video_project_id}/research`}>Open video <Icon name="arrow" small /></a>}</>}
+          {t.status === 'used' && <><Pill tone="good">video started</Pill>{approvedOnly && t.video_project_id && <a className="btn btn-sm btn-primary" href={`#/p/${t.video_project_id}/research`}>Open video <Icon name="arrow" small /></a>}</>}
           {t.approved_at && t.status === 'approved' && <span className="muted small">approved {new Date(t.approved_at).toLocaleDateString()}</span>}
         </div>
       </section>
@@ -143,6 +144,7 @@ export function ResearchWorkspace({ approvedOnly }: { approvedOnly?: boolean } =
             {data.loading && !data.data && <Loading />}
             {approved.length === 0 && !(data.loading && !data.data) && <Empty>Nothing approved yet. {approvedOnly ? <>Approve a topic in the <a href="#/projects/research">Research Studio</a>.</> : 'Approve a topic from the list below.'}</Empty>}
             <div className={approvedOnly ? 'grid g2' : 'stack'}>{approved.map(card)}</div>
+            {!approvedOnly && approved.length > 0 && <a className="btn btn-primary btn-lg" style={{ marginTop: 14, width: '100%' }} href="#/projects/topic">Proceed to Topic with {approved.length} approved <Icon name="arrow" small /></a>}
           </div>
           {!approvedOnly && <>
           <div>
