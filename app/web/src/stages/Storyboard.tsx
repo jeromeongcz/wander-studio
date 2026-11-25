@@ -28,7 +28,12 @@ export function StoryboardStage() {
   const [view, setView] = useState<'list' | 'grid'>(() => { try { return localStorage.getItem('wander-storyboard-view') === 'grid' ? 'grid' : 'list'; } catch { return 'list'; } });
   const layout = (v: 'list' | 'grid') => { setView(v); try { localStorage.setItem('wander-storyboard-view', v); } catch { /* storage unavailable */ } };
   const listClass = view === 'grid' ? 'board board-grid' : 'stack';
-  const cardClass = view === 'grid' ? 'scene-card tall' : 'scene-card wide';
+  const [open, setOpen] = useState<number[]>([]);
+  const cardClass = (i: number) => (view === 'grid' ? 'scene-card tall' : `scene-card wide${open.includes(i) ? ' open' : ''}`);
+  // horizontal cards do not scroll inside (that traps the page's scroll): they open to full height instead
+  const more = (i: number) => view === 'list' && (
+    <button type="button" className="show-more" aria-expanded={open.includes(i)} onClick={() => setOpen(open.includes(i) ? open.filter((x) => x !== i) : [...open, i])}>{open.includes(i) ? 'Show less' : 'Show full details'}</button>
+  );
   const sketches = useAsync(() => api.get<any[]>(`/artifacts/${art.id}/sketches`), [art.id, art.current_version_id, project.artifacts.map((a) => a.current_version_id).join()]);
   const jobs = useAsync(() => api.get<any[]>(`/jobs?project_id=${project.id}`), [project.id]);
   const drawing = (jobs.data ?? []).find((j) => j.kind === 'sketch_scenes' && (j.state === 'queued' || j.state === 'running'));
@@ -148,12 +153,13 @@ export function StoryboardStage() {
         <>
           <div className={listClass}>
             {preview.map((s, i) => (
-              <article key={s.id} className={cardClass}>
+              <article key={s.id} className={cardClass(i)}>
                 {picture(i)}
                 <div className="scene-body">
                   <div className="row gap"><span className="scene-n">{i + 1}</span><strong className="grow">{s.kind}</strong></div>
                   <p className="quote">“{s.text}”</p>
-                  <dl className="scene-facts small scene-text" tabIndex={0}>{['setting', 'characters', 'action', 'shot', 'mood', 'props'].filter((k) => s.visual?.[k]).map((k) => <div key={k}><dt>{k}</dt><dd>{s.visual[k]}</dd></div>)}</dl>
+                  <dl className="scene-facts small scene-text">{['setting', 'characters', 'action', 'shot', 'mood', 'props'].filter((k) => s.visual?.[k]).map((k) => <div key={k}><dt>{k}</dt><dd>{s.visual[k]}</dd></div>)}</dl>
+                  {more(i)}
                 </div>
               </article>
             ))}
@@ -163,7 +169,7 @@ export function StoryboardStage() {
         <>
           <div className={listClass}>
             {c.scenes.map((s: any, i: number) => (
-              <div key={s.scene_id ?? i} className={cardClass}>
+              <div key={s.scene_id ?? i} className={cardClass(i)}>
                 {picture(i, (
                   <div className="scene-tools" role="group" aria-label={`Scene ${i + 1} order and removal`}>
                     {s.draft && <span className="draft-note" title="Written automatically from the script. Edit the description under Edit details to mark it as yours.">Draft: not edited by you yet</span>}
@@ -181,7 +187,7 @@ export function StoryboardStage() {
                   <input aria-label="Scene title" value={s.title} onChange={(e) => setScene(i, { title: e.target.value })} />
                 </div>
                 {s.segment_text && <p className="quote">“{s.segment_text}”</p>}
-                <div className="scene-text" tabIndex={0}>
+                <div className="scene-text">
                 <p className="visual-text">{s.visual_description}</p>
                 <details>
                 <summary className="muted small">Edit details</summary>
@@ -199,6 +205,7 @@ export function StoryboardStage() {
                 </div>
                 </details>
                 </div>
+                {more(i)}
                 <div className="row gap wrap scene-actions">
                   <Pill>{fmtSec(s.target_duration)}</Pill><Pill>{s.camera.movement.replace('_', ' ')}</Pill><Pill>{(s.transition_in ?? 'cut')} in</Pill>
                   {sketches.data?.[i] && <StateBadge state={sketches.data[i].state} />}
