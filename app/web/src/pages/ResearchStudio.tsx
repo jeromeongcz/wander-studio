@@ -59,8 +59,11 @@ export function ResearchWorkspace() {
     const c = CONF[t.confidence];
     return (
       <section key={t.id} className="card" style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-        <div className="row gap wrap"><h3 style={{ flex: 1 }}>{t.title}</h3><span title={c.help}><Pill tone={c.tone}>{c.label}</Pill></span></div>
-        {t.category && <div><Pill tone="info">{t.category}</Pill></div>}
+        <h3>{t.title}</h3>
+        <div className="row gap wrap">
+          <span title={c.help}><Pill tone={c.tone}>{c.label}</Pill></span>
+          {t.category && <Pill tone="info">{t.category}</Pill>}
+        </div>
         <div>{t.hook}</div>
         {t.note && <div className="muted small">{t.note}</div>}
         <ul style={{ margin: 0, paddingLeft: 18 }}>
