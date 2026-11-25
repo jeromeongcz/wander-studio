@@ -36,6 +36,7 @@ const STATUS: Record<string, number> = {
   DUPLICATE_PROJECT: 409,
   PREFLIGHT: 503,
   CANCELLED: 409,
+  BUSY: 409,
   BATCH_PARTIAL: 500,
 };
 
@@ -115,6 +116,8 @@ export function buildApi(engine: Engine, config: Partial<AppConfig> = {}): Fasti
     const [research] = engine.list(id, { kind: 'research' });
     return reply.status(201).send({ id, researchArtifactId: research.id, researchTemplate: newResearchContent(b.topic ?? b.name, b.category) });
   });
+  app.get('/projects/:id/deletion-preview', async (req) => studio.deletionPreview((req.params as { id: string }).id));
+  app.post('/projects/:id/delete', async (req) => studio.deleteProject((req.params as { id: string }).id, body(req).confirm_name));
   app.patch('/projects/:id', async (req) => {
     const b = body(req);
     return engine.updateProject((req.params as { id: string }).id, { name: b.name, category: b.category });

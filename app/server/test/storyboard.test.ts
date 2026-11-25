@@ -62,10 +62,20 @@ test('categories: all plan categories present, recommendations differ, unknown f
     assert.ok(c.profile.styles.length >= 1 && c.profile.hint.length > 5, `${c.name} text`);
   }
   assert.equal(new Set(names.map((n) => n.toLowerCase())).size, names.length, 'no duplicate names');
-  assert.ok(names.length >= 50, `${names.length} categories`);
-  // every category sits in a named group (none falls into the catch-all), and group names are stable
-  for (const c of listCategories()) assert.notEqual(c.group, 'More', `${c.name} has no group`);
-  assert.deepEqual([...new Set(listCategories().map((c) => c.group))].sort(), ['Business & news', 'Entertainment & culture', 'Knowledge & learning', 'Lifestyle', 'Nature & travel', 'Stories & spooky']);
+  const all = listCategories();
+  assert.ok(names.length >= 70, `${names.length} categories`);
+  // every category is in a named group and in exactly one of the two lists
+  for (const c of all) {
+    assert.notEqual(c.group, 'More', `${c.name} has no group`);
+    assert.ok(c.region === 'philippines' || c.region === 'general', `${c.name} region`);
+  }
+  const ph = all.filter((c) => c.region === 'philippines');
+  const gen = all.filter((c) => c.region === 'general');
+  assert.ok(ph.length >= 20 && gen.length >= 40, `${ph.length} Philippine / ${gen.length} worldwide`);
+  assert.deepEqual(all.slice(0, ph.length).map((c) => c.region), Array(ph.length).fill('philippines'), 'Philippine list comes first');
+  for (const n of ['Filipino Folklore', 'Philippine History', 'Philippine Travel & Destinations', 'Filipino Food & Street Food', 'OFW Stories & Life Abroad', 'Tagalog & Filipino Language Lessons', 'Philippine News & Current Affairs']) assert.equal(profileFor(n).custom || all.find((c) => c.name === n)!.region !== 'philippines', false, `${n} is a Philippine category`);
+  for (const n of ['Horror & Folklore', 'Science', 'Travel', 'Gaming', 'Language Learning', 'History']) assert.equal(all.find((c) => c.name === n)!.region, 'general', `${n} is worldwide`);
+  assert.deepEqual([...new Set(ph.map((c) => c.group))], ['Stories & folklore', 'History & people', 'Culture & everyday life', 'Entertainment & humor', 'Places & nature', 'News, money & work']);
   for (const n of ['Ghost Stories & Paranormal', 'Language Learning', 'Kids & Bedtime Stories', 'Conspiracies & Debunking', 'Anime & Comics']) assert.ok(names.includes(n), n);
   assert.ok(profileFor('history').profile.assets.includes('map'));
   assert.ok(profileFor('Science').profile.assets.includes('infographic'));

@@ -3,7 +3,7 @@
 Local-first studio for faceless multilingual videos. Backend: `app/server` (Node 22, TypeScript run directly, Fastify, `node:sqlite`). Web UI: `app/web` (React + Vite). Shared ids/states: `app/shared`. Full design and known gaps: `docs/TECH_BLUEPRINT.md`.
 
 ## Commands
-- `npm run typecheck` (server and web), `npm test` (103 tests, includes a real FFmpeg render; ~1 min)
+- `npm run typecheck` (server and web), `npm test` (includes a real FFmpeg render; ~1 min)
 - `npm run preflight`, `npm start`, `npm run seed:demo -- --full` (use `WANDER_ROOT=/tmp/x` to keep demo data out of the repo)
 - One test file: `cd app/server && node --test test/<file>.test.ts`. Set `WANDER_DEBUG=1` to see real 500 messages.
 - FFmpeg must be `ffmpeg-full` (libass). It is keg-only; code finds it via `ffprobeBinary()` in `app/server/src/media.ts`.

@@ -5,6 +5,7 @@ import { Card, ErrorBox, Loading, Pill, StateBadge } from '../ui';
 import { formatName, langName } from '../types';
 import type { Artifact, Project, State } from '../types';
 import { ProjectDetailsEditor } from '../stages/shared';
+import { DeleteProject } from '../stages/DeleteProject';
 import { ResearchStage } from '../stages/Research';
 import { ScriptStage } from '../stages/Script';
 import { LocalizeStage } from '../stages/Localize';
@@ -135,6 +136,7 @@ function Overview() {
           </tbody>
         </table>
       </Card>
+      <Card title="Danger zone"><DeleteProject project={project} /></Card>
     </>
   );
 }

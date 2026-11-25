@@ -167,7 +167,7 @@ export function Tabs<T extends string>({ value, onChange, items }: { value: T; o
 }
 
 export const fmtSec = (s: number) => `${s.toFixed(1)}s`;
-export const fmtBytes = (n: number) => (n > 1e9 ? `${(n / 1e9).toFixed(1)} GB` : n > 1e6 ? `${(n / 1e6).toFixed(1)} MB` : `${Math.max(1, Math.round(n / 1e3))} KB`);
+export const fmtBytes = (n: number) => (n <= 0 ? '0 KB' : n > 1e9 ? `${(n / 1e9).toFixed(1)} GB` : n > 1e6 ? `${(n / 1e6).toFixed(1)} MB` : `${Math.max(1, Math.round(n / 1e3))} KB`);
 
 /** Pick a local file and hand it back. */
 export function FilePick({ accept, onFile, label = 'Choose file' }: { accept: string; onFile: (f: File) => void | Promise<void>; label?: string }) {

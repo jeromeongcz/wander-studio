@@ -124,3 +124,98 @@ test('a project can be renamed and its category changed; this never touches appr
   const recs = JSON.parse((await app.inject({ method: 'GET', url: '/categories/Sports/recommendations' })).body);
   assert.equal(recs.custom, false);
 });
+
+test('deleting a project: needs the exact name, previews what goes, removes everything of that project only, keeps the shared library', async () => {
+  const { app, engine, root } = boot();
+  const post = async (url: string, payload: unknown) => app.inject({ method: 'POST', url, payload: payload as any });
+  const mk = async (name: string) => JSON.parse((await post('/projects', { name, languages: ['en'], formats: ['vertical_9x16'] })).body).id as string;
+  const doomed = await mk('Doomed project');
+  const keeper = await mk('Keeper project');
+  const LIC = { type: 'own', commercial_use: 'yes' };
+
+  const src = join(root, 'a.png');
+  execFileSync(join(dirname(ffprobeBinary()), 'ffmpeg'), ['-v', 'error', '-y', '-f', 'lavfi', '-i', 'testsrc2=s=160x90:d=1', '-frames:v', '1', src]);
+  const src2 = join(root, 'b.png');
+  execFileSync(join(dirname(ffprobeBinary()), 'ffmpeg'), ['-v', 'error', '-y', '-f', 'lavfi', '-i', 'gradients=s=160x90:d=1', '-frames:v', '1', src2]);
+  const asset = JSON.parse((await post(`/projects/${doomed}/assets/import`, { path: src, type: 'stock_photo', license: LIC })).body);
+  await post(`/assets/${asset.id}/approve`, {});
+  const shared = JSON.parse((await post(`/assets/${asset.id}/promote`, {})).body);
+  const kept = JSON.parse((await post(`/projects/${keeper}/assets/import`, { path: src2, type: 'stock_photo', license: LIC })).body);
+  await app.inject({ method: 'PUT', url: `/projects/${doomed}/lexicon/en`, payload: { term: 'octopus', respelling: 'OK-to-pus' } });
+  const scene = engine.createArtifact({ projectId: doomed, kind: 'scene_asset', label: 'Scene', sceneId: 'SCENE-DOOMED' });
+  engine.saveVersion(scene, { assets: [{ asset_id: asset.id }], primary_asset_id: asset.id });
+  engine.db.prepare("INSERT INTO scene_timing (scene_id, lang_code, audio_seconds, updated_at) VALUES ('SCENE-DOOMED', 'en', 2, 'x')").run();
+  engine.saveVersion(engine.list(doomed, { kind: 'research' })[0].id, { topic: 'x' });
+
+  const preview = JSON.parse((await app.inject({ method: 'GET', url: `/projects/${doomed}/deletion-preview` })).body);
+  assert.equal(preview.name, 'Doomed project');
+  assert.equal(preview.assets, 1);
+  assert.ok(preview.artifacts >= 10 && preview.files >= 1 && preview.bytes > 0, JSON.stringify(preview));
+  assert.equal(preview.active_jobs, 0);
+  assert.ok(preview.keeps.some((k: string) => /shared library/i.test(k)));
+
+  // confirmation is enforced by the server, not just the UI
+  for (const body of [{}, { confirm_name: '' }, { confirm_name: 'doomed project' }, { confirm_name: 'Doomed project ' }, { confirm_name: 5 }]) {
+    const r = await post(`/projects/${doomed}/delete`, body);
+    assert.equal(r.statusCode, 422, JSON.stringify(body));
+  }
+  assert.equal(engine.getProject(doomed).name, 'Doomed project', 'nothing deleted by a wrong confirmation');
+  assert.equal((await post('/projects/NOPE/delete', { confirm_name: 'x' })).statusCode, 404);
+
+  // a queued or running job blocks deletion
+  engine.db.prepare("INSERT INTO jobs (id, project_id, kind, state, created_at, updated_at) VALUES ('JBUSY', ?, 'x', 'running', 'x', 'x')").run(doomed);
+  const busy = await post(`/projects/${doomed}/delete`, { confirm_name: 'Doomed project' });
+  assert.equal(busy.statusCode, 409);
+  assert.match(JSON.parse(busy.body).error.message, /running job/);
+  engine.db.prepare("UPDATE jobs SET state = 'failed' WHERE id = 'JBUSY'").run();
+
+  // if the database refuses, the files are put back and nothing is lost
+  engine.db.exec("CREATE TRIGGER block_delete BEFORE DELETE ON projects BEGIN SELECT RAISE(ABORT, 'blocked'); END;");
+  const failed = await post(`/projects/${doomed}/delete`, { confirm_name: 'Doomed project' });
+  assert.equal(failed.statusCode, 500);
+  assert.ok(existsSync(join(root, asset.rel_path)), 'files restored after a failed delete');
+  assert.equal(engine.getProject(doomed).name, 'Doomed project');
+  assert.deepEqual(readdirSync(join(root, 'cache')).filter((f) => f.startsWith('trash_')), []);
+  engine.db.exec('DROP TRIGGER block_delete');
+
+  const keeperRows = engine.list(keeper).length;
+  const ok = await post(`/projects/${doomed}/delete`, { confirm_name: 'Doomed project' });
+  assert.equal(ok.statusCode, 200);
+  const res = JSON.parse(ok.body);
+  assert.equal(res.deleted, true);
+  assert.equal(res.files_removed, true);
+  assert.equal(res.cleanup, 'removed');
+
+  // everything of the project is gone, in every table and on disk
+  const n = (sql: string, ...a: string[]) => (engine.db.prepare(sql).get(...a) as { n: number }).n;
+  for (const t of ['artifacts', 'assets', 'audio_clips', 'renders', 'pronunciation_entries', 'publishing_kits', 'thumbnails', 'jobs', 'project_languages']) {
+    assert.equal(n(`SELECT COUNT(*) AS n FROM ${t} WHERE project_id = ?`, doomed), 0, t);
+  }
+  assert.equal(n("SELECT COUNT(*) AS n FROM versions WHERE artifact_id NOT IN (SELECT id FROM artifacts)"), 0, 'no orphaned versions');
+  assert.equal(n('SELECT COUNT(*) AS n FROM artifact_deps WHERE artifact_id NOT IN (SELECT id FROM artifacts)'), 0);
+  assert.equal(n('SELECT COUNT(*) AS n FROM approval_events WHERE artifact_id NOT IN (SELECT id FROM artifacts)'), 0);
+  assert.equal(n("SELECT COUNT(*) AS n FROM scene_timing WHERE scene_id = 'SCENE-DOOMED'"), 0);
+  assert.equal(n('SELECT COUNT(*) AS n FROM projects WHERE id = ?', doomed), 0);
+  assert.ok(!existsSync(join(root, 'projects', `proj_${doomed}`)));
+  assert.deepEqual(readdirSync(join(root, 'cache')).filter((f) => f.startsWith('trash_')), [], 'no leftovers');
+  assert.equal((await app.inject({ method: 'GET', url: `/projects/${doomed}` })).statusCode, 404);
+  assert.equal((await post(`/projects/${doomed}/delete`, { confirm_name: 'Doomed project' })).statusCode, 404, 'second delete');
+
+  // other project and the shared library are untouched
+  assert.equal(engine.list(keeper).length, keeperRows);
+  assert.ok(existsSync(join(root, kept.rel_path)));
+  assert.equal(JSON.parse((await app.inject({ method: 'GET', url: `/projects/${keeper}/assets` })).body).length, 1);
+  assert.ok(existsSync(join(root, shared.rel_path)), 'shared library file kept');
+  assert.equal(JSON.parse((await app.inject({ method: 'GET', url: '/library' })).body).length, 1);
+});
+
+test('categories come in two lists: Philippine-related first, then worldwide', async () => {
+  const { app } = boot();
+  const cats = JSON.parse((await app.inject({ method: 'GET', url: '/categories' })).body) as { name: string; region: string; group: string }[];
+  const ph = cats.filter((c) => c.region === 'philippines');
+  assert.ok(ph.length >= 20);
+  assert.ok(cats.filter((c) => c.region === 'general').length >= 40);
+  assert.ok(cats.slice(0, ph.length).every((c) => c.region === 'philippines'));
+  assert.ok(ph.every((c) => /Filipino|Philippine|Pinoy|Tagalog|OFW/.test(c.name)), `non-Philippine name in the Philippine list: ${ph.filter((c) => !/Filipino|Philippine|Pinoy|Tagalog|OFW/.test(c.name)).map((c) => c.name)}`);
+  assert.ok(!cats.filter((c) => c.region === 'general').some((c) => /Filipino|Philippine|Pinoy|OFW/.test(c.name)), 'Philippine names stay out of the worldwide list');
+});

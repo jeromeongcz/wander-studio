@@ -114,28 +114,67 @@ const CATEGORIES: Record<string, CategoryProfile> = {
   'Quotes & Poetry': { assets: ['background', 'text_overlay', 'ai_image', 'illustration'], styles: ['atmospheric backgrounds', 'elegant typography'], cameras: ['ken_burns', 'zoom', 'static'], transition: 'fade', hint: 'Atmospheric background for' },
   'Religion & Spirituality': { assets: ['illustration', 'stock_photo', 'background', 'text_overlay'], styles: ['calm, respectful, soft light'], cameras: ['ken_burns', 'static', 'zoom'], transition: 'fade', hint: 'Calm, respectful image of', notes: 'Be respectful and accurate; present beliefs as beliefs.' },
   'Conspiracies & Debunking': { assets: ['infographic', 'text_overlay', 'stock_photo', 'map'], styles: ['evidence-board graphics', 'clear true/false labels'], cameras: ['zoom', 'static', 'pan'], transition: 'cut', hint: 'Evidence-style graphic of', notes: 'Label speculation clearly and show the evidence for and against.' },
+  'Philippine Urban Legends & Haunted Places': { assets: ['ai_image', 'illustration', 'background', 'text_overlay'], styles: ['moonlit barrio and old ancestral houses', 'single lantern or flashlight glow'], cameras: ['zoom', 'ken_burns', 'pan'], transition: 'cut', hint: 'Atmospheric night scene of a Philippine location with', notes: 'Retell legends as legends, and do not name private individuals or imply real crimes.' },
+  'Philippine Mythology & Epics': { assets: ['illustration', 'ai_image', 'background', 'character'], styles: ['epic painterly with tropical colour', 'carved wood and woven-pattern borders'], cameras: ['ken_burns', 'pan', 'zoom'], transition: 'dissolve', hint: 'Epic illustration of a Philippine myth scene with', notes: 'Say which region or ethnolinguistic group a story comes from, and have a cultural reviewer check names and spellings.' },
+  'Filipino Horror Stories': { assets: ['ai_image', 'illustration', 'background', 'text_overlay'], styles: ['near-black teal night lit by one lamp', 'tropical house interiors and sari-sari store lights'], cameras: ['zoom', 'ken_burns', 'pan'], transition: 'cut', hint: 'Dark, moody illustration set in the Philippines showing' },
+  'Philippine Crime & Mysteries': { assets: ['stock_photo', 'map', 'text_overlay', 'illustration'], styles: ['desaturated documentary', 'evidence-board graphics'], cameras: ['ken_burns', 'zoom', 'static'], transition: 'cut', hint: 'Sober documentary image or map of', notes: 'Stick to verified, published facts and do not identify private individuals or victims.' },
+  'Philippine Heroes & Biographies': { assets: ['stock_photo', 'illustration', 'map', 'text_overlay'], styles: ['archival sepia', 'portrait-focused period illustration'], cameras: ['ken_burns', 'zoom', 'pan'], transition: 'dissolve', hint: 'Period portrait or archival image of', notes: 'Label reconstructions as such and check licences on archival images.' },
+  'Philippine Culture & Traditions': { assets: ['stock_photo', 'stock_video', 'illustration', 'text_overlay'], styles: ['warm natural light', 'woven banig and barong patterns'], cameras: ['ken_burns', 'pan', 'parallax'], transition: 'dissolve', hint: 'Warm documentary image of Filipino tradition showing' },
+  'Philippine Festivals & Holidays': { assets: ['stock_video', 'stock_photo', 'motion_graphic', 'illustration'], styles: ['bright festival colours', 'street parades and lanterns'], cameras: ['pan', 'zoom', 'parallax'], transition: 'cut', hint: 'Colourful festival scene of' },
+  'Filipino Food & Street Food': { assets: ['stock_video', 'stock_photo', 'illustration', 'text_overlay'], styles: ['warm, close-up, appetising', 'street-food stall lighting'], cameras: ['zoom', 'ken_burns', 'pan'], transition: 'cut', hint: 'Close-up Filipino dish or street-food shot of' },
+  'Pinoy Comedy & Humor': { assets: ['character', 'illustration', 'text_overlay', 'background'], styles: ['bright, exaggerated, expressive characters', 'everyday barangay settings'], cameras: ['zoom', 'static', 'pan'], transition: 'cut', hint: 'Exaggerated cartoon scene of everyday Filipino life with', notes: 'Punch up, not down: avoid stereotypes that demean people.' },
+  'Filipino Showbiz & Pop Culture': { assets: ['text_overlay', 'illustration', 'motion_graphic', 'stock_photo'], styles: ['bold, glossy, magazine feel'], cameras: ['zoom', 'static', 'pan'], transition: 'cut', hint: 'Stylised entertainment-news graphic of', notes: 'Do not use copyrighted photos of real people without a licence and do not state unverified claims about real individuals.' },
+  'OFW Stories & Life Abroad': { assets: ['illustration', 'stock_photo', 'map', 'text_overlay'], styles: ['warm, emotive, airport and home-video feel'], cameras: ['ken_burns', 'zoom', 'static'], transition: 'dissolve', hint: 'Emotive illustration of an overseas Filipino worker scene with', notes: 'Protect real people: change names and identifying details.' },
+  'Filipino Family & Values': { assets: ['illustration', 'stock_photo', 'icon', 'text_overlay'], styles: ['warm, soft, family-table scenes'], cameras: ['zoom', 'ken_burns', 'static'], transition: 'dissolve', hint: 'Warm family scene in a Filipino home showing' },
+  'Filipino Faith & Traditions': { assets: ['illustration', 'stock_photo', 'background', 'text_overlay'], styles: ['calm, respectful, candlelit'], cameras: ['ken_burns', 'static', 'zoom'], transition: 'fade', hint: 'Calm, respectful image of', notes: 'Present beliefs and practices as beliefs and practices, accurately and respectfully.' },
+  'Tagalog & Filipino Language Lessons': { assets: ['text_overlay', 'illustration', 'icon', 'infographic'], styles: ['big readable words', 'friendly flashcards'], cameras: ['static', 'zoom', 'pan'], transition: 'cut', hint: 'Flashcard-style graphic of', notes: 'Show the word, its meaning and an example sentence, and have a native speaker check the Tagalog.' },
+  'Philippine Travel & Destinations': { assets: ['stock_video', 'stock_photo', 'map', 'background'], styles: ['vibrant tropical light', 'turquoise water and limestone cliffs'], cameras: ['pan', 'ken_burns', 'parallax'], transition: 'dissolve', hint: 'Scenic footage or photo of a Philippine destination:', notes: 'Use a route or island map when the script names places.' },
+  'Philippine Wildlife & Nature': { assets: ['stock_video', 'stock_photo', 'illustration', 'infographic'], styles: ['natural light, macro detail', 'rainforest and reef'], cameras: ['ken_burns', 'pan', 'parallax'], transition: 'dissolve', hint: 'Nature footage or photograph of a Philippine species or habitat:' },
+  'Philippine Typhoons & Disasters': { assets: ['stock_video', 'infographic', 'map', 'stock_photo'], styles: ['stormy, high contrast', 'clean weather maps'], cameras: ['pan', 'zoom', 'static'], transition: 'cut', hint: 'Dramatic weather footage or map of', notes: 'Use official sources for warnings and casualty figures, and keep safety advice accurate.' },
+  'Philippine News & Current Affairs': { assets: ['stock_photo', 'map', 'infographic', 'text_overlay'], styles: ['neutral, factual'], cameras: ['static', 'ken_burns', 'zoom'], transition: 'cut', hint: 'Neutral documentary image of', notes: 'Attribute sources and keep opinion separate from fact.' },
+  'Filipino Entrepreneurship & Negosyo': { assets: ['infographic', 'motion_graphic', 'stock_photo', 'icon'], styles: ['clean, optimistic, bold numbers', 'sari-sari store and market scenes'], cameras: ['zoom', 'static', 'pan'], transition: 'slide', hint: 'Clean business graphic or small-shop scene of', notes: 'Avoid income guarantees and cite figures.' },
+  'Personal Finance for Filipinos': { assets: ['infographic', 'icon', 'motion_graphic', 'text_overlay'], styles: ['clean data visuals', 'peso amounts in bold type'], cameras: ['static', 'zoom', 'pan'], transition: 'cut', hint: 'Clean chart or graphic of', notes: 'This is education, not financial advice: show sources and check current rules and rates.' },
+  'Jobs & Careers in the Philippines': { assets: ['illustration', 'infographic', 'stock_photo', 'text_overlay'], styles: ['clean, professional, friendly'], cameras: ['static', 'zoom', 'pan'], transition: 'cut', hint: 'Professional scene or graphic of' },
 };
 const FALLBACK: CategoryProfile = { assets: ['stock_photo', 'ai_image', 'illustration', 'text_overlay'], styles: ['clean and readable'], cameras: ['ken_burns', 'zoom', 'pan'], transition: 'cut', hint: 'Relevant visual of' };
 
-/** Groups for the new-project picker. A category not listed here shows under "More". */
-const GROUPS: Record<string, string[]> = {
-  'Stories & spooky': ['Horror & Folklore', 'Ghost Stories & Paranormal', 'Urban Legends', 'Filipino Folklore', 'Mythology', 'Mysteries', 'True Crime', 'Fictional Storytelling', 'Kids & Bedtime Stories', 'Biographies'],
-  'Knowledge & learning': ['Interesting Facts', 'Science', 'Technology', 'Education', 'History', 'Philippine History', 'Space & Astronomy', 'Dinosaurs & Prehistory', 'Psychology', 'Philosophy', 'Documentary', 'Language Learning', 'Conspiracies & Debunking', 'Health & Wellness'],
-  'Nature & travel': ['Nature', 'Animals & Pets', 'Oceans & Marine Life', 'Weather & Disasters', 'Travel', 'Adventure'],
-  'Lifestyle': ['Motivational Stories', 'Productivity & Self-Improvement', 'Relationships & Dating', 'Parenting & Family', 'Food & Cooking', 'Fashion & Beauty', 'Home & DIY', 'How-To & Life Hacks', 'Religion & Spirituality', 'Quotes & Poetry'],
-  'Entertainment & culture': ['Gaming', 'Movies & TV', 'Anime & Comics', 'Music & Arts', 'Comedy & Skits', 'Celebrity & Pop Culture', 'Sports', 'Cars & Vehicles', 'Reviews & Unboxings'],
-  'Business & news': ['Finance & Business', 'Entrepreneurship & Side Hustles', 'Social Media & Marketing Tips', 'Real Estate', 'Careers & Jobs', 'News & Current Events'],
+/**
+ * Categories are split into two lists for the new-project picker: Philippine-related ones and everything else.
+ * Inside each list they are grouped. A category not listed here appears under general / "More".
+ */
+export type CategoryRegion = 'philippines' | 'general';
+const REGIONS: Record<CategoryRegion, Record<string, string[]>> = {
+  philippines: {
+    'Stories & folklore': ['Filipino Folklore', 'Philippine Urban Legends & Haunted Places', 'Filipino Horror Stories', 'Philippine Mythology & Epics', 'Philippine Crime & Mysteries'],
+    'History & people': ['Philippine History', 'Philippine Heroes & Biographies'],
+    'Culture & everyday life': ['Philippine Culture & Traditions', 'Philippine Festivals & Holidays', 'Filipino Food & Street Food', 'Filipino Family & Values', 'Filipino Faith & Traditions', 'OFW Stories & Life Abroad', 'Tagalog & Filipino Language Lessons'],
+    'Entertainment & humor': ['Pinoy Comedy & Humor', 'Filipino Showbiz & Pop Culture'],
+    'Places & nature': ['Philippine Travel & Destinations', 'Philippine Wildlife & Nature', 'Philippine Typhoons & Disasters'],
+    'News, money & work': ['Philippine News & Current Affairs', 'Filipino Entrepreneurship & Negosyo', 'Personal Finance for Filipinos', 'Jobs & Careers in the Philippines'],
+  },
+  general: {
+    'Stories & spooky': ['Horror & Folklore', 'Ghost Stories & Paranormal', 'Urban Legends', 'Mythology', 'Mysteries', 'True Crime', 'Fictional Storytelling', 'Kids & Bedtime Stories', 'Biographies'],
+    'Knowledge & learning': ['Interesting Facts', 'Science', 'Technology', 'Education', 'History', 'Space & Astronomy', 'Dinosaurs & Prehistory', 'Psychology', 'Philosophy', 'Documentary', 'Language Learning', 'Conspiracies & Debunking', 'Health & Wellness'],
+    'Nature & travel': ['Nature', 'Animals & Pets', 'Oceans & Marine Life', 'Weather & Disasters', 'Travel', 'Adventure'],
+    Lifestyle: ['Motivational Stories', 'Productivity & Self-Improvement', 'Relationships & Dating', 'Parenting & Family', 'Food & Cooking', 'Fashion & Beauty', 'Home & DIY', 'How-To & Life Hacks', 'Religion & Spirituality', 'Quotes & Poetry'],
+    'Entertainment & culture': ['Gaming', 'Movies & TV', 'Anime & Comics', 'Music & Arts', 'Comedy & Skits', 'Celebrity & Pop Culture', 'Sports', 'Cars & Vehicles', 'Reviews & Unboxings'],
+    'Business & news': ['Finance & Business', 'Entrepreneurship & Side Hustles', 'Social Media & Marketing Tips', 'Real Estate', 'Careers & Jobs', 'News & Current Events'],
+  },
 };
-const GROUP_OF = new Map(Object.entries(GROUPS).flatMap(([g, names]) => names.map((n) => [n.toLowerCase(), g] as const)));
-export const groupOf = (name: string) => GROUP_OF.get(name.toLowerCase()) ?? 'More';
+const POSITION = new Map<string, { region: CategoryRegion; group: string; order: number }>();
+let ord = 0;
+for (const region of ['philippines', 'general'] as const) for (const [group, names] of Object.entries(REGIONS[region])) for (const n of names) POSITION.set(n.toLowerCase(), { region, group, order: ord++ });
+export const groupOf = (name: string) => POSITION.get(name.toLowerCase())?.group ?? 'More';
+export const regionOf = (name: string): CategoryRegion => POSITION.get(name.toLowerCase())?.region ?? 'general';
 
 const norm = (s: string) => s.trim().toLowerCase().replace(/[\s_-]+/g, ' ');
 const INDEX = new Map(Object.entries(CATEGORIES).map(([k, v]) => [norm(k), { name: k, profile: v }]));
 
-export function listCategories(): { name: string; group: string; profile: CategoryProfile }[] {
-  // Follow the order of GROUPS (stories first), then the order of names inside each group.
-  const order = new Map(Object.values(GROUPS).flatMap((names, gi) => names.map((n, i) => [n.toLowerCase(), gi * 1000 + i] as const)));
-  return [...INDEX.values()].map((c) => ({ ...c, group: groupOf(c.name) })).sort((a, b) => (order.get(a.name.toLowerCase()) ?? 99999) - (order.get(b.name.toLowerCase()) ?? 99999));
+export function listCategories(): { name: string; region: CategoryRegion; group: string; profile: CategoryProfile }[] {
+  // Philippine list first, then worldwide; inside each, the order written above.
+  return [...INDEX.values()]
+    .map((c) => ({ ...c, region: regionOf(c.name), group: groupOf(c.name) }))
+    .sort((x, y) => (POSITION.get(x.name.toLowerCase())?.order ?? 99999) - (POSITION.get(y.name.toLowerCase())?.order ?? 99999));
 }
 
 export function profileFor(category?: string | null): { name: string; custom: boolean; profile: CategoryProfile } {

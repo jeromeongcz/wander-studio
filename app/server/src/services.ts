@@ -37,7 +37,8 @@ import { JobRunner } from './jobs.ts';
 import type { JobHandler } from './jobs.ts';
 import { requireHealthy, runPreflight } from './preflight.ts';
 import { scriptEstimate } from './studios/script.ts';
-import { mkdir, writeFile } from 'node:fs/promises';
+import { mkdir, writeFile, rename, rm, readdir, stat } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import type { AppConfig } from './config.ts';
 import type { AssetType } from './studios/storyboard.ts';
@@ -721,5 +722,77 @@ export class Studio {
       this.save(finalArt.id, { renders: [...latest.values()], timeline_hash: result.renders[0].timeline_hash, composition_version: comp.current_version_id }, { actor: 'user', reopen: opts.reopen });
     }
     return result;
+  }
+
+  // ---- deleting a project ----
+  private async dirSize(dir: string): Promise<{ files: number; bytes: number }> {
+    let files = 0;
+    let bytes = 0;
+    if (!existsSync(dir)) return { files, bytes };
+    for (const e of await readdir(dir, { withFileTypes: true })) {
+      const p = join(dir, e.name);
+      if (e.isDirectory()) {
+        const r = await this.dirSize(p);
+        files += r.files;
+        bytes += r.bytes;
+      } else if (e.isFile()) {
+        files++;
+        bytes += (await stat(p)).size;
+      }
+    }
+    return { files, bytes };
+  }
+
+  /** What deleting a project would remove, shown to the person before they confirm. */
+  async deletionPreview(projectId: string) {
+    const p = this.engine.getProject(projectId);
+    const count = (sql: string) => (this.engine.db.prepare(sql).get(projectId) as { n: number }).n;
+    const disk = await this.dirSize(join(this.config.root, 'projects', `proj_${projectId}`));
+    return {
+      id: p.id,
+      name: p.name,
+      artifacts: count('SELECT COUNT(*) AS n FROM artifacts WHERE project_id = ?'),
+      approved: count("SELECT COUNT(*) AS n FROM artifacts WHERE project_id = ? AND state = 'approved'"),
+      assets: count('SELECT COUNT(*) AS n FROM assets WHERE project_id = ?'),
+      audio_clips: count('SELECT COUNT(*) AS n FROM audio_clips WHERE project_id = ?'),
+      renders: count('SELECT COUNT(*) AS n FROM renders WHERE project_id = ?'),
+      active_jobs: count("SELECT COUNT(*) AS n FROM jobs WHERE project_id = ? AND state IN ('queued','running')"),
+      files: disk.files,
+      bytes: disk.bytes,
+      keeps: ['Items you added to the shared library', 'Export packages and archives already saved under exports/'],
+    };
+  }
+
+  /**
+   * Permanently delete a project and its files. Irreversible, so it needs the exact project name, and it
+   * refuses while the project has queued or running jobs. Files are moved aside first and only removed after
+   * the database change succeeds; if the database change fails they are moved back.
+   */
+  async deleteProject(projectId: string, confirmName: unknown) {
+    const p = this.engine.getProject(projectId);
+    if (typeof confirmName !== 'string' || confirmName !== p.name) throw new EngineError('VALIDATION', 'Type the project name exactly to confirm deletion');
+    const active = (this.engine.db.prepare("SELECT COUNT(*) AS n FROM jobs WHERE project_id = ? AND state IN ('queued','running')").get(projectId) as { n: number }).n;
+    if (active) throw new EngineError('BUSY', `This project has ${active} queued or running job(s). Cancel them or wait, then try again.`);
+    const dir = join(this.config.root, 'projects', `proj_${projectId}`);
+    const trash = join(this.config.root, 'cache', `trash_${ulid()}`);
+    let moved = false;
+    if (existsSync(dir)) {
+      await mkdir(join(this.config.root, 'cache'), { recursive: true });
+      await rename(dir, trash);
+      moved = true;
+    }
+    try {
+      this.engine.tx(() => {
+        const scenes = this.engine.db.prepare('SELECT scene_id FROM artifacts WHERE project_id = ? AND scene_id IS NOT NULL').all(projectId) as { scene_id: string }[];
+        for (const s of scenes) this.engine.db.prepare('DELETE FROM scene_timing WHERE scene_id = ?').run(s.scene_id);
+        this.engine.db.prepare('DELETE FROM projects WHERE id = ?').run(projectId);
+      });
+    } catch (e) {
+      if (moved) await rename(trash, dir);
+      throw e;
+    }
+    let cleanup: 'removed' | 'left in cache' = 'removed';
+    if (moved) await rm(trash, { recursive: true, force: true }).catch(() => (cleanup = 'left in cache'));
+    return { deleted: true, name: p.name, files_removed: moved, cleanup };
   }
 }

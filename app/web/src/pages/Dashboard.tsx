@@ -77,7 +77,7 @@ function NewProject({ onDone, onCancel }: { onDone: (id: string) => void; onCanc
   const { fail } = useToast();
   const locales = useAsync(() => api.get<{ code: string; name: string }[]>('/locales'), []);
   const [name, setName] = useState('');
-  const [category, setCategory] = useState('Interesting Facts');
+  const [category, setCategory] = useState('');
   const [langs, setLangs] = useState<string[]>(['en']);
   const [formats, setFormats] = useState<string[]>(['vertical_9x16']);
   const toggle = (arr: string[], v: string, set: (x: string[]) => void) => set(arr.includes(v) ? arr.filter((x) => x !== v) : [...arr, v]);
