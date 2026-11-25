@@ -144,7 +144,7 @@ Fixed on the way: a caption position change or reset reached the rendered video 
 
 **Phase 4 (done).** `render/styles.ts`: nine styles plus Custom, generated effects and atmosphere. **Smoke is left out**: the generated version looked like a pattern. Style camera, transition, pacing and audio preferences guide the writer and the automatic draft; they do not change a storyboard at render time. Only drone and wind are synthesized.
 
-**Phase 5 (done).** Compose & Render: per-scene and video-wide camera, transition and style, source of each value, rendered scene preview, copy to other languages and formats. The in-browser player only roughly imitates the new moves and styles.
+**Phase 5 (done).** Compose & Render: per-scene and video-wide camera, transition and style, source of each value, rendered scene previews with captions, submit and approve from the same card. Copying settings to other languages and formats exists in the server (`copy-direction`) but its button was removed at the user's request. The in-browser player only roughly imitates the new moves and styles.
 
 **Phase 6 (done).** Cinematic Direction in the Script step (`studios/direction.ts`), saved in the project settings and in each generated script; per-section instructions beside the narration; copied to new storyboards, or applied to an existing one without touching the person's own settings. One real Claude run (a made-up topic, 7 scenes) returned instructions for every scene.
 

@@ -414,7 +414,7 @@ export function buildApi(engine: Engine, config: Partial<AppConfig> = {}): Fasti
   app.get('/artifacts/:id/directions', async (req) => studio.render.directions((req.params as { id: string }).id));
   app.get('/artifacts/:id/scenes/:sceneId/preview', async (req, reply) => {
     const { id, sceneId } = req.params as { id: string; sceneId: string };
-    return reply.type('video/mp4').send(await studio.render.previewScene(id, sceneId));
+    return reply.type('video/mp4').send(await studio.render.previewScene(id, sceneId, (req.query as { captions?: string }).captions !== 'false'));
   });
   app.post('/artifacts/:id/copy-direction', async (req) => studio.copyDirection((req.params as { id: string }).id, { reopen: body(req).reopen === true }));
   app.put('/artifacts/:id/override-all', async (req) => {

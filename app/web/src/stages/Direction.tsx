@@ -1,8 +1,10 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
+import type { ReactNode } from 'react';
 import { api, url } from '../api';
 import { withReopen } from '../actions';
 import { useAsync } from '../hooks';
-import { Btn, Card, Field, Icon, Loading, Pill, useToast } from '../ui';
+import { Btn, Card, Field, Icon, Loading, Modal, Pill, useToast } from '../ui';
+import type { Artifact } from '../types';
 
 /** The choices the renderer really supports, as the server lists them. */
 export interface CinematicOptions {
@@ -216,7 +218,7 @@ function Editor({ opts, initial, wholeVideo, firstScene, onApply, onReset }: { o
       {!firstScene && <TransitionFields opts={opts} value={draft.transition} onChange={(v) => setDraft((d) => set(d, 'transition', v))} />}
       <LookFields opts={opts} value={draft.look} onChange={(v) => setDraft((d) => set(d, 'look', v))} />
       {wholeVideo && draft.look && <WholeVideoExtras opts={opts} value={draft.look} onChange={(v) => setDraft((d) => set(d, 'look', v))} />}
-      <div className="row gap wrap">
+      <div className="row gap wrap dir-actions">
         <Btn kind="primary" disabled={!Object.keys(change).length} onClick={() => onApply(change)}>{wholeVideo ? 'Apply to the whole video' : 'Apply to this scene'}</Btn>
         {has && <Btn onClick={onReset}><Icon name="refresh" small /> Remove these overrides</Btn>}
       </div>
@@ -224,17 +226,127 @@ function Editor({ opts, initial, wholeVideo, firstScene, onApply, onReset }: { o
   );
 }
 
+// previews are drawn one after another, so the page's other requests are never left waiting behind them
+let previewQueue: Promise<unknown> = Promise.resolve();
+
+/**
+ * One scene's rendered preview, shown all the time. It is requested when first seen and plays only when the person
+ * presses play. `still` is the moment shown before that: just after the change into the scene.
+ */
+function ScenePreview({ src, label, aspect, still }: { src: string; label: string; aspect: string; still: number }) {
+  const box = useRef<HTMLDivElement>(null);
+  const waiting = useRef(true); // still on the thumbnail frame, never played
+  const [seen, setSeen] = useState(false);
+  const [clip, setClip] = useState<{ url?: string; error?: string }>({});
+  const [attempt, setAttempt] = useState(0);
+  useEffect(() => {
+    const watch = new IntersectionObserver(([e]) => { if (e.isIntersecting) setSeen(true); else box.current?.querySelector('video')?.pause(); }, { rootMargin: '150px' });
+    watch.observe(box.current!);
+    return () => watch.disconnect();
+  }, []);
+  useEffect(() => {
+    if (!seen) return;
+    setClip({}); // the old picture is out of date while the new one is drawn
+    const stop = new AbortController();
+    let made: string | undefined;
+    previewQueue = previewQueue.then(async () => {
+      if (stop.signal.aborted) return;
+      try {
+        const r = await fetch(src, { signal: stop.signal });
+        if (!r.ok) throw new Error((await r.json().catch(() => null))?.error?.message ?? `HTTP ${r.status}`);
+        made = URL.createObjectURL(await r.blob());
+        if (stop.signal.aborted) URL.revokeObjectURL(made);
+        else setClip({ url: made });
+      } catch (e) {
+        if (!stop.signal.aborted) setClip({ error: (e as Error).message });
+      }
+    });
+    return () => { stop.abort(); if (made) URL.revokeObjectURL(made); };
+  }, [src, seen, attempt]);
+  return (
+    <div ref={box} className="dir-preview" style={{ aspectRatio: aspect }}>
+      {clip.url ? <video src={clip.url} aria-label={label} muted playsInline controls preload="auto"
+          onLoadedMetadata={(e) => { waiting.current = true; e.currentTarget.currentTime = Math.min(still, e.currentTarget.duration); }}
+          onPlay={(e) => { if (waiting.current) { waiting.current = false; e.currentTarget.currentTime = 0; } }} />
+        : clip.error ? <span className="small"><span>Preview failed: {clip.error}</span><Btn small onClick={() => { setClip({}); setAttempt((n) => n + 1); }}>Try again</Btn></span>
+        : <span className="small"><span className="spin" /> Drawing preview…</span>}
+    </div>
+  );
+}
+
+/**
+ * Changes only when something visible in one scene's preview changes: that scene, the end of the one before it, and
+ * (when shown) that scene's own captions. A preview whose key is unchanged is not drawn again.
+ */
+function previewKey(tl: any, sceneId: string, captions: boolean): string {
+  const k = tl.scenes.findIndex((s: any) => s.scene_id === sceneId);
+  const cur = tl.scenes[k];
+  if (!cur) return 'none';
+  const picture = (s: any) => s && [s.asset?.sha256, s.focal, s.camera, s.look, s.duration, s.transition_in, tl.overrides?.[s.scene_id]?.crop];
+  const words = captions && [
+    tl.captions.style,
+    tl.captions.mode,
+    tl.captions.words.filter((w: any) => w.start >= cur.start - 0.05 && w.start < cur.start + cur.duration - 0.05).map((w: any) => [w.text, Math.round((w.start - cur.start) * 100), Math.round((w.end - cur.start) * 100)]),
+    tl.overrides?.[sceneId]?.caption_y_pct,
+  ];
+  const text = JSON.stringify([tl.format, tl.effects, k === tl.scenes.length - 1, picture(tl.scenes[k - 1]), picture(cur), words]);
+  let hash = 5381;
+  for (let i = 0; i < text.length; i++) hash = ((hash * 33) ^ text.charCodeAt(i)) >>> 0;
+  return hash.toString(36);
+}
+
+/** The person's review of this video's composition, from the card where it was changed. Nothing is approved on its own. */
+function ReviewActions({ artifact, onChanged }: { artifact: Artifact; onChanged: () => void }) {
+  const { push } = useToast();
+  const path = `/artifacts/${artifact.id}`;
+  if (artifact.state === 'approved') return <Pill tone="good">Approved</Pill>;
+  if (artifact.state === 'awaiting_review') {
+    return (
+      <>
+        <span className="small dir-note">Waiting for your approval</span>
+        <Btn small kind="primary" onClick={async () => { await api.post(`${path}/approve`); push('ok', 'Approved'); onChanged(); }}><Icon name="check" small /> Approve</Btn>
+      </>
+    );
+  }
+  return (
+    <>
+      <span className="small dir-note">Changes not approved</span>
+      <Btn small kind="primary" disabled={!artifact.current_version_id} onClick={async () => {
+        // work marked for revision is resumed by saving it again, unchanged, before it can be submitted
+        if (['needs_revision', 'rejected', 'failed'].includes(artifact.state)) {
+          const cur = await api.get<{ content: unknown }>(path);
+          await api.put(`${path}/content`, { content: cur.content });
+        }
+        const r = await api.post(`${path}/submit`);
+        push(r.warnings?.length ? 'warn' : 'ok', r.warnings?.length ? 'Submitted for review, with warnings' : 'Submitted for review: now approve it', r.warnings);
+        onChanged();
+      }}>Submit for review</Btn>
+    </>
+  );
+}
+
 /** Review and override camera, transitions and style, per scene or for the whole video. */
-export function DirectionCard({ compId, version, onChanged }: { compId: string; version: string; onChanged: () => void }) {
+export function DirectionCard({ artifact, timeline, onChanged, sceneDetails }: { artifact: Artifact; timeline: any; onChanged: () => void; sceneDetails: (sceneId: string) => ReactNode }) {
+  const compId = artifact.id;
+  const version = artifact.current_version_id ?? '';
+  const size: { width: number; height: number } = timeline.format;
   const opts = useCinematic();
   const data = useAsync(() => api.get<any>(`/artifacts/${compId}/directions`), [compId, version]);
   const { push } = useToast();
   const [open, setOpen] = useState<string | null>(null);
-  const [preview, setPreview] = useState<string | null>(null);
-  if (!opts.data || !data.data) return <Card title="Camera, transitions & style">{opts.error || data.error ? <div className="notice bad">{(opts.error ?? data.error)!.message}</div> : <Loading />}</Card>;
+  // remembered in this browser
+  const [captions, setCaptions] = useState(() => { try { return localStorage.getItem('wander-preview-captions') !== 'off'; } catch { return true; } });
+  const showCaptions = (on: boolean) => { setCaptions(on); try { localStorage.setItem('wander-preview-captions', on ? 'on' : 'off'); } catch { /* storage unavailable */ } };
+  useEffect(() => {
+    if (!open) return;
+    const esc = (e: KeyboardEvent) => { if (e.key === 'Escape') setOpen(null); };
+    document.addEventListener('keydown', esc);
+    return () => document.removeEventListener('keydown', esc);
+  }, [open]);
+  if (!opts.data || !data.data) return <Card title="Scenes, camera, transitions & style">{opts.error || data.error ? <div className="notice bad">{(opts.error ?? data.error)!.message}</div> : <Loading />}</Card>;
   const o = opts.data;
   const d = data.data;
-  const done = (text: string) => { push('ok', text); setPreview(null); data.reload(); onChanged(); };
+  const done = (text: string) => { push('ok', text); setOpen(null); data.reload(); onChanged(); };
   const save = async (path: string, change: Obj, text: string) => {
     await withReopen((reopen) => api.put(path, { ...change, reopen }));
     done(text);
@@ -249,12 +361,7 @@ export function DirectionCard({ compId, version, onChanged }: { compId: string; 
     <Pill tone={source === 'scene_override' || source === 'composition_override' ? 'info' : 'neutral'}>{label}: {text} · {SOURCE[source] ?? source}</Pill>
   );
   return (
-    <Card title="Camera, transitions & style" actions={<Btn small title="Use these overrides in the other languages and formats of this video" onClick={async () => {
-      if (!confirm('Copy the camera, transition and style overrides to every other language and format of this video?\n\nTheir own camera, transition and style overrides are replaced. Caption positions and crops are kept.')) return;
-      let r = await api.post<any>(`/artifacts/${compId}/copy-direction`, {});
-      if (r.skipped.some((s: any) => /approved/.test(s.reason)) && confirm('Some of them are approved. Change those too? Their final renders will need revision.')) r = await api.post<any>(`/artifacts/${compId}/copy-direction`, { reopen: true });
-      push(r.skipped.length ? 'warn' : 'ok', r.copied.length ? `Copied to ${r.copied.length}` : 'Nothing was copied', r.skipped.map((s: any) => `${s.label}: ${s.reason}`));
-    }}>Copy to other videos</Btn>}>
+    <Card title="Scenes, camera, transitions & style" className={artifact.state === 'approved' ? '' : 'dir-changed'} actions={<ReviewActions artifact={artifact} onChanged={onChanged} />}>
       <div className="stack">
         <p className="muted small" style={{ margin: 0 }}>What wins, strongest first: a scene setting here, your own storyboard edits, the whole-video setting, then generated directions. Changing anything here only affects this video.{d.classic && ' The classic folklore style is on: it decides camera, cuts and grade except where you set a scene here.'}</p>
         <details className="dir-all">
@@ -265,38 +372,45 @@ export function DirectionCard({ compId, version, onChanged }: { compId: string; 
               onReset={() => save(`/artifacts/${compId}/override-all`, clear, 'Whole-video settings removed')} />
           </div>
         </details>
-        <ul className="dir-list">
-          {d.scenes.map((s: any) => {
-            const own = d.overrides[s.scene_id] ?? {};
-            const initial = Object.fromEntries(['camera', 'transition', 'look'].filter((k) => own[k]).map((k) => [k, own[k]]));
-            const isOpen = open === s.scene_id;
-            return (
-              <li key={s.scene_id}>
-                <div className="row gap wrap">
-                  <span className="scene-n">{s.index + 1}</span>
-                  <b className="grow">{s.title}</b>
-                  <Btn small onClick={() => setPreview(preview === s.scene_id ? null : s.scene_id)}><Icon name="play" small /> {preview === s.scene_id ? 'Hide preview' : 'Preview'}</Btn>
-                  <Btn small kind={isOpen ? 'primary' : 'default'} onClick={() => setOpen(isOpen ? null : s.scene_id)}>{isOpen ? 'Close' : 'Adjust'}</Btn>
-                </div>
-                <div className="row gap wrap">
-                  {tag('Camera', name.camera(s.camera.value), s.camera.source)}
-                  {s.index > 0 && tag('Transition', name.transition(s.transition.value), s.transition.source)}
-                  {tag('Style', d.classic && !s.look.value ? 'Dark folklore (classic)' : name.look(s.look.value), s.look.source)}
-                </div>
-                {preview === s.scene_id && (
-                  <div>
-                    <video key={version} className="dir-preview" src={url(`/artifacts/${compId}/scenes/${s.scene_id}/preview?v=${version}`)} autoPlay loop muted playsInline controls />
-                    <p className="muted small">A silent, small preview from the renderer: the change into this scene and its start, without captions. It can take a little while to appear.</p>
+        <p className="muted small" style={{ margin: 0 }}>Press play on a preview to watch the change into the scene and its start. Previews are silent, small and drawn by the renderer; the first visit takes a little while, and they are drawn again after a change. Moving a scene’s captions overrides the format’s safe-zone default for that scene only.</p>
+        <label className="row gap"><input type="checkbox" checked={captions} onChange={(e) => showCaptions(e.target.checked)} />Show captions in the previews</label>
+        <div className="dir-wrap">
+          <ul className="dir-list">
+            {d.scenes.map((s: any) => (
+              <li key={s.scene_id} className={size.width > size.height ? 'wide' : ''}>
+                <ScenePreview src={url(`/artifacts/${compId}/scenes/${s.scene_id}/preview?captions=${captions}&v=${previewKey(timeline, s.scene_id, captions)}`)} label={`Preview of scene ${s.index + 1}`} aspect={`${size.width} / ${size.height}`} still={s.index > 0 ? 1.3 : 0.1} />
+                <div className="dir-info">
+                  <div className="row gap wrap">
+                    <span className="scene-n">{s.index + 1}</span>
+                    <b className="grow">{s.title}</b>
                   </div>
-                )}
-                {isOpen && <Editor opts={o} firstScene={s.index === 0} initial={initial}
-                  onApply={(change) => save(`/artifacts/${compId}/scenes/${s.scene_id}/override`, change, `Scene ${s.index + 1} updated`)}
-                  onReset={() => save(`/artifacts/${compId}/scenes/${s.scene_id}/override`, clear, `Scene ${s.index + 1} back to its generated direction`)} />}
+                  <div className="row gap wrap">
+                    {tag('Camera', name.camera(s.camera.value), s.camera.source)}
+                    {s.index > 0 && tag('Transition', name.transition(s.transition.value), s.transition.source)}
+                    {tag('Style', d.classic && !s.look.value ? 'Dark folklore (classic)' : name.look(s.look.value), s.look.source)}
+                  </div>
+                  {sceneDetails(s.scene_id)}
+                  <button type="button" className="dir-adjust" onClick={() => setOpen(s.scene_id)} aria-label={`Make adjustments to scene ${s.index + 1}`}><Icon name="gear" small /> Make Adjustments</button>
+                </div>
               </li>
-            );
-          })}
-        </ul>
+            ))}
+          </ul>
+        </div>
+        {artifact.state !== 'approved' && <div className="row gap wrap dir-review"><ReviewActions artifact={artifact} onChanged={onChanged} /></div>}
       </div>
+      {(() => {
+        const s = d.scenes.find((x: any) => x.scene_id === open);
+        if (!s) return null;
+        const own = d.overrides[s.scene_id] ?? {};
+        const initial = Object.fromEntries(['camera', 'transition', 'look'].filter((k) => own[k]).map((k) => [k, own[k]]));
+        return (
+          <Modal title={`Adjust scene ${s.index + 1}: ${s.title}`} wide onClose={() => setOpen(null)}>
+            <Editor opts={o} firstScene={s.index === 0} initial={initial}
+              onApply={(change) => save(`/artifacts/${compId}/scenes/${s.scene_id}/override`, change, `Scene ${s.index + 1} updated`)}
+              onReset={() => save(`/artifacts/${compId}/scenes/${s.scene_id}/override`, clear, `Scene ${s.index + 1} back to its generated direction`)} />
+          </Modal>
+        );
+      })()}
     </Card>
   );
 }
@@ -342,4 +456,16 @@ export function directionSummary(c: { camera?: any; transition?: any; look?: any
     ...['shot', 'composition', 'lighting', 'color', 'atmosphere'].map((k) => look[k] && `${k[0].toUpperCase()}${k.slice(1)}: ${look[k]}`),
     look.params && `Effects: ${Object.keys(look.params).map(words).join(', ')}`,
   ].filter(Boolean).join(' · ');
+}
+
+/** Where one scene's captions sit. It follows the pointer and saves when released. */
+export function CaptionSlider({ value, label, onSave }: { value: number; label: string; onSave: (v: number) => Promise<void> }) {
+  const { fail } = useToast();
+  const [now, setNow] = useState(value);
+  useEffect(() => setNow(value), [value]);
+  const release = async (v: number) => {
+    if (v === value) return;
+    try { await onSave(v); } catch (e) { setNow(value); fail(e); }
+  };
+  return <input type="range" min={0.3} max={0.95} step={0.01} value={now} aria-label={label} onChange={(e) => setNow(Number(e.target.value))} onPointerUp={(e) => release(Number(e.currentTarget.value))} onKeyUp={(e) => release(Number(e.currentTarget.value))} />;
 }

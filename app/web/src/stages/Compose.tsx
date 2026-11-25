@@ -1,13 +1,13 @@
 import { useEffect, useRef, useState } from 'react';
 import { api, url } from '../api';
-import { ArtifactBar } from '../actions';
+import { ArtifactBar, withReopen } from '../actions';
 import { useProject } from '../pages/Project';
 import { useAsync, useInterval } from '../hooks';
 import { Btn, Card, Empty, Icon, Loading, Modal, Pill, Tabs, fmtBytes, fmtSec, useToast } from '../ui';
 import { formatName, langName } from '../types';
 import type { Artifact } from '../types';
 import { TimelinePlayer } from './TimelinePlayer';
-import { DirectionCard, useCinematic } from './Direction';
+import { CaptionSlider, DirectionCard, useCinematic } from './Direction';
 
 export function ComposeStage() {
   const { project } = useProject();
@@ -86,7 +86,7 @@ function Composition({ lang, format }: { lang: string; format: string }) {
               <TimelinePlayer key={comp.current_version_id ?? 'none'} timeline={tl} time={t} onTime={setT} captions={captions} onEnlarge={() => setPopup(true)}
                 still={popup ? undefined : <PreviewFrame id={comp.id} version={comp.current_version_id ?? ''} t={t} captions={captions} stale={!!st?.stale} />} />
               <label className="row gap"><input type="checkbox" checked={captions} onChange={(e) => setCaptions(e.target.checked)} />Show captions</label>
-              <p className="muted small" style={{ margin: 0 }}>Paused, you see an exact frame from the renderer. Playing is a quick check of pictures, voice, captions and a rough approximation of the camera and style: transitions, grain, atmosphere, sound effects, music and exact styling appear in the rendered video. Use Preview on a scene below to watch its transition.</p>
+              <p className="muted small" style={{ margin: 0 }}>Paused, you see an exact frame from the renderer. Playing is a quick check of pictures, voice, captions and a rough approximation of the camera and style: transitions, grain, atmosphere, sound effects, music and exact styling appear in the rendered video. The scene previews below show each transition.</p>
             </div>
           </Card>
           {popup && (
@@ -95,31 +95,26 @@ function Composition({ lang, format }: { lang: string; format: string }) {
             </Modal>
           )}
 
-          <Card title="Scenes">
-            <table>
-              <thead><tr><th>#</th><th>Scene</th><th>Starts</th><th>Length</th><th>Timing</th><th>Caption position</th></tr></thead>
-              <tbody>
-                {tl.scenes.map((s: any) => {
-                  const y = tl.overrides?.[s.scene_id]?.caption_y_pct;
-                  return (
-                    <tr key={s.scene_id}>
-                      <td>{s.index + 1}</td><td>{s.title}</td><td>{fmtSec(s.start)}</td><td>{fmtSec(s.duration)}</td>
-                      <td><Pill tone={s.timing_source === 'audio' ? 'good' : 'warn'}>{s.timing_source === 'audio' ? 'from narration' : 'estimated'}</Pill></td>
-                      <td style={{ minWidth: 190 }}>
-                        <div className="row gap">
-                          <input type="range" min={0.3} max={0.95} step={0.01} value={y ?? defaultY} aria-label="Caption position" onChange={() => {}} onMouseUp={async (e) => { await api.put(`/artifacts/${comp.id}/scenes/${s.scene_id}/override`, { caption_y_pct: Number((e.target as HTMLInputElement).value), reopen: comp.state === 'approved' }); done(); }} onKeyUp={async (e) => { await api.put(`/artifacts/${comp.id}/scenes/${s.scene_id}/override`, { caption_y_pct: Number((e.target as HTMLInputElement).value), reopen: comp.state === 'approved' }); done(); }} />
-                          {y !== undefined && <Btn small kind="ghost" onClick={async () => { await api.put(`/artifacts/${comp.id}/scenes/${s.scene_id}/override`, { caption_y_pct: null, reopen: comp.state === 'approved' }); done(); }}>Reset</Btn>}
-                        </div>
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-            <p className="muted small" style={{ marginBottom: 0 }}>Moving a scene's captions overrides the format's safe-zone default for that scene only.</p>
-          </Card>
-
-          <DirectionCard compId={comp.id} version={comp.current_version_id ?? ''} onChanged={done} />
+          <DirectionCard artifact={comp} timeline={tl} onChanged={done} sceneDetails={(sceneId) => {
+            const x = tl.scenes.find((v: any) => v.scene_id === sceneId);
+            if (!x) return null;
+            const y = tl.overrides?.[sceneId]?.caption_y_pct;
+            // an approved composition is changed only after the person agrees
+            const caption = async (value: number | null) => { await withReopen((reopen) => api.put(`/artifacts/${comp.id}/scenes/${sceneId}/override`, { caption_y_pct: value, reopen })); done(); };
+            return (
+              <>
+                <div className="row gap wrap small">
+                  <span>Starts {fmtSec(x.start)}</span><span>Length {fmtSec(x.duration)}</span>
+                  <Pill tone={x.timing_source === 'audio' ? 'good' : 'warn'}>{x.timing_source === 'audio' ? 'from narration' : 'estimated'}</Pill>
+                </div>
+                <div className="row gap dir-caption">
+                  <span className="small">Caption position</span>
+                  <CaptionSlider value={y ?? defaultY} label={`Caption position, scene ${x.index + 1}`} onSave={caption} />
+                  {y !== undefined && <Btn small kind="ghost" onClick={() => caption(null)}>Reset</Btn>}
+                </div>
+              </>
+            );
+          }} />
 
           <Card title="Render" actions={<span className="muted small">Final render: {fin.state.replace('_', ' ')}</span>}>
             <div className="row gap wrap">

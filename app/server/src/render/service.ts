@@ -236,8 +236,17 @@ export class RenderService {
     return style && isStyle(style) ? { style } : undefined;
   }
 
+  private previews: Promise<unknown> = Promise.resolve();
+
   /** A short, small video of the change into one scene and the start of its movement. Silent; not a finished render. */
-  async previewScene(compId: string, sceneId: string): Promise<Buffer> {
+  previewScene(compId: string, sceneId: string, withCaptions = true): Promise<Buffer> {
+    // one at a time: the screen asks for many, and each one uses every processor core
+    const next = this.previews.then(() => this.drawPreview(compId, sceneId, withCaptions));
+    this.previews = next.catch(() => {});
+    return next;
+  }
+
+  private async drawPreview(compId: string, sceneId: string, withCaptions: boolean): Promise<Buffer> {
     const tl = validateTimelineShape(this.engine.getContent(compId));
     const k = tl.scenes.findIndex((s) => s.scene_id === sceneId);
     if (k < 0) throw new EngineError('NOT_FOUND', `Scene ${sceneId} is not in this timeline`);
@@ -252,16 +261,32 @@ export class RenderService {
       inputs.push('-ss', Math.max(0, length - lead).toFixed(3), '-i', clip.path);
     }
     inputs.push('-i', (await this.ensureSceneClip(tl, cur)).path);
+    // clip paths are content hashes, so the same pictures, settings and transition give the same preview
     const pair: Timeline = prev ? { ...tl, scenes: [{ ...prev, start: 0 }, { ...cur, start: lead }] } : { ...tl, scenes: [{ ...cur, start: 0 }] };
     const graph = videoGraph(pair);
-    const out = this.cache('preview', `${ulid()}.mp4`);
-    await mkdir(dirname(out), { recursive: true });
-    try {
-      await run(this.ffmpeg, ['-hide_banner', '-nostats', '-y', ...inputs, '-filter_complex', [...graph.filters, `[${graph.out}]scale=360:-2,format=yuv420p[v]`].join(';'), '-map', '[v]', '-t', seconds.toFixed(3), '-an', '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '24', '-movflags', '+faststart', out], { timeout: 180_000 });
-      return await readFile(out);
-    } finally {
-      await unlink(out).catch(() => {});
+    // captions are drawn at full size, as in the final render; the preview starts `lead` seconds before this scene.
+    // Only this scene's own captions are shown, so moving another scene's captions leaves this preview as it is.
+    const picture: string[] = [];
+    if (withCaptions && tl.captions.enabled) {
+      const words = tl.captions.words.filter((w) => w.start >= cur.start - 0.05 && w.start < cur.start + cur.duration - 0.05);
+      const placement = tl.captions.placement.filter((p) => Math.abs(p.from - cur.start) < 0.001);
+      const ass = await this.assFile({ ...tl, captions: { ...tl.captions, words, placement } }, cur.start - lead);
+      picture.push(`ass=filename=${q(ass.path)}:fontsdir=${q(ass.fontsDir)}`);
     }
+    picture.push('scale=360:-2', 'format=yuv420p');
+    const args = [...inputs, '-filter_complex', [...graph.filters, `[${graph.out}]${picture.join(',')}[v]`].join(';'), '-map', '[v]', '-t', seconds.toFixed(3), '-an', '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '24', '-movflags', '+faststart'];
+    const out = this.cache('preview', `scene_${createHash('sha256').update(JSON.stringify(args)).digest('hex').slice(0, 32)}.mp4`);
+    if (existsSync(out)) return readFile(out);
+    await mkdir(dirname(out), { recursive: true });
+    const tmp = `${out}.${ulid()}.tmp.mp4`;
+    try {
+      await run(this.ffmpeg, ['-hide_banner', '-nostats', '-y', ...args, tmp], { timeout: 180_000 });
+      await rename(tmp, out);
+    } catch (e) {
+      await unlink(tmp).catch(() => {});
+      throw e;
+    }
+    return readFile(out);
   }
 
   /** The extra frames a scene clip starts with, which its incoming transition plays over. */
