@@ -3,6 +3,7 @@ import { api } from '../api';
 import { useAsync, useInterval } from '../hooks';
 import { Btn, Card, CopyBtn, Empty, Field, Icon, Loading, Modal, Pill, useToast } from '../ui';
 import { CategoryPicker } from '../stages/shared';
+import { useTopicFilter } from './TopicFilters';
 import { ProgressFooter } from '../progress';
 import { LANG_LABEL, formatName } from '../types';
 
@@ -45,6 +46,9 @@ export function ResearchWorkspace() {
   const ready = !!cc?.loggedIn;
   const by = (s: string) => ideas.filter((i) => i.status === s);
   const started = by('used'), approved = [...by('approved'), ...started], toReview = by('new'), dismissed = by('dismissed');
+  // the approved list is dated by approval, the others by when they were researched
+  const approvedList = useTopicFilter(approved, (t) => t.approved_at ?? t.created_at, 'approved topics');
+  const reviewList = useTopicFilter(toReview, (t) => t.created_at, 'topics not approved yet');
 
   const start = async () => {
     if (!sessionStorage.getItem('wander-cc-research-ok')) {
@@ -92,6 +96,7 @@ export function ResearchWorkspace() {
         {t.links.dead > 0 && <div className="notice bad small">{t.links.dead} source link{t.links.dead === 1 ? '' : 's'} did not load. Do not trust {t.links.dead === 1 ? 'that fact' : 'those facts'} until you find a real source.</div>}
         <div className="row gap wrap" style={{ marginTop: 'auto' }}>
           {t.status === 'new' && <Btn small kind="primary" onClick={() => setApproving(t)}><Icon name="check" small /> Approve topic</Btn>}
+          {t.status === 'new' && <span className="muted small right">researched {new Date(t.created_at).toLocaleDateString()}</span>}
           {t.status === 'new' && <Btn small kind="ghost" onClick={async () => { await api.post(`/topic-ideas/${t.id}/dismiss`); data.reload(); }}>Dismiss</Btn>}
           {t.status === 'approved' && <Btn small kind="ghost" onClick={async () => { await api.post(`/topic-ideas/${t.id}/restore`); data.reload(); }}>Undo approval</Btn>}
           {t.status === 'dismissed' && <Btn small onClick={async () => { await api.post(`/topic-ideas/${t.id}/restore`); data.reload(); }}>Restore</Btn>}
@@ -153,13 +158,17 @@ export function ResearchWorkspace() {
             <div className="section-h" id="approved-topics" style={{ marginTop: 0 }}><h2>Approved topics</h2><span className="muted">{approved.length - started.length} ready to become a video{started.length ? ` · ${started.length} started` : ''}</span></div>
             {data.loading && !data.data && <Loading />}
             {approved.length === 0 && !(data.loading && !data.data) && <Empty>Nothing approved yet. Approve a topic from the list below.</Empty>}
-            <div className="stack">{approved.map(card)}</div>
+            {approvedList.bar}
+            {approvedList.empty && <Empty>No approved topics match these filters.</Empty>}
+            <div className="stack">{approvedList.shown.map(card)}</div>
           </div>
           <div>
             <div className="section-h"><h2>Not approved yet</h2><span className="muted">{toReview.length} to review. Read the facts and open the sources first.</span></div>
             <div className="notice small" style={{ marginBottom: 12 }}>AI research can be wrong. <strong>Nothing here is verified.</strong> A ✓ only means the link loads. Approving a topic means you want to make a video about it; you still verify the facts in the video.</div>
             {toReview.length === 0 && <Empty>No topics to review. Fill in the form and press Research.</Empty>}
-            <div className="stack">{toReview.map(card)}</div>
+            {reviewList.bar}
+            {reviewList.empty && <Empty>No topics match these filters.</Empty>}
+            <div className="stack">{reviewList.shown.map(card)}</div>
           </div>
           {dismissed.length > 0 && <details><summary className="muted">Dismissed ({dismissed.length})</summary><div className="stack" style={{ marginTop: 10 }}>{dismissed.map(card)}</div></details>}
         </div>
