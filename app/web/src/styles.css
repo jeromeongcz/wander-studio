@@ -195,7 +195,7 @@ a.step:hover .step-dot { border-color: var(--brand); }
 }
 
 /* ---------- research workspace ---------- */
-.ws { display: grid; grid-template-columns: minmax(0, 1fr) minmax(300px, 400px); gap: 18px; align-items: start; }
+.ws { display: grid; grid-template-columns: minmax(0, 1fr) minmax(280px, 360px); gap: 18px; align-items: start; }
 .ws-topics { grid-column: 1; grid-row: 1; } .ws-form { grid-column: 2; grid-row: 1; position: sticky; top: 68px; }
 details summary { cursor: pointer; padding: 6px 0; font-weight: 600; }
 @media (max-width: 1000px) { .ws { grid-template-columns: minmax(0, 1fr); } .ws-form { grid-column: 1; grid-row: 1; position: static; } .ws-topics { grid-row: 2; } }
