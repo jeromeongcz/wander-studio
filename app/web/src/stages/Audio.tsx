@@ -72,6 +72,9 @@ function LangAudio({ lang }: { lang: string }) {
   const done = () => { reload(); doc.reload(); clips.reload(); };
   const sections: any[] = (scriptDoc.data?.content?.sections ?? []).filter((s: any) => s.text.trim());
   const content = doc.data?.content;
+  const chosen = sections.filter((s) => picked.includes(s.id)).length;
+  const allPicked = sections.length > 0 && chosen === sections.length;
+  const somePicked = chosen > 0 && !allPicked;
   const clipOf = (sid: string) => { const ch = content?.chunks?.find((c: any) => c.section_ids.includes(sid)); return ch && clips.data?.find((c) => c.id === ch.clip_id); };
   const provInfo = tts.data?.find((p) => p.id === prov);
   const musicClips = (clips.data ?? []).filter((c) => c.kind === 'music');
@@ -127,6 +130,16 @@ function LangAudio({ lang }: { lang: string }) {
 
       <Card title="Narration by section" actions={content && <span className="muted small">measured total ≈ {fmtSec(content.chunks.reduce((n: number, c: any) => n + (clips.data?.find((x) => x.id === c.clip_id)?.duration_seconds ?? 0), 0))}</span>}>
         <table>
+          <thead>
+            <tr>
+              <th style={{ width: 28 }}>
+                <input type="checkbox" id="select-all-sections" disabled={!sections.length} checked={allPicked}
+                  ref={(el) => { if (el) el.indeterminate = somePicked; }}
+                  onChange={() => setPicked(allPicked ? [] : sections.map((s) => s.id))} />
+              </th>
+              <th colSpan={3} style={{ textTransform: 'none', letterSpacing: 0, fontSize: 13 }}><label htmlFor="select-all-sections" style={{ cursor: 'pointer', color: 'var(--text)' }}>Select all</label> <span className="muted">· {chosen} of {sections.length} selected</span></th>
+            </tr>
+          </thead>
           <tbody>
             {sections.map((s) => {
               const clip = clipOf(s.id);
