@@ -3,6 +3,7 @@ import { api } from '../api';
 import { useAsync, useInterval } from '../hooks';
 import { Btn, Card, CopyBtn, Empty, Field, Icon, Loading, Modal, Pill, useToast } from '../ui';
 import { CategoryPicker } from '../stages/shared';
+import { ProgressFooter } from '../progress';
 import { LANG_LABEL, formatName } from '../types';
 
 const CONF: Record<string, { tone: 'good' | 'warn' | 'info'; label: string; help: string }> = {
@@ -130,9 +131,6 @@ export function ResearchWorkspace() {
                 <Btn onClick={() => setManual(true)}>Use a prompt instead…</Btn>
               </div>
               <span className="muted small">A run takes a few minutes: it reads real web pages.</span>
-              {running && (
-                <div className="row gap"><Pill tone="info">{running.state === 'queued' ? 'waiting' : 'researching'}</Pill><span className="spin" aria-hidden /><span className="grow muted small">{running.message ?? 'Starting…'} Topics already found are kept if you cancel.</span><Btn small kind="danger" onClick={async () => { await api.post(`/studio/research/batches/${running.id}/cancel`); data.reload(); }}>Cancel</Btn></div>
-              )}
               {last && !running && last.state !== 'done' && (
                 <div className={`notice ${last.state === 'failed' ? 'bad' : 'warn'}`}>
                   <strong>Last run {last.state}.</strong> {last.message}
@@ -159,6 +157,8 @@ export function ResearchWorkspace() {
           {dismissed.length > 0 && <details><summary className="muted">Dismissed ({dismissed.length})</summary><div className="stack" style={{ marginTop: 10 }}>{dismissed.map(card)}</div></details>}
         </div>
       </div>
+
+      {running && <ProgressFooter label={running.state === 'queued' ? 'Waiting to research…' : 'Researching topics…'} detail={`${running.message ?? 'Starting…'} Topics already found are kept if you cancel.`} startedAt={Date.parse(running.created_at)} onCancel={async () => { await api.post(`/studio/research/batches/${running.id}/cancel`); data.reload(); }} />}
 
       {approving && (
         <Modal title="Approve this topic?" onClose={() => setApproving(null)}>

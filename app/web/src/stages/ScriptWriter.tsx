@@ -5,6 +5,7 @@ import { useProject } from '../pages/Project';
 import { useAsync } from '../hooks';
 import { Btn, Card, CopyBtn, Field, Icon, Loading, Modal, Pill, useToast } from '../ui';
 import { FORMAT_LABEL, langName } from '../types';
+import { startTask, useTask } from '../progress';
 
 const LENGTHS = [15, 30, 45, 60, 90, 180];
 const SHAPES: Record<string, { w: number; h: number; use: string }> = {
@@ -30,7 +31,7 @@ export function ScriptWriterCard({ artifactId, initialSeconds, initialScenes, ha
   const [picked, setPicked] = useState<number | null>(initialScenes ?? null);
   const scenes = picked ?? recommended(seconds);
   const [notes, setNotes] = useState('');
-  const [writing, setWriting] = useState(false);
+  const writing = !!useTask(artifactId);
   const [manual, setManual] = useState(false);
   const formats = project.settings.formats ?? ['vertical_9x16'];
   const secondsOk = Number.isInteger(seconds) && seconds >= 15 && seconds <= 600;
@@ -51,13 +52,13 @@ export function ScriptWriterCard({ artifactId, initialSeconds, initialScenes, ha
       if (!confirm('This asks Claude Code on this computer to write the script, using your Claude plan.\n\nIt gets no tools. Only the topic, its facts, the category, length, format, language and your notes are sent.\n\nContinue?')) return;
       sessionStorage.setItem('wander-cc-script-ok', '1');
     }
-    setWriting(true);
+    const done = startTask(artifactId, 'Writing the script…', `${scenes} scenes for a ${lengthLabel(seconds)} video. This can take a few minutes.`);
     try {
       const r: any = await withReopen((reopen) => api.post(`/artifacts/${artifactId}/script/generate`, { seconds, scenes, notes, reopen }));
       push(r.sections === r.requested ? 'ok' : 'warn', r.sections === r.requested ? `Script written: ${r.sections} scenes. Read it, edit it, then submit it for review.` : `Script written with ${r.sections} scenes, not the ${r.requested} you asked for. Add or remove scenes, or rewrite.`);
       onWritten();
     } finally {
-      setWriting(false);
+      done();
     }
   };
 

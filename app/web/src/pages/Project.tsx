@@ -1,6 +1,7 @@
-import { createContext, useContext, useMemo, useState } from 'react';
+import { createContext, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { api } from '../api';
-import { useAsync } from '../hooks';
+import { useAsync, useInterval } from '../hooks';
+import { ProgressFooter, useTask } from '../progress';
 import { Btn, Card, ErrorBox, Icon, Loading, Modal, Pill, StateBadge, useToast } from '../ui';
 import type { Artifact, Project, State } from '../types';
 import { STEPS, aggregate, analyze, stepOfPart } from '../pipeline';
@@ -45,6 +46,21 @@ const stepItems = (infos: StepInfo[], projectId: string) =>
       title: i.locked ? `Approve ${infos[idx - 1].step.label} first` : undefined,
     };
   });
+
+/** Shows the running work for this video in the floating footer: the script being written, or a background job. Otherwise the step's own footer. */
+function LiveFooter({ projectId, scriptId, reload, children }: { projectId: string; scriptId?: string; reload: () => void; children: React.ReactNode }) {
+  const writing = useTask(scriptId ?? '');
+  const jobs = useAsync(() => api.get<any[]>(`/jobs?project_id=${projectId}`), [projectId]);
+  useInterval(jobs.reload, 2000);
+  const active = (jobs.data ?? []).filter((j) => j.state === 'running' || j.state === 'queued');
+  const job = active.find((j) => j.state === 'running') ?? active[0];
+  // a finished job changes the project, so refresh it once
+  const wasActive = useRef(0);
+  useEffect(() => { if (wasActive.current > active.length) reload(); wasActive.current = active.length; }, [active.length, reload]);
+  if (writing) return <ProgressFooter label={writing.label} detail={writing.detail} startedAt={writing.startedAt} />;
+  if (job) return <ProgressFooter label={`${job.kind.replace(/_/g, ' ')}${job.state === 'queued' ? ' (waiting)' : ''}${active.length > 1 ? ` · ${active.length - 1} more` : ''}`} detail={job.message ?? undefined} progress={job.progress} onCancel={async () => { await api.post(`/jobs/${job.id}/cancel`); jobs.reload(); }} />;
+  return <>{children}</>;
+}
 
 /** The footer of every step: what is done, what unlocks the next step, and (for the topic) the explicit approval. */
 function StepFooter({ info, next, projectId, reload }: { info: StepInfo; next?: StepInfo; projectId: string; reload: () => void }) {
@@ -191,7 +207,9 @@ export function ProjectPage({ id, stage }: { id: string; stage: string }) {
                 {part.id === 'captions' && <CaptionsStage />}
                 {part.id === 'compose' && <ComposeStage />}
                 {part.id === 'publish' && <PublishStage />}
-                <StepFooter info={info} next={next} projectId={id} reload={p.reload} />
+                <LiveFooter projectId={id} scriptId={ctx.find('script_base')?.id} reload={p.reload}>
+                  <StepFooter info={info} next={next} projectId={id} reload={p.reload} />
+                </LiveFooter>
               </>
             )}
           </>
