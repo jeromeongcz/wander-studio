@@ -330,3 +330,6 @@ textarea.vis { min-height: 0; field-sizing: content; }
 .scene-tools { display: flex; align-items: center; justify-content: space-between; gap: 4px; flex-shrink: 0; }
 .scene-card.wide .frame-col { gap: 8px; }
 .scene-card.wide .frame-col .frame-slot { min-height: 100px; flex: 0 1 auto; }
+/* storyboard header: everything centred, vertically and horizontally */
+.board-head { justify-content: center; align-items: center; text-align: center; }
+.board-head .bar-prog { margin: 0 auto; } .board-head > .btn-primary { margin-left: 0; }
