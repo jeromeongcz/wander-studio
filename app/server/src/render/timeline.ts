@@ -66,8 +66,8 @@ export interface BuildInput {
 
 const OVERRIDES: Source[] = ['scene_override', 'composition_override'];
 
-/** One scene's camera and incoming transition, after precedence. */
-function direct(i: BuildInput, s: BuildInput['scenes'][number]) {
+/** One scene's camera, incoming transition and style after precedence, with where each came from. */
+export function direct(i: BuildInput, s: BuildInput['scenes'][number]) {
   const own = i.overrides[s.scene_id];
   const all = i.overrides_all;
   const camera = resolveLayers<Camera>({ scene_override: own?.camera, [storyboardSource(s, 'camera')]: s.camera, composition_override: all?.camera, default: s.camera });

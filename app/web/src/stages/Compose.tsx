@@ -7,6 +7,7 @@ import { Btn, Card, Empty, Icon, Loading, Modal, Pill, Tabs, fmtBytes, fmtSec, u
 import { formatName, langName } from '../types';
 import type { Artifact } from '../types';
 import { TimelinePlayer } from './TimelinePlayer';
+import { DirectionCard, useCinematic } from './Direction';
 
 export function ComposeStage() {
   const { project } = useProject();
@@ -58,8 +59,8 @@ function Composition({ lang, format }: { lang: string; format: string }) {
     }
   }, job ? 600 : null);
 
-  const build = async (effects?: string) => {
-    const call = (reopen: boolean) => api.post(`/artifacts/${comp.id}/build-timeline`, { reopen, effects });
+  const build = async (effects?: string, look?: object | null) => {
+    const call = (reopen: boolean) => api.post(`/artifacts/${comp.id}/build-timeline`, { reopen, effects, look });
     try { await call(false); } catch (e: any) { if (e.code === 'PROTECTED' && confirm('This composition is approved. Rebuild it?\n\nIts final render will need revision.')) await call(true); else throw e; }
     push('ok', 'Timeline built from the current script, narration, captions and visuals');
     done();
@@ -85,7 +86,7 @@ function Composition({ lang, format }: { lang: string; format: string }) {
               <TimelinePlayer key={comp.current_version_id ?? 'none'} timeline={tl} time={t} onTime={setT} captions={captions} onEnlarge={() => setPopup(true)}
                 still={popup ? undefined : <PreviewFrame id={comp.id} version={comp.current_version_id ?? ''} t={t} captions={captions} stale={!!st?.stale} />} />
               <label className="row gap"><input type="checkbox" checked={captions} onChange={(e) => setCaptions(e.target.checked)} />Show captions</label>
-              <p className="muted small" style={{ margin: 0 }}>Paused, you see an exact frame from the renderer. Playing is a quick check of pictures, voice, captions and an approximation of the camera and style: transitions, sound effects, music and exact styling appear in the rendered video.</p>
+              <p className="muted small" style={{ margin: 0 }}>Paused, you see an exact frame from the renderer. Playing is a quick check of pictures, voice, captions and a rough approximation of the camera and style: transitions, grain, atmosphere, sound effects, music and exact styling appear in the rendered video. Use Preview on a scene below to watch its transition.</p>
             </div>
           </Card>
           {popup && (
@@ -117,6 +118,8 @@ function Composition({ lang, format }: { lang: string; format: string }) {
             </table>
             <p className="muted small" style={{ marginBottom: 0 }}>Moving a scene's captions overrides the format's safe-zone default for that scene only.</p>
           </Card>
+
+          <DirectionCard compId={comp.id} version={comp.current_version_id ?? ''} onChanged={done} />
 
           <Card title="Render" actions={<span className="muted small">Final render: {fin.state.replace('_', ' ')}</span>}>
             <div className="row gap wrap">
@@ -176,7 +179,7 @@ function PreviewFrame({ id, version, t, captions, stale }: { id: string; version
 }
 
 /** The timeline: what goes into it, one button to build it, and a strip of the scenes in order, sized by their length. */
-function TimelineBuilder({ lang, format, timeline, built, stale, onBuild, onPick, at }: { lang: string; format: string; timeline?: any; built: boolean; stale: boolean; onBuild: (effects: string) => Promise<void>; onPick: (t: number) => void; at: number }) {
+function TimelineBuilder({ lang, format, timeline, built, stale, onBuild, onPick, at }: { lang: string; format: string; timeline?: any; built: boolean; stale: boolean; onBuild: (effects: string, look?: object | null) => Promise<void>; onPick: (t: number) => void; at: number }) {
   const { project, find, all } = useProject();
   const storyboard = find('storyboard')!;
   const visuals = all('scene_asset');
@@ -190,12 +193,27 @@ function TimelineBuilder({ lang, format, timeline, built, stale, onBuild, onPick
     { label: 'Captions', ok: approved(find('caption', lang)), note: approved(find('caption', lang)) ? 'Approved' : 'Not approved', href: 'captions' },
   ];
   const all4 = parts.every((p) => p.ok);
-  const current: string = timeline?.effects ?? 'none';
-  // before the first build, suggest the folklore style for folklore-type videos
-  const suggested = /folklore|horror|superstition|myth/i.test(project.category ?? '') ? 'folklore' : 'none';
+  const options = useCinematic();
+  // the project's Cinematic Direction style, chosen in the Script step
+  const chosen = project.settings.cinematic?.style;
+  const direction = chosen && chosen !== 'automatic' ? chosen : undefined;
+  // 'folklore' is the classic effect; other values name a cinematic style
+  const asValue = (style?: string) => (!style || style === 'none' ? 'none' : `style:${style}`);
+  const current: string = !timeline ? 'none' : timeline.effects ? 'folklore' : asValue(timeline.look?.style);
+  // before the first build: the project's chosen style, otherwise the classic folklore style for folklore-type videos
+  const suggested = direction ? asValue(direction) : /folklore|horror|superstition|myth/i.test(project.category ?? '') ? 'folklore' : 'none';
   const [picked, setPicked] = useState<string | null>(null);
   const effects = picked ?? (timeline ? current : suggested);
   const changed = !!timeline && effects !== current;
+  const apply = () => {
+    if (effects === 'folklore') return onBuild('folklore');
+    // nothing picked: keep whatever the timeline already has
+    if (picked === null) return onBuild(timeline ? (timeline.effects ?? 'none') : 'none');
+    if (effects === 'none') return onBuild('none', direction ? { style: 'none' } : null);
+    // a style that is simply the project's direction needs no override of its own
+    return onBuild('none', effects === asValue(direction) ? null : { style: effects.slice(6) });
+  };
+  const styleInfo = options.data?.styles.find((s) => `style:${s.id}` === effects);
   const state = !built ? (all4 ? 'ready' : 'waiting') : stale || changed ? 'stale' : 'built';
   const headline = changed ? 'Scene style changed' : { waiting: 'A few approvals to go', ready: 'Everything is ready', stale: 'The timeline is out of date', built: 'Timeline built' }[state];
   const detail = {
@@ -214,14 +232,18 @@ function TimelineBuilder({ lang, format, timeline, built, stale, onBuild, onPick
           <p className="muted small">{shownDetail}</p>
           {timeline && <div className="row gap wrap"><Pill tone="info">{timeline.scenes.length} scenes</Pill><Pill tone="info">{fmtSec(timeline.duration)}</Pill><Pill tone="info">{timeline.format.width}×{timeline.format.height}</Pill></div>}
         </div>
-        <Btn kind={state === 'built' ? 'default' : 'primary'} onClick={async () => { await onBuild(effects); setPicked(null); }}><Icon name={built ? 'refresh' : 'spark'} small /> {changed ? 'Apply style & rebuild' : built ? 'Rebuild timeline' : 'Build timeline'}</Btn>
+        <Btn kind={state === 'built' ? 'default' : 'primary'} onClick={async () => { await apply(); setPicked(null); }}><Icon name={built ? 'refresh' : 'spark'} small /> {changed ? 'Apply style & rebuild' : built ? 'Rebuild timeline' : 'Build timeline'}</Btn>
       </div>
       <div className="tlb-style">
         <b>Scene style</b>
         <div className="seg" role="group" aria-label="Scene style">
-          {([['none', 'Clean'], ['folklore', 'Dark folklore']] as const).map(([v, label]) => <button key={v} type="button" className={effects === v ? 'on' : ''} aria-pressed={effects === v} onClick={() => setPicked(v)}>{label}</button>)}
+          {([['none', 'Clean'], ['folklore', 'Dark folklore (classic)']] as const).map(([v, label]) => <button key={v} type="button" className={effects === v ? 'on' : ''} aria-pressed={effects === v} onClick={() => setPicked(v)}>{label}</button>)}
         </div>
-        <span className="muted small">{effects === 'folklore' ? 'Like your reference videos: hard cuts, a new framing about every 3 seconds, dark grade with grain and flicker, one big word at a time (names and numbers in red), impact hits, a low drone when there is no music, and a glitch ending.' : 'Your storyboard camera moves and transitions, with normal captions.'}</span>
+        <select className="tlb-more" aria-label="Cinematic visual style" value={effects.startsWith('style:') ? effects : ''} onChange={(e) => e.target.value && setPicked(e.target.value)}>
+          <option value="">Cinematic styles…</option>
+          {(options.data?.styles ?? []).map((s) => <option key={s.id} value={`style:${s.id}`}>{s.label}</option>)}
+        </select>
+        <span className="muted small">{styleInfo ? `${styleInfo.summary} Your camera moves and transitions stay as set.` : effects === 'folklore' ? 'Like your reference videos: hard cuts, a new framing about every 3 seconds, dark grade with grain and flicker, one big word at a time (names and numbers in red), impact hits, a low drone when there is no music, and a glitch ending.' : 'Your storyboard camera moves and transitions, with normal captions.'}</span>
       </div>
       <ul className="tlb-parts">
         {parts.map((p) => (

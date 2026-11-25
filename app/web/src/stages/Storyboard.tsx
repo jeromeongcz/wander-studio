@@ -1,3 +1,4 @@
+import { useCinematic } from './Direction';
 import { useEffect, useState } from 'react';
 import { api } from '../api';
 import { ArtifactBar, saveArtifact } from '../actions';
@@ -7,9 +8,6 @@ import { Btn, Card, Empty, Field, Icon, Loading, Modal, Pill, StateBadge, fmtSec
 import { url } from '../api';
 import { ASSET_TYPES } from '../types';
 
-const MOVES = ['static', 'pan', 'zoom', 'ken_burns', 'parallax'];
-const TRANS = ['cut', 'fade', 'dissolve', 'slide', 'zoom', 'wipe'];
-const DIRS: Record<string, string[]> = { pan: ['left_to_right', 'right_to_left', 'up', 'down'], zoom: ['in', 'out'], ken_burns: ['in', 'out'], parallax: [], static: [] };
 
 export function StoryboardStage() {
   const { project, find, reload } = useProject();
@@ -26,6 +24,10 @@ export function StoryboardStage() {
   const listClass = view === 'grid' ? 'board board-grid' : 'stack';
   const [open, setOpen] = useState<number[]>([]);
   const [zoom, setZoom] = useState<number | null>(null);
+  const cinematic = useCinematic();
+  const moves = cinematic.data?.cameras ?? [];
+  const transitions = cinematic.data?.transitions ?? [];
+  const directions = (movement: string) => moves.find((m) => m.id === movement)?.directions ?? [];
   const cardClass = (i: number) => (view === 'grid' ? 'scene-card tall' : `scene-card wide${open.includes(i) ? ' open' : ''}`);
   // horizontal cards do not scroll inside (that traps the page's scroll): they open to full height instead
   const more = (i: number) => view === 'list' && (
@@ -227,10 +229,10 @@ export function StoryboardStage() {
                   <Field label="Duration (s)"><input type="number" step={0.1} min={0.5} value={s.target_duration} onChange={(e) => setScene(i, { target_duration: Number(e.target.value) })} /></Field>
                   <Field label="Visual type"><select value={s.asset_type} onChange={(e) => setScene(i, { asset_type: e.target.value })}>{ASSET_TYPES.map((t) => <option key={t} value={t}>{t.replace(/_/g, ' ')}</option>)}</select></Field>
                   <Field label="Look"><input value={s.visual_style ?? ''} onChange={(e) => setScene(i, { visual_style: e.target.value })} /></Field>
-                  <Field label="Camera"><select value={s.camera.movement} onChange={(e) => setScene(i, { camera: { ...s.camera, movement: e.target.value, direction: DIRS[e.target.value]?.[0] } })}>{MOVES.map((m) => <option key={m} value={m}>{m.replace('_', ' ')}</option>)}</select></Field>
-                  {(DIRS[s.camera.movement]?.length ?? 0) > 0 && <Field label="Direction"><select value={s.camera.direction ?? ''} onChange={(e) => setScene(i, { camera: { ...s.camera, direction: e.target.value } })}>{DIRS[s.camera.movement].map((d) => <option key={d}>{d}</option>)}</select></Field>}
+                  <Field label="Camera"><select value={s.camera.movement} onChange={(e) => setScene(i, { camera: { ...s.camera, movement: e.target.value, direction: directions(e.target.value)[0] } })}>{moves.map((m) => <option key={m.id} value={m.id}>{m.label}</option>)}</select></Field>
+                  {directions(s.camera.movement).length > 0 && <Field label="Direction"><select value={s.camera.direction ?? ''} onChange={(e) => setScene(i, { camera: { ...s.camera, direction: e.target.value } })}>{directions(s.camera.movement).map((d) => <option key={d}>{d}</option>)}</select></Field>}
                   <Field label="Intensity"><select value={s.camera.intensity ?? 'subtle'} onChange={(e) => setScene(i, { camera: { ...s.camera, intensity: e.target.value } })}>{['subtle', 'medium', 'strong'].map((d) => <option key={d}>{d}</option>)}</select></Field>
-                  <Field label="Transition in"><select value={s.transition_in ?? 'cut'} onChange={(e) => setScene(i, { transition_in: e.target.value })}>{TRANS.map((t) => <option key={t}>{t}</option>)}</select></Field>
+                  <Field label="Transition in"><select value={s.transition_in ?? 'cut'} onChange={(e) => setScene(i, { transition_in: e.target.value, transition_settings: undefined })}>{transitions.map((t) => <option key={t.id} value={t.id}>{t.label}</option>)}</select></Field>
                   <Field label="Sound effects (comma separated)"><input value={(s.sfx_cues ?? []).join(', ')} onChange={(e) => setScene(i, { sfx_cues: e.target.value.split(',').map((x) => x.trim()).filter(Boolean) })} /></Field>
                 </div>
                 </details>

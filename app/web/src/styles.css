@@ -459,3 +459,14 @@ textarea.vis { min-height: 0; field-sizing: content; }
 @media (max-width: 760px) { .scene-card.wide:has(.scene-top) { height: 620px; } .scene-card.wide:has(.scene-top).open { height: auto; } }
 .scene-card.tall:has(.scene-top) { height: 690px; }
 .scene-card.tall:has(.scene-top).open { height: auto; }
+/* camera, transitions and style in Compose & Render */
+.dir-all > summary, .dir-list > li { padding: 10px 12px; border: 1px solid var(--line); border-radius: var(--radius-sm); }
+.dir-all > summary { cursor: pointer; }
+.dir-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 10px; }
+.dir-list > li { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.dir-list .pill { white-space: normal; }
+.dir-list .choices, .dir-all .choices { min-width: 0; }
+.dir-preview { max-width: 100%; max-height: 420px; background: #000; border-radius: var(--radius-sm); }
+.tlb-more { width: auto; max-width: 100%; }
+.tlp-vignette { position: absolute; inset: 0; pointer-events: none; background: radial-gradient(ellipse at center, transparent 45%, rgba(0, 0, 0, .8) 100%); }
+@media (max-width: 760px) { .dir-list .row > b { flex-basis: calc(100% - 44px); } }

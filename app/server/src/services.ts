@@ -736,8 +736,48 @@ export class Studio {
     return { srt, vtt, files: [`captions/exports/${track.lang}.srt`, `captions/exports/${track.lang}.vtt`, `captions/tracks/${track.lang}.json`] };
   }
 
-  buildComposition(compId: string, opts: { reopen?: boolean; effects?: string } = {}) {
-    return { ...this.save(compId, this.render.build(compId, opts.effects), { actor: 'user', reopen: opts.reopen }) };
+  /** `look`: a video-wide style to set, null to remove it, left out to keep it. */
+  buildComposition(compId: string, opts: { reopen?: boolean; effects?: string; look?: unknown } = {}) {
+    let change = {};
+    if (opts.look !== undefined) {
+      const all = { ...(this.engine.getContent(compId) as Timeline | null)?.overrides_all } as Record<string, unknown>;
+      applyDirection(all, { look: opts.look });
+      change = { overrides_all: all };
+    }
+    return { ...this.save(compId, this.render.build(compId, opts.effects, change), { actor: 'user', reopen: opts.reopen }) };
+  }
+
+  /** Give the other languages and formats of this video the same camera, transition and style overrides. */
+  copyDirection(compId: string, opts: { reopen?: boolean } = {}) {
+    const source = this.engine.get(compId);
+    if (source.kind !== 'composition') throw new EngineError('VALIDATION', 'Not a composition artifact');
+    const from = validateTimelineShape(this.engine.getContent(compId));
+    const keys = ['camera', 'transition', 'look'] as const;
+    const copied: string[] = [];
+    const skipped: { label: string; reason: string }[] = [];
+    for (const comp of this.engine.list(source.project_id, { kind: 'composition' })) {
+      if (comp.id === compId) continue;
+      const to = this.engine.getContent(comp.id) as Timeline | null;
+      if (!to) { skipped.push({ label: comp.label, reason: 'not built yet' }); continue; }
+      const overrides: Record<string, Record<string, unknown>> = {};
+      for (const id of new Set([...Object.keys(to.overrides), ...Object.keys(from.overrides)])) {
+        const keep: Record<string, unknown> = { ...to.overrides[id] };
+        for (const k of keys) {
+          delete keep[k];
+          const v = from.overrides[id]?.[k];
+          if (v !== undefined) keep[k] = v;
+        }
+        if (Object.keys(keep).length) overrides[id] = keep;
+      }
+      try {
+        const next = this.render.build(comp.id, from.effects ?? 'none', { overrides: overrides as Timeline['overrides'], overrides_all: from.overrides_all ?? {} });
+        this.save(comp.id, next, { actor: 'user', reopen: opts.reopen });
+        copied.push(comp.label);
+      } catch (e) {
+        skipped.push({ label: comp.label, reason: (e as Error).message });
+      }
+    }
+    return { copied, skipped };
   }
 
   setSceneOverride(compId: string, sceneId: string, override: { crop?: { x: number; y: number; w: number; h: number }; caption_y_pct?: number | null; camera?: unknown; transition?: unknown; look?: unknown }, opts: { reopen?: boolean } = {}) {

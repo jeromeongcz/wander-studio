@@ -14,6 +14,7 @@ import { addFormat, addLanguage, createProject, removeFormat, removeLanguage } f
 import { estimate, isPreset, PRESETS } from './studios/estimator.ts';
 import { newResearchContent } from './studios/research.ts';
 import { listCategories, profileFor } from './studios/storyboard.ts';
+import { cinematicOptions } from './render/options.ts';
 import { I2V_PROVIDERS } from './providers/i2v.ts';
 
 const STATUS: Record<string, number> = {
@@ -400,12 +401,19 @@ export function buildApi(engine: Engine, config: Partial<AppConfig> = {}): Fasti
     const has = !!content && content.version === 1;
     return { has_timeline: has, stale: has ? studio.render.isStale(id) : true, duration: has ? content!.duration : null, scenes: has ? content!.scenes?.length : 0, captions: has ? !!content!.captions?.enabled : false };
   });
-  app.post('/artifacts/:id/build-timeline', async (req) => studio.buildComposition((req.params as { id: string }).id, { reopen: body(req).reopen === true, effects: typeof body(req).effects === 'string' ? (body(req).effects as string) : undefined }));
+  app.post('/artifacts/:id/build-timeline', async (req) => studio.buildComposition((req.params as { id: string }).id, { reopen: body(req).reopen === true, effects: typeof body(req).effects === 'string' ? (body(req).effects as string) : undefined, look: body(req).look }));
   app.put('/artifacts/:id/scenes/:sceneId/override', async (req) => {
     const { id, sceneId } = req.params as { id: string; sceneId: string };
     const b = body(req);
     return studio.setSceneOverride(id, sceneId, { crop: b.crop, caption_y_pct: b.caption_y_pct, camera: b.camera, transition: b.transition, look: b.look }, { reopen: b.reopen === true });
   });
+  app.get('/cinematic/options', async () => cinematicOptions());
+  app.get('/artifacts/:id/directions', async (req) => studio.render.directions((req.params as { id: string }).id));
+  app.get('/artifacts/:id/scenes/:sceneId/preview', async (req, reply) => {
+    const { id, sceneId } = req.params as { id: string; sceneId: string };
+    return reply.type('video/mp4').send(await studio.render.previewScene(id, sceneId));
+  });
+  app.post('/artifacts/:id/copy-direction', async (req) => studio.copyDirection((req.params as { id: string }).id, { reopen: body(req).reopen === true }));
   app.put('/artifacts/:id/override-all', async (req) => {
     const b = body(req);
     return studio.setCompositionOverride((req.params as { id: string }).id, { camera: b.camera, transition: b.transition, look: b.look }, { reopen: b.reopen === true });

@@ -17,7 +17,7 @@ export interface Project {
   id: string;
   name: string;
   category: string | null;
-  settings: { formats?: string[] };
+  settings: { formats?: string[]; cinematic?: { camera?: string; style?: string; transition?: string; custom_text?: string } };
   languages: string[];
   artifacts: Artifact[];
 }

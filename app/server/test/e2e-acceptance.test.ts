@@ -458,4 +458,27 @@ test('10-second multi-format captioned video: research -> script -> storyboard -
   const cleared = (await call('GET', `/artifacts/${ocomp.id}`)).json.content;
   assert.deepEqual(cleared.scenes, before.scenes);
   assert.deepEqual([cleared.overrides, cleared.overrides_all, cleared.captions.placement], [{}, undefined, []]);
+
+  // ===== sources, scene preview and copying settings to other videos =====
+  await ok(call('PUT', sceneUrl(1), { camera: { movement: 'orbit' }, transition: { type: 'iris_out' }, look: { style: 'folklore' }, reopen: true }), 'cinematic override');
+  await ok(call('POST', `/artifacts/${ocomp.id}/build-timeline`, { look: { style: 'minimal' } }), 'video-wide style');
+  const told = (await ok(call('GET', `/artifacts/${ocomp.id}/directions`), 'directions')).json;
+  assert.deepEqual([told.scenes[1].camera.source, told.scenes[1].transition.source, told.scenes[1].look.source], ['scene_override', 'scene_override', 'scene_override']);
+  assert.deepEqual([told.scenes[0].camera.source, told.scenes[0].look.source, told.scenes[0].look.value.style], ['storyboard_user', 'composition_override', 'minimal']);
+  const clip = await call('GET', `/artifacts/${ocomp.id}/scenes/${before.scenes[1].scene_id}/preview`);
+  assert.equal(clip.status, 200);
+  writeFileSync(join(tmp, 'preview.mp4'), clip.raw);
+  const pv = probe(join(tmp, 'preview.mp4'));
+  assert.equal(pv.streams[0].width, 360);
+  assert.ok(Number(pv.format.duration) > 1);
+  const copy = (await ok(call('POST', `/artifacts/${ocomp.id}/copy-direction`, { reopen: true }), 'copy direction')).json;
+  assert.ok(copy.copied.includes('Composition (en, horizontal_16x9)'), JSON.stringify(copy));
+  assert.ok(copy.skipped.some((x: any) => x.reason === 'not built yet') || copy.copied.length >= 2);
+  const other = (await call('GET', `/artifacts/${one('composition', 'en', 'horizontal_16x9').id}`)).json.content;
+  assert.deepEqual([other.scenes[1].camera.movement, other.scenes[1].look.style, other.overrides_all.look.style], ['orbit', 'folklore', 'minimal']);
+  await approve(ocomp.id, 'cinematic composition');
+  const cine = await ok(call('POST', `/artifacts/${ocomp.id}/render`, { variants: ['captioned', 'clean'], reopen: true }), 'cinematic render');
+  for (const r of cine.json.renders) assert.ok(Math.abs(Number(probe(join(root, r.rel_path)).format.duration) - wide.duration) < 0.25);
+  const manifest = (await call('GET', `/projects/${pid}/license-manifest`)).json;
+  assert.ok(manifest.items.some((i: any) => i.id === 'effects-generated-visuals'));
 });
