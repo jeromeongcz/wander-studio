@@ -12,7 +12,7 @@ import { Studio } from './services.ts';
 import { addLanguage, createProject, removeLanguage } from './pipeline.ts';
 import { estimate, isPreset, PRESETS } from './studios/estimator.ts';
 import { newResearchContent } from './studios/research.ts';
-import { listCategories } from './studios/storyboard.ts';
+import { listCategories, profileFor } from './studios/storyboard.ts';
 import { I2V_PROVIDERS } from './providers/i2v.ts';
 
 const STATUS: Record<string, number> = {
@@ -228,7 +228,14 @@ export function buildApi(engine: Engine, config: Partial<AppConfig> = {}): Fasti
   app.delete('/lexicon/:entryId', async (req) => studio.deleteLexicon((req.params as { entryId: string }).entryId));
 
   // ---- storyboard ----
-  app.get('/categories', async () => listCategories());
+  app.get('/categories', async () => {
+    // the six built-in topics, then any custom category already used by a project, so a custom one is not lost after it is typed once
+    const base = listCategories();
+    const known = new Set(base.map((c) => c.name.toLowerCase()));
+    const rows = studio.engine.db.prepare("SELECT DISTINCT category FROM projects WHERE category IS NOT NULL AND TRIM(category) != '' ORDER BY category").all() as { category: string }[];
+    const custom = rows.filter((r) => !known.has(r.category.toLowerCase())).map((r) => ({ name: r.category, profile: profileFor(r.category), custom: true }));
+    return [...base, ...custom];
+  });
   app.get('/categories/:name/recommendations', async (req) => studio.recommendations((req.params as { name: string }).name));
   app.post('/artifacts/:id/seed-storyboard', async (req, reply) => {
     const s = body(req).scene_seconds;

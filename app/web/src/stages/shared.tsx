@@ -96,7 +96,7 @@ export function ProjectDetailsEditor({ project, onSaved, compact }: { project: {
 }
 
 
-interface CategoryInfo { name: string }
+interface CategoryInfo { name: string; custom?: boolean }
 
 /** Category chooser: the six project topics, plus "Other" to type your own (custom categories get general recommendations). */
 export function CategoryPicker({ value, onChange, label = 'Category' }: { value: string; onChange: (v: string) => void; label?: string }) {
@@ -112,7 +112,8 @@ export function CategoryPicker({ value, onChange, label = 'Category' }: { value:
         if (e.target.value === '__other') { setCustom(true); onChange(match ? '' : value); } else { setCustom(false); onChange(e.target.value); }
       }}>
         <option value="">None (general)</option>
-        {cats.map((c) => <option key={c.name} value={c.name}>{c.name}</option>)}
+        {cats.filter((c) => !c.custom).map((c) => <option key={c.name} value={c.name}>{c.name}</option>)}
+        {cats.some((c) => c.custom) && <optgroup label="Your own">{cats.filter((c) => c.custom).map((c) => <option key={c.name} value={c.name}>{c.name}</option>)}</optgroup>}
         <option value="__other">Other: type your own…</option>
       </select>
       {isCustom && <input aria-label="Custom category" style={{ marginTop: 6 }} autoFocus value={value} onChange={(e) => onChange(e.target.value)} maxLength={60} placeholder="e.g. Cooking for beginners" />}

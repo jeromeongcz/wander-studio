@@ -112,6 +112,8 @@ test('a project can be renamed and its category changed; this never touches appr
   r = await patch({ name: '  New name  ', category: 'My own category' });
   assert.equal(JSON.parse(r.body).name, 'New name');
   assert.equal(JSON.parse(r.body).category, 'My own category', 'custom categories are allowed');
+  const cats = JSON.parse((await app.inject({ url: '/categories' })).body);
+  assert.ok(cats.some((c: any) => c.name === 'My own category' && c.custom), 'a custom category in use stays in the list');
   r = await patch({ category: '' });
   assert.equal(JSON.parse(r.body).category, null, 'empty clears it');
   assert.equal((await patch({ name: '   ' })).statusCode, 422);
