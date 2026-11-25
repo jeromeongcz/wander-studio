@@ -3,7 +3,7 @@ import { api, url } from '../api';
 import { ArtifactBar } from '../actions';
 import { useProject } from '../pages/Project';
 import { useAsync, useInterval } from '../hooks';
-import { Btn, Card, Empty, Loading, Pill, Tabs, fmtBytes, fmtSec, useToast } from '../ui';
+import { Btn, Card, Empty, Icon, Loading, Pill, Tabs, fmtBytes, fmtSec, useToast } from '../ui';
 import { formatName, langName } from '../types';
 import type { Artifact } from '../types';
 
@@ -67,11 +67,8 @@ function Composition({ lang, format }: { lang: string; format: string }) {
 
   return (
     <div className="stack">
-      <ArtifactBar artifact={comp} onChanged={done}>
-        <Btn small onClick={build}>{st?.has_timeline ? 'Rebuild timeline' : 'Build timeline'}</Btn>
-      </ArtifactBar>
-      {st && st.has_timeline && st.stale && <div className="notice warn">The timeline is out of date: the storyboard, narration, captions or a scene visual changed since it was built. Rebuild it before approving or rendering.</div>}
-      {!st?.has_timeline && <Empty>Build the timeline to combine the approved storyboard, visuals, narration and captions for {langName(lang)} in {formatName(format)}.</Empty>}
+      <TimelineBuilder lang={lang} format={format} timeline={tl} built={!!st?.has_timeline} stale={!!st?.stale} onBuild={build} onPick={setT} at={t} />
+      <ArtifactBar artifact={comp} onChanged={done} />
 
       {tl && (
         <>
@@ -166,5 +163,68 @@ function PreviewFrame({ id, version, t, captions, stale }: { id: string; version
       <img className="frame" alt="Preview frame" src={url(`/artifacts/${id}/preview-frame?t=${shown.toFixed(2)}&captions=${captions}&v=${version}`)} onLoad={() => setState('ok')} onError={() => setState('error')} style={{ width: '100%', opacity: state === 'loading' ? 0.5 : 1 }} />
       {state === 'error' && <div className="notice bad" style={{ marginTop: 8 }}>Could not draw this frame. {stale ? 'The timeline is out of date; rebuild it.' : 'Check that the visuals and caption font are available (Jobs & settings → environment check).'}</div>}
     </div>
+  );
+}
+
+/** The timeline: what goes into it, one button to build it, and a strip of the scenes in order, sized by their length. */
+function TimelineBuilder({ lang, format, timeline, built, stale, onBuild, onPick, at }: { lang: string; format: string; timeline?: any; built: boolean; stale: boolean; onBuild: () => Promise<void>; onPick: (t: number) => void; at: number }) {
+  const { project, find, all } = useProject();
+  const storyboard = find('storyboard')!;
+  const visuals = all('scene_asset');
+  const pictures = useAsync(() => api.get<any[]>(`/artifacts/${storyboard.id}/sketches`), [storyboard.id, storyboard.current_version_id, visuals.map((v) => v.current_version_id).join()]);
+  const approved = (a?: Artifact) => a?.state === 'approved';
+  const ready = visuals.filter(approved).length;
+  const parts = [
+    { label: 'Storyboard', ok: approved(storyboard), note: approved(storyboard) ? 'Approved' : 'Not approved', href: 'storyboard' },
+    { label: 'Visuals', ok: visuals.length > 0 && ready === visuals.length, note: `${ready} of ${visuals.length} approved`, href: 'visuals' },
+    { label: 'Narration', ok: approved(find('audio', lang)), note: approved(find('audio', lang)) ? 'Approved' : 'Not approved', href: 'audio' },
+    { label: 'Captions', ok: approved(find('caption', lang)), note: approved(find('caption', lang)) ? 'Approved' : 'Not approved', href: 'captions' },
+  ];
+  const all4 = parts.every((p) => p.ok);
+  const state = !built ? (all4 ? 'ready' : 'waiting') : stale ? 'stale' : 'built';
+  const headline = { waiting: 'A few approvals to go', ready: 'Everything is ready', stale: 'The timeline is out of date', built: 'Timeline built' }[state];
+  const detail = {
+    waiting: 'Approve the items below, then build the timeline.',
+    ready: `Combine your scenes, narration and captions into the ${langName(lang)} video, ${formatName(format)}.`,
+    stale: 'The storyboard, narration, captions or a visual changed. Rebuild before approving or rendering.',
+    built: 'Click a scene in the strip to preview it.',
+  }[state];
+  return (
+    <section className={`tlb tlb-${state}`} aria-label="Timeline">
+      <div className="tlb-head">
+        <span className="tlb-icon" aria-hidden="true"><Icon name={state === 'built' ? 'check' : state === 'stale' ? 'alert' : 'film'} /></span>
+        <div className="grow">
+          <h3>{headline}</h3>
+          <p className="muted small">{detail}</p>
+          {timeline && <div className="row gap wrap"><Pill tone="info">{timeline.scenes.length} scenes</Pill><Pill tone="info">{fmtSec(timeline.duration)}</Pill><Pill tone="info">{timeline.format.width}×{timeline.format.height}</Pill></div>}
+        </div>
+        <Btn kind={state === 'built' ? 'default' : 'primary'} onClick={onBuild}><Icon name={built ? 'refresh' : 'spark'} small /> {built ? 'Rebuild timeline' : 'Build timeline'}</Btn>
+      </div>
+      <ul className="tlb-parts">
+        {parts.map((p) => (
+          <li key={p.label} className={p.ok ? 'ok' : ''}>
+            <a href={`#/p/${project.id}/${p.href}`}>
+              <span className="tlb-dot"><Icon name={p.ok ? 'check' : 'clock'} small /></span>
+              <span><b>{p.label}</b><span className="small">{p.note}</span></span>
+            </a>
+          </li>
+        ))}
+      </ul>
+      {timeline && (
+        <div className="tlb-strip" role="list" aria-label="Scenes in order">
+          {timeline.scenes.map((x: any) => {
+            const pic = pictures.data?.find((r) => r.scene_id === x.scene_id)?.asset_id;
+            const on = at >= x.start && at < x.start + x.duration;
+            return (
+              <button key={x.scene_id} type="button" role="listitem" className={on ? 'on' : ''} style={{ flexGrow: x.duration }} title={`${x.title} · starts ${fmtSec(x.start)}`} aria-label={`Preview scene ${x.index + 1}, ${fmtSec(x.duration)}`} onClick={() => onPick(Math.min(timeline.duration, Math.round((x.start + x.duration / 2) * 10) / 10))}>
+                {pic && <img src={url(`/assets/${pic}/file`)} alt="" loading="lazy" />}
+                <span className="tlb-n">{x.index + 1}</span>
+                <span className="tlb-d">{fmtSec(x.duration)}</span>
+              </button>
+            );
+          })}
+        </div>
+      )}
+    </section>
   );
 }
