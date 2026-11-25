@@ -316,3 +316,7 @@ textarea.vis { min-height: 0; field-sizing: content; }
 .scene-card.tall .scene-body > .scene-text { flex: 1 1 0; min-height: 0; overflow-y: auto; overscroll-behavior: contain; display: flex; flex-direction: column; gap: 8px; }
 .scene-card.tall .scene-body > dl.scene-text { display: grid; align-content: start; grid-auto-rows: max-content; }
 .scene-card.tall .scene-actions { position: static; margin: 0; padding: 0; border: 0; }
+/* the scene number floats over the top-left corner of its card */
+.scene-card { position: relative; }
+.scene-card .scene-n { position: absolute; top: 8px; left: 8px; z-index: 2; width: 34px; height: 34px; border: 3px solid var(--panel); box-shadow: 0 3px 10px rgba(11, 37, 34, .35); }
+.scene-card.wide .scene-body > div.scene-text { background: transparent; border: 0; padding: 0; }
