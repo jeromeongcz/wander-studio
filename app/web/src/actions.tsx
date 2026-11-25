@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { api, ApiError } from './api';
-import { Btn, Modal, StateBadge, useToast } from './ui';
-import type { Artifact } from './types';
+import { Btn, Icon, Modal, StateBadge, useToast } from './ui';
+import type { Artifact, State } from './types';
 
 /**
  * Save artifact content. Approved work is protected by the server; when it refuses, ask once and retry with
@@ -31,11 +31,25 @@ export async function withReopen<T>(fn: (reopen: boolean) => Promise<T>): Promis
   }
 }
 
+/** What each state means to the person: icon, headline, what to do, and how far along the Draft → Review → Approved track it is. */
+const LOOK: Record<State | 'empty', { icon: string; title: string; hint: string; reached: number }> = {
+  empty: { icon: 'spark', title: 'Nothing to review yet.', hint: 'Create the content below to get started.', reached: 0 },
+  not_started: { icon: 'spark', title: 'Ready when you are.', hint: 'Save your work, then submit it.', reached: 0 },
+  in_progress: { icon: 'spark', title: 'Draft in progress.', hint: 'Read it through, then submit it for review.', reached: 0 },
+  awaiting_review: { icon: 'clock', title: 'Your decision is needed.', hint: 'Check it carefully. Nothing moves on until you approve.', reached: 1 },
+  approved: { icon: 'check', title: 'Approved by you.', hint: 'Editing it asks first and keeps this version in history.', reached: 3 },
+  needs_revision: { icon: 'alert', title: 'Needs another pass.', hint: 'Update it, then submit it again.', reached: 0 },
+  rejected: { icon: 'alert', title: 'Rejected.', hint: 'Rework it, then submit it again.', reached: 0 },
+  failed: { icon: 'alert', title: 'Something failed.', hint: 'Fix the problem below and try again.', reached: 0 },
+};
+
 /** Review actions for one artifact: submit, approve, request revision, reject, history. Approval is always a deliberate click. */
 export function ArtifactBar({ artifact, onChanged, children }: { artifact: Artifact; onChanged: () => void; children?: React.ReactNode }) {
   const { push, fail } = useToast();
   const [hist, setHist] = useState<any>(null);
+  const [burst, setBurst] = useState(false);
   const a = artifact;
+  const look = !a.current_version_id && a.state === 'not_started' ? LOOK.empty : LOOK[a.state];
   const submit = async () => {
     const r = await api.post(`/artifacts/${a.id}/submit`);
     push(r.warnings?.length ? 'warn' : 'ok', r.warnings?.length ? 'Submitted for review, with warnings' : 'Submitted for review', r.warnings);
@@ -44,6 +58,8 @@ export function ArtifactBar({ artifact, onChanged, children }: { artifact: Artif
   const approve = async () => {
     await api.post(`/artifacts/${a.id}/approve`);
     push('ok', `${a.label} approved`);
+    setBurst(true);
+    setTimeout(() => setBurst(false), 1400);
     onChanged();
   };
   const simple = (path: string, msg: string) => async () => {
@@ -61,28 +77,37 @@ export function ArtifactBar({ artifact, onChanged, children }: { artifact: Artif
   };
   return (
     <>
-      <div className="bar">
-        <strong>{a.label}</strong>
-        <StateBadge state={a.state} />
-        {a.last_error && <span className="small" style={{ color: 'var(--bad)' }}>{a.last_error}</span>}
-        <span className="grow" />
-        {children}
-        <Btn small onClick={submit} disabled={!a.current_version_id || a.state === 'approved' || a.state === 'awaiting_review'} title="Run readiness checks and ask for approval">
-          Submit for review
-        </Btn>
-        <Btn small kind="primary" onClick={approve} disabled={a.state !== 'awaiting_review'} title="Only you can approve">
-          Approve
-        </Btn>
-        <Btn small onClick={simple('request-revision', 'Marked as needing revision')} disabled={a.state !== 'awaiting_review' && a.state !== 'approved'}>
-          Needs revision
-        </Btn>
-        <Btn small kind="danger" onClick={simple('reject', 'Rejected')} disabled={a.state !== 'awaiting_review'}>
-          Reject
-        </Btn>
-        <Btn small kind="ghost" onClick={openHistory} disabled={!a.current_version_id}>
-          History
-        </Btn>
-      </div>
+      <section className={`review rv-${a.state}${burst ? ' celebrate' : ''}`} aria-label={`Review: ${a.label}`}>
+        <span className="rv-icon" aria-hidden="true">
+          <Icon name={look.icon} />
+          {burst && <span className="rv-burst">{Array.from({ length: 10 }, (_, i) => <i key={i} style={{ '--a': `${i * 36}deg` } as React.CSSProperties} />)}</span>}
+        </span>
+        <div className="rv-main">
+          <div className="row gap wrap">
+            <h3>{a.label}</h3>
+            <StateBadge state={a.state} />
+            {children}
+          </div>
+          <p className="rv-msg">{look.title} <span className="muted">{look.hint}</span></p>
+          {a.last_error && <p className="small" style={{ color: 'var(--bad)', margin: 0 }}>{a.last_error}</p>}
+          <ol className="rv-track">
+            {['Draft', 'In review', 'Approved'].map((label, i) => (
+              <li key={label} className={i < look.reached ? 'done' : i === look.reached ? 'now' : ''} aria-current={i === look.reached ? 'step' : undefined}>{label}</li>
+            ))}
+          </ol>
+        </div>
+        <div className="rv-actions">
+          {a.state === 'awaiting_review' && <button type="button" className="btn btn-primary btn-lg" onClick={() => approve().catch(fail)}><Icon name="check" small /> Approve</button>}
+          {a.state !== 'awaiting_review' && a.state !== 'approved' && (
+            <Btn kind="primary" onClick={submit} disabled={!a.current_version_id} title={a.current_version_id ? 'Run readiness checks and ask for approval' : 'There is nothing to review yet'}>Submit for review <Icon name="arrow" small /></Btn>
+          )}
+          <div className="rv-more">
+            {(a.state === 'awaiting_review' || a.state === 'approved') && <Btn small onClick={simple('request-revision', 'Marked as needing revision')}>Request changes</Btn>}
+            {a.state === 'awaiting_review' && <Btn small kind="danger" onClick={simple('reject', 'Rejected')}>Reject</Btn>}
+            {a.current_version_id && <Btn small kind="ghost" onClick={openHistory}><Icon name="clock" small /> History</Btn>}
+          </div>
+        </div>
+      </section>
       {hist && (
         <Modal title={`History: ${a.label}`} wide onClose={() => setHist(null)}>
           <div className="grid g2">
