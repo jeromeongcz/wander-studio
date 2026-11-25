@@ -115,8 +115,10 @@ export function StoryboardStage() {
                 {picture(i)}
                 <div className="scene-body">
                   <div className="row gap"><span className="scene-n">{i + 1}</span><strong className="grow">{s.kind}</strong></div>
+                  <div className="scene-text" tabIndex={0}>
                   <p className="quote">“{s.text}”</p>
                   <dl className="scene-facts small">{['setting', 'characters', 'action', 'shot', 'mood', 'props'].filter((k) => s.visual?.[k]).map((k) => <div key={k}><dt>{k}</dt><dd>{s.visual[k]}</dd></div>)}</dl>
+                  </div>
                 </div>
               </article>
             ))}
@@ -142,6 +144,7 @@ export function StoryboardStage() {
                   <Btn small kind="ghost" onClick={() => move(i, 1)} disabled={i === c.scenes.length - 1}>↓</Btn>
                   <Btn small kind="ghost" onClick={() => edit({ scenes: c.scenes.filter((_: any, k: number) => k !== i) })}>Remove</Btn>
                 </div>
+                <div className="scene-text" tabIndex={0}>
                 {s.segment_text && <p className="quote">“{s.segment_text}”</p>}
                 <p className="visual-text">{s.visual_description}</p>
                 <details>
@@ -159,6 +162,7 @@ export function StoryboardStage() {
                   <Field label="Sound effects (comma separated)"><input value={(s.sfx_cues ?? []).join(', ')} onChange={(e) => setScene(i, { sfx_cues: e.target.value.split(',').map((x) => x.trim()).filter(Boolean) })} /></Field>
                 </div>
                 </details>
+                </div>
                 <div className="row gap wrap scene-actions">
                   <Pill>{fmtSec(s.target_duration)}</Pill><Pill>{s.camera.movement.replace('_', ' ')}</Pill><Pill>{(s.transition_in ?? 'cut')} in</Pill>
                   {sketches.data?.[i] && <StateBadge state={sketches.data[i].state} />}
