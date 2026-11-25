@@ -24,6 +24,9 @@ export function ResearchWorkspace() {
   const { push, fail } = useToast();
   const status = useAsync(() => api.get<any>('/research/status'), []);
   const data = useAsync(() => api.get<any>('/studio/research'), []);
+  const videos = useAsync(() => api.get<{ id: string; name: string }[]>('/projects'), []);
+  // the video started from a topic; matched by name when the server has not recorded the link
+  const videoOf = (t: any): string | undefined => t.video_project_id ?? videos.data?.find((v) => v.name === t.title.slice(0, 120))?.id;
   const [category, setCategory] = useState('');
   const [focus, setFocus] = useState('');
   const [count, setCount] = useState(5);
@@ -79,7 +82,7 @@ export function ResearchWorkspace() {
           {t.status === 'approved' && <Btn small kind="primary" onClick={() => setStarting(t)}>Start a video from this <Icon name="arrow" small /></Btn>}
           {t.status === 'approved' && <Btn small kind="ghost" onClick={async () => { await api.post(`/topic-ideas/${t.id}/restore`); data.reload(); }}>Undo approval</Btn>}
           {t.status === 'dismissed' && <Btn small onClick={async () => { await api.post(`/topic-ideas/${t.id}/restore`); data.reload(); }}>Restore</Btn>}
-          {t.status === 'used' && <><Pill tone="good">video started</Pill>{t.video_project_id && <a className="btn btn-sm btn-primary" href={`#/p/${t.video_project_id}/research`}>Open video <Icon name="arrow" small /></a>}</>}
+          {t.status === 'used' && <><Pill tone="good">video started</Pill>{videoOf(t) ? <a className="btn btn-sm btn-primary" href={`#/p/${videoOf(t)}/research`}>Open video <Icon name="arrow" small /></a> : <a className="btn btn-sm btn-primary" href="#/projects">Go to Video Production <Icon name="arrow" small /></a>}</>}
           {t.approved_at && t.status === 'approved' && <span className="muted small">approved {new Date(t.approved_at).toLocaleDateString()}</span>}
         </div>
       </section>
