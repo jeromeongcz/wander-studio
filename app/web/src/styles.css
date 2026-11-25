@@ -193,3 +193,16 @@ a.step:hover .step-dot { border-color: var(--brand); }
   .notif-panel { position: fixed; left: 12px; right: 12px; top: 60px; width: auto; }
   .hero { flex-direction: column; align-items: stretch; } .hero .btn { width: 100%; }
 }
+
+/* ---------- Video Production pipeline ---------- */
+.pipeline { display: flex; flex-direction: column; gap: 18px; }
+.stage { background: var(--panel3); border: 1px solid var(--line); border-radius: 18px; padding: 18px 20px 20px; }
+.stage-h { display: flex; align-items: center; gap: 14px; margin-bottom: 14px; }
+.stage-h h2 { font-size: 18px; }
+.stage-n { width: 38px; height: 38px; border-radius: 50%; background: var(--brand); color: var(--brand-ink); display: grid; place-items: center; font-weight: 800; flex: none; }
+.stage-empty { padding: 18px; text-align: center; color: var(--muted); border: 1.5px dashed var(--line-strong); border-radius: var(--radius); }
+.ws { display: grid; grid-template-columns: minmax(0, 1fr) minmax(300px, 400px); gap: 18px; align-items: start; }
+.ws-topics { grid-column: 1; grid-row: 1; } .ws-form { grid-column: 2; grid-row: 1; position: sticky; top: 68px; }
+details summary { cursor: pointer; padding: 6px 0; font-weight: 600; }
+@media (max-width: 1000px) { .ws { grid-template-columns: minmax(0, 1fr); } .ws-form { grid-column: 1; grid-row: 1; position: static; } .ws-topics { grid-row: 2; } }
+.ws .section-h { flex-direction: column; align-items: flex-start; gap: 2px; }

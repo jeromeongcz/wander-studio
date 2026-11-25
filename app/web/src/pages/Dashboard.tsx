@@ -3,6 +3,7 @@ import { api } from '../api';
 import { useAsync, useInterval } from '../hooks';
 import { Btn, Card, Empty, ErrorBox, Field, Icon, Loading, Pill, useToast } from '../ui';
 import { STEPS, analyze } from '../pipeline';
+import { ResearchWorkspace } from './ResearchStudio';
 import { LANG_LABEL, formatName, langName } from '../types';
 import { CategoryPicker } from '../stages/shared';
 import type { Project } from '../types';
@@ -85,7 +86,7 @@ export function Dashboard() {
   );
 }
 
-/** Video Production: every video and its six steps. */
+/** Video Production: the six steps in order. Step 1 is the research workspace; the others show which videos are at that step. */
 export function VideoProduction() {
   const { projects, jobs, rows } = useBoard();
   const [creating, setCreating] = useState(false);
@@ -94,20 +95,30 @@ export function VideoProduction() {
       <section className="hero">
         <div className="grow">
           <h1>Video Production</h1>
-          <p>Every video moves through six steps, and you approve each one. Start from an approved topic in the Research Studio, or begin with a blank video.</p>
+          <p>Every video moves through six steps and you approve each one. Start from an approved topic in step 1, or begin with a blank video.</p>
         </div>
-        <a className="btn btn-primary" href="#/research"><Icon name="spark" small /> Research a topic</a>
         <Btn onClick={() => setCreating(true)}><Icon name="plus" small /> Blank video</Btn>
       </section>
-      <div className="how" aria-label="The six steps">
-        {STEPS.map((s) => <div key={s.id}><em>{s.n}</em><b>{s.label}</b><span>{s.short}</span></div>)}
-      </div>
       {creating && <NewProject onDone={(id) => { location.hash = `#/p/${id}/research`; }} onCancel={() => setCreating(false)} />}
       <JobsCard jobs={jobs.data} />
-      {projects.loading && !projects.data && <Loading what="Loading videos" />}
       {projects.error && <ErrorBox error={projects.error} retry={projects.reload} />}
-      {projects.data && rows.length === 0 && !creating && <Empty>No videos yet. Go to the <a href="#/research">Research Studio</a> to search and approve a topic.</Empty>}
-      <div className="grid g2">{rows.map((r) => <ProjectCard key={r.p.id} {...r} />)}</div>
+      <div className="pipeline">
+        {STEPS.map((s, idx) => {
+          const here = rows.filter((r) => r.flow.current === idx && !r.flow.allDone);
+          const finished = idx === STEPS.length - 1 ? rows.filter((r) => r.flow.allDone) : [];
+          const list = [...here, ...finished];
+          return (
+            <section key={s.id} className="stage" aria-labelledby={`st-${s.id}`}>
+              <header className="stage-h">
+                <span className="stage-n">{s.n}</span>
+                <div className="grow"><h2 id={`st-${s.id}`}>{idx === 0 ? 'Research Studio' : s.label}</h2><span className="muted">{idx === 0 ? 'Search a topic, approve it, start a video' : s.short}</span></div>
+                <Pill tone={list.length ? 'info' : 'neutral'}>{list.length} video{list.length === 1 ? '' : 's'}</Pill>
+              </header>
+              {idx === 0 ? <div className="stack"><ResearchWorkspace />{list.length > 0 && <div><h3 style={{ margin: '4px 0 10px' }}>Videos at this step</h3><div className="grid g2">{list.map((r) => <ProjectCard key={r.p.id} {...r} />)}</div></div>}</div> : list.length === 0 ? <div className="stage-empty">{projects.loading && !projects.data ? 'Loading…' : 'No videos at this step.'}</div> : <div className="grid g2">{list.map((r) => <ProjectCard key={r.p.id} {...r} />)}</div>}
+            </section>
+          );
+        })}
+      </div>
     </div>
   );
 }
