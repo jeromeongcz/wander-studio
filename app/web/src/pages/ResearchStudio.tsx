@@ -103,7 +103,14 @@ export function ResearchWorkspace() {
                 </Field>
                 <Field label="Extra notes (optional)"><input value={notes} onChange={(e) => setNotes(e.target.value)} maxLength={600} placeholder="e.g. skip anything about wars" /></Field>
               </div>
-              {!status.data && <Loading what="Checking Claude Code" />}
+              {!status.data && status.loading && <Loading what="Checking Claude Code" />}
+              {!status.data && status.error && (
+                <div className="notice bad">
+                  <strong>Could not check Claude Code.</strong> {status.error.message}
+                  <div style={{ marginTop: 6 }}>If you updated the app, stop the server in your terminal (Ctrl+C), run <code>npm start</code> again, then refresh this page.</div>
+                  <div className="row gap" style={{ marginTop: 8 }}><Btn small onClick={async () => { status.reload(); }}>Try again</Btn></div>
+                </div>
+              )}
               {cc && ready && <div className="notice small">✓ {cc.detail}. It searches the web with web tools only: it cannot read your files or run commands, and it uses your Claude plan.</div>}
               {cc && !ready && (
                 <div className="notice warn">

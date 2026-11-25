@@ -1,11 +1,9 @@
-import { useState } from 'react';
 import { api } from '../api';
 import { useAsync, useInterval } from '../hooks';
-import { Btn, Card, Empty, ErrorBox, Field, Icon, Loading, Pill, useToast } from '../ui';
+import { Card, Empty, ErrorBox, Icon, Loading, Pill } from '../ui';
 import { STEPS, analyze } from '../pipeline';
 import { ResearchWorkspace } from './ResearchStudio';
-import { LANG_LABEL, formatName, langName } from '../types';
-import { CategoryPicker } from '../stages/shared';
+import { formatName, langName } from '../types';
 import type { Project } from '../types';
 
 function useBoard() {
@@ -89,17 +87,14 @@ export function Dashboard() {
 /** Video Production: the six steps in order. Step 1 is the research workspace; the others show which videos are at that step. */
 export function VideoProduction() {
   const { projects, jobs, rows } = useBoard();
-  const [creating, setCreating] = useState(false);
   return (
     <div className="stack">
       <section className="hero">
         <div className="grow">
           <h1>Video Production</h1>
-          <p>Every video moves through six steps and you approve each one. Start from an approved topic in step 1, or begin with a blank video.</p>
+          <p>Every video moves through six steps and you approve each one. Start from an approved topic in step 1.</p>
         </div>
-        <Btn onClick={() => setCreating(true)}><Icon name="plus" small /> Blank video</Btn>
       </section>
-      {creating && <NewProject onDone={(id) => { location.hash = `#/p/${id}/research`; }} onCancel={() => setCreating(false)} />}
       <JobsCard jobs={jobs.data} />
       {projects.error && <ErrorBox error={projects.error} retry={projects.reload} />}
       <div className="pipeline">
@@ -140,42 +135,5 @@ function ProjectCard({ p, flow }: { p: Project; flow: ReturnType<typeof analyze>
         {flow.allDone ? <><Icon name="check" small /><b>All steps approved</b></> : <><Icon name="arrow" small /><span>Step {cur.step.n} of 6 · <b>{cur.waiting ? `Approve ${cur.step.label.toLowerCase()}` : cur.attention ? `Fix ${cur.step.label.toLowerCase()}` : cur.step.action}</b></span></>}
       </div>
     </a>
-  );
-}
-
-function NewProject({ onDone, onCancel }: { onDone: (id: string) => void; onCancel: () => void }) {
-  const { fail } = useToast();
-  const locales = useAsync(() => api.get<{ code: string; name: string }[]>('/locales'), []);
-  const [name, setName] = useState('');
-  const [category, setCategory] = useState('');
-  const [langs, setLangs] = useState<string[]>(['en']);
-  const [formats, setFormats] = useState<string[]>(['vertical_9x16']);
-  const toggle = (arr: string[], v: string, set: (x: string[]) => void) => set(arr.includes(v) ? arr.filter((x) => x !== v) : [...arr, v]);
-  const valid = name.trim() && langs.length && formats.length;
-  return (
-    <Card title="Blank video" actions={<Btn small kind="ghost" onClick={onCancel}>Cancel</Btn>}>
-      <div className="form">
-        <Field label="Name"><input autoFocus value={name} onChange={(e) => setName(e.target.value)} placeholder="Why octopuses have three hearts" /></Field>
-        <CategoryPicker value={category} onChange={setCategory} />
-        <Field label="Languages" hint="Each language gets its own script, voice, captions, approvals and renders">
-          <div className="row gap wrap">
-            {(locales.data ?? []).map((l) => <label key={l.code} className="row gap"><input type="checkbox" checked={langs.includes(l.code)} onChange={() => toggle(langs, l.code, setLangs)} />{LANG_LABEL[l.code] ?? l.name}</label>)}
-          </div>
-        </Field>
-        <Field label="Formats">
-          <div className="row gap wrap">
-            {['vertical_9x16', 'horizontal_16x9', 'square_1x1'].map((f) => <label key={f} className="row gap"><input type="checkbox" checked={formats.includes(f)} onChange={() => toggle(formats, f, setFormats)} />{formatName(f)}</label>)}
-          </div>
-        </Field>
-      </div>
-      <div className="row" style={{ marginTop: 12 }}>
-        <Btn kind="primary" disabled={!valid} onClick={async () => {
-          try {
-            const r = await api.post('/projects', { name: name.trim(), category, languages: langs, formats });
-            onDone(r.id);
-          } catch (e) { fail(e); }
-        }}>Create video</Btn>
-      </div>
-    </Card>
   );
 }
