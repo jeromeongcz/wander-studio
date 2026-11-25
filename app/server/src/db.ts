@@ -234,6 +234,37 @@ const MIGRATIONS: string[] = [
   ALTER TABLE jobs ADD COLUMN retry_of TEXT;
   ALTER TABLE jobs ADD COLUMN message TEXT;
   `,
+  // v8: AI topic research. Ideas are suggestions, not approved work, so they live outside the artifact graph.
+  `
+  CREATE TABLE topic_batches (
+    id TEXT PRIMARY KEY,
+    project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    category TEXT,
+    focus TEXT,
+    notes TEXT,
+    requested_count INTEGER NOT NULL,
+    source TEXT NOT NULL CHECK (source IN ('claude-code','manual')),
+    state TEXT NOT NULL CHECK (state IN ('queued','running','done','partial','failed','cancelled')),
+    message TEXT,
+    rejected_json TEXT NOT NULL DEFAULT '[]',
+    job_id TEXT,
+    created_at TEXT NOT NULL,
+    finished_at TEXT
+  );
+  CREATE TABLE topic_ideas (
+    id TEXT PRIMARY KEY,
+    project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    batch_id TEXT NOT NULL REFERENCES topic_batches(id) ON DELETE CASCADE,
+    title TEXT NOT NULL,
+    hook TEXT NOT NULL,
+    confidence TEXT NOT NULL CHECK (confidence IN ('well-documented','disputed','legend')),
+    note TEXT,
+    facts_json TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'new' CHECK (status IN ('new','used','dismissed')),
+    created_at TEXT NOT NULL
+  );
+  CREATE INDEX idx_topic_ideas_project ON topic_ideas(project_id, status);
+  `,
 ];
 
 export function openDb(path: string = ':memory:'): DatabaseSync {

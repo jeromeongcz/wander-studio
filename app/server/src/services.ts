@@ -34,6 +34,7 @@ import { PublishService } from './publish/service.ts';
 import { CacheService } from './cache.ts';
 import { TemplateService } from './templates.ts';
 import { JobRunner } from './jobs.ts';
+import { ResearchService } from './research/service.ts';
 import type { JobHandler } from './jobs.ts';
 import { requireHealthy, runPreflight } from './preflight.ts';
 import { scriptEstimate } from './studios/script.ts';
@@ -57,6 +58,7 @@ export class Studio {
   cache: CacheService;
   templates: TemplateService;
   jobs: JobRunner;
+  research: ResearchService;
   constructor(engine: Engine, config: Partial<AppConfig> = {}) {
     this.engine = engine;
     this.config = resolveConfig(config);
@@ -68,6 +70,7 @@ export class Studio {
     this.cache = new CacheService(this.config);
     this.templates = new TemplateService(engine);
     this.jobs = new JobRunner(engine, this.jobHandlers());
+    this.research = new ResearchService(this);
   }
 
   estimateScript(sc: ScriptContent): number {
@@ -118,6 +121,7 @@ export class Studio {
         if (failed.length) throw new EngineError('BATCH_PARTIAL', `${failed.length} of ${items.length} renders failed; the others finished`, items);
         return { items, note: comps.length ? undefined : 'No approved compositions to render' };
       },
+      research_topics: async (ctx) => this.research.run(ctx.params.batchId, ctx),
       align_captions: async (ctx) => {
         guard(ctx);
         return this.alignCaptions(ctx.params.captionId, { method: ctx.params.method, reopen: ctx.params.reopen === true });

@@ -69,7 +69,7 @@ function rowToAsset(r: any): Asset {
   };
 }
 
-function isPrivateHost(host: string): boolean {
+export function isPrivateHost(host: string): boolean {
   const h = host.toLowerCase().replace(/^\[|\]$/g, '');
   if (h === 'localhost' || h.endsWith('.localhost') || h.endsWith('.local') || h === '::1') return true;
   const m = h.match(/^(\d+)\.(\d+)\.(\d+)\.(\d+)$/);

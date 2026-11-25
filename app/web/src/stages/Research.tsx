@@ -3,12 +3,13 @@ import { api } from '../api';
 import { ArtifactBar, saveArtifact } from '../actions';
 import { useProject } from '../pages/Project';
 import { useAsync } from '../hooks';
-import { Btn, Card, Empty, Field, Loading, Pill, useToast } from '../ui';
+import { Btn, Card, Empty, Field, Loading, Pill, Tabs, useToast } from '../ui';
+import { TopicsPanel } from './Topics';
 
 const CHECKLIST = ['Every key fact has at least one source', 'Dates, names and numbers were double-checked', 'Unverified claims are marked or removed', 'Creative speculation is labelled as speculation', 'No AI-generated summary is treated as verified'];
 const uid = (p: string) => `${p}${Math.random().toString(36).slice(2, 7)}`;
 
-export function ResearchStage() {
+function ResearchNotes() {
   const { project, find, reload } = useProject();
   const art = find('research')!;
   const { push } = useToast();
@@ -86,6 +87,19 @@ export function ResearchStage() {
         </div>
       </Card>
       <div className="row gap"><Btn kind="primary" onClick={save} disabled={!dirty}>Save research</Btn><span className="muted small">Then submit it for review above. Submission is blocked until the checklist is complete and verified claims have sources.</span></div>
+    </>
+  );
+}
+
+/** Research has two parts: find sourced topic ideas with AI, then keep research notes for the chosen topic. */
+export function ResearchStage() {
+  const { find } = useProject();
+  const art = find('research')!;
+  const [tab, setTab] = useState<'topics' | 'notes'>(art.current_version_id ? 'notes' : 'topics');
+  return (
+    <>
+      <Tabs value={tab} onChange={setTab} items={[{ id: 'topics', label: 'Find topics' }, { id: 'notes', label: 'Research notes' }]} />
+      {tab === 'topics' ? <TopicsPanel hasNotes={!!art.current_version_id} onUsed={() => setTab('notes')} /> : <ResearchNotes />}
     </>
   );
 }

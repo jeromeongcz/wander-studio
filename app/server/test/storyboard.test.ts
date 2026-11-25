@@ -45,49 +45,34 @@ async function setup(ctx: Ctx, category = 'Science', approveBase = true) {
 const sceneAssets = (ctx: Ctx, id: string) => ctx.engine.list(id, { kind: 'scene_asset' });
 const getSb = async (ctx: Ctx, sb: string) => (await ctx.call('GET', `/artifacts/${sb}`)).json;
 
-test('categories: all plan categories present, recommendations differ, unknown falls back to custom', () => {
-  const names = listCategories().map((c) => c.name);
-  for (const n of ['Documentary', 'History', 'Mysteries', 'Science', 'Technology', 'Education', 'Psychology', 'Motivational Stories', 'Travel', 'Nature', 'Adventure', 'Biographies', 'Fictional Storytelling', 'Interesting Facts']) {
-    assert.ok(names.includes(n), n);
-  }
-  for (const n of ['Horror & Folklore', 'Filipino Folklore', 'Urban Legends', 'Mythology', 'True Crime', 'Space & Astronomy', 'Health & Wellness', 'Finance & Business', 'Sports', 'Food & Cooking', 'Animals & Pets', 'Gaming', 'Movies & TV', 'Music & Arts', 'Philosophy', 'How-To & Life Hacks', 'News & Current Events', 'Comedy & Skits', 'Philippine History']) {
-    assert.ok(names.includes(n), n);
-    assert.equal(profileFor(n).custom, false, n);
-  }
-  // every profile is well-formed: valid asset types, camera moves and transition
-  for (const c of listCategories()) {
+test('categories: exactly your six topics, each well-formed; anything else is a custom category with general defaults', () => {
+  const list = listCategories();
+  assert.deepEqual(list.map((c) => c.name), ['Philippine History', 'Mythology and Folklore', 'Culture and Traditions', 'Food Origins', 'Geography', 'Superstitions']);
+  for (const c of list) {
+    assert.equal(profileFor(c.name).custom, false, c.name);
     assert.ok(c.profile.assets.length >= 3 && c.profile.assets.every((a) => ASSET_TYPES.includes(a)), `${c.name} assets`);
     assert.ok(c.profile.cameras.length >= 2 && c.profile.cameras.every((m) => MOVEMENTS.includes(m)), `${c.name} cameras`);
     assert.ok(TRANSITIONS.includes(c.profile.transition), `${c.name} transition`);
-    assert.ok(c.profile.styles.length >= 1 && c.profile.hint.length > 5, `${c.name} text`);
+    assert.ok(c.profile.styles.length >= 1 && c.profile.hint.length > 5 && (c.profile.notes ?? '').length > 20, `${c.name} text`);
   }
-  assert.equal(new Set(names.map((n) => n.toLowerCase())).size, names.length, 'no duplicate names');
-  const all = listCategories();
-  assert.ok(names.length >= 70, `${names.length} categories`);
-  // every category is in a named group and in exactly one of the two lists
-  for (const c of all) {
-    assert.notEqual(c.group, 'More', `${c.name} has no group`);
-    assert.ok(c.region === 'philippines' || c.region === 'general', `${c.name} region`);
-  }
-  const ph = all.filter((c) => c.region === 'philippines');
-  const gen = all.filter((c) => c.region === 'general');
-  assert.ok(ph.length >= 20 && gen.length >= 40, `${ph.length} Philippine / ${gen.length} worldwide`);
-  assert.deepEqual(all.slice(0, ph.length).map((c) => c.region), Array(ph.length).fill('philippines'), 'Philippine list comes first');
-  for (const n of ['Filipino Folklore', 'Philippine History', 'Philippine Travel & Destinations', 'Filipino Food & Street Food', 'OFW Stories & Life Abroad', 'Tagalog & Filipino Language Lessons', 'Philippine News & Current Affairs']) assert.equal(profileFor(n).custom || all.find((c) => c.name === n)!.region !== 'philippines', false, `${n} is a Philippine category`);
-  for (const n of ['Horror & Folklore', 'Science', 'Travel', 'Gaming', 'Language Learning', 'History']) assert.equal(all.find((c) => c.name === n)!.region, 'general', `${n} is worldwide`);
-  assert.deepEqual([...new Set(ph.map((c) => c.group))], ['Stories & folklore', 'History & people', 'Culture & everyday life', 'Entertainment & humor', 'Places & nature', 'News, money & work']);
-  for (const n of ['Ghost Stories & Paranormal', 'Language Learning', 'Kids & Bedtime Stories', 'Conspiracies & Debunking', 'Anime & Comics']) assert.ok(names.includes(n), n);
-  assert.ok(profileFor('history').profile.assets.includes('map'));
-  assert.ok(profileFor('Science').profile.assets.includes('infographic'));
-  assert.ok(profileFor('Fictional_Storytelling').profile.assets.includes('character'));
-  const custom = profileFor('Cooking');
+  // lookups ignore case, spaces and underscores
+  assert.equal(profileFor('philippine_history').custom, false);
+  assert.equal(profileFor('FOOD ORIGINS').name, 'Food Origins');
+  assert.ok(profileFor('Philippine History').profile.assets.includes('map'));
+  assert.ok(profileFor('Geography').profile.assets.includes('map'));
+  assert.ok(profileFor('Food Origins').profile.assets.includes('map'));
+  // removed categories (country lists and the old generic ones) no longer exist
+  for (const gone of ['Filipino Folklore', 'Philippine Travel & Destinations', 'Horror & Folklore', 'Science', 'History', 'Interesting Facts', 'Sports', 'Mysteries']) assert.equal(profileFor(gone).custom, true, `${gone} is gone`);
+  const custom = profileFor('Cooking for beginners');
   assert.equal(custom.custom, true);
-  assert.equal(custom.name, 'Cooking');
+  assert.equal(custom.name, 'Cooking for beginners');
+  assert.equal(profileFor('').name, 'Custom');
+  assert.equal(profileFor(null).custom, true);
 });
 
 test('draft generator covers every section, avoids repeated camera moves, and marks scenes as drafts', () => {
   const base = { title: 'T', lang: 'en', preset: 'short_30_45' as const, sections: SECTIONS as any };
-  const d = draftScenes(base, 'Nature', { samples: [], sceneSeconds: 3 });
+  const d = draftScenes(base, 'Geography', { samples: [], sceneSeconds: 3 });
   assert.ok(d.scenes.length >= 4, 'long main section was split');
   assert.deepEqual([...new Set(d.scenes.map((s) => s.script_segment_id))].sort(), ['c', 'h', 'm']);
   for (let i = 1; i < d.scenes.length; i++) {
@@ -104,7 +89,7 @@ test('seeding needs an approved base; creates scenes, ids, scene-asset artifacts
   const early = await setup(ctx, 'Science', false);
   assert.equal((await ctx.call('POST', `/artifacts/${early.sb}/seed-storyboard`, {})).status, 409);
 
-  const { id, sb } = await setup(ctx, 'History');
+  const { id, sb } = await setup(ctx, 'Philippine History');
   // second project in same db: seed the approved one
   const projects = (await ctx.call('GET', '/projects')).json as any[];
   assert.equal(projects.length, 2);
@@ -240,13 +225,13 @@ test('timeline: audio-anchored durations override estimates per language without
 
 test('storyboard prompt includes enums, category guidance and the script', async () => {
   const ctx = boot();
-  const { sb } = await setup(ctx, 'Fictional Storytelling');
+  const { sb } = await setup(ctx, 'Mythology and Folklore');
   const p = (await ctx.call('GET', `/artifacts/${sb}/storyboard-prompt`)).json.prompt as string;
   assert.match(p, /ken_burns/);
   assert.match(p, /motion_graphic/);
   assert.match(p, /character sheet/i);
   assert.match(p, /"id": "m"/);
   assert.match(p, /9:16/);
-  const recs = await ctx.call('GET', '/categories/Mysteries/recommendations');
+  const recs = await ctx.call('GET', '/categories/Superstitions/recommendations');
   assert.equal(recs.json.custom, false);
 });

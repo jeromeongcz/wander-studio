@@ -187,3 +187,21 @@ export function FilePick({ accept, onFile, label = 'Choose file' }: { accept: st
     </label>
   );
 }
+
+const ICONS: Record<string, string> = {
+  check: 'M20 6 9 17l-5-5',
+  lock: 'M7 11V8a5 5 0 0 1 10 0v3M5 11h14v10H5z',
+  plus: 'M12 5v14M5 12h14',
+  arrow: 'M5 12h14M13 6l6 6-6 6',
+  sun: 'M12 3v2M12 19v2M3 12h2M19 12h2M5.6 5.6 7 7M17 17l1.4 1.4M5.6 18.4 7 17M17 7l1.4-1.4M12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8z',
+  moon: 'M21 12.8A9 9 0 1 1 11.2 3 7 7 0 0 0 21 12.8z',
+  clock: 'M12 7v5l3 2M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18z',
+  alert: 'M12 9v4M12 17h.01M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z',
+  film: 'M4 4h16v16H4zM4 9h16M4 15h16M9 4v16M15 4v16',
+  inbox: 'M22 12h-6l-2 3h-4l-2-3H2M5.5 5h13l3.5 7v6a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2v-6z',
+  spark: 'M12 3l2.2 5.8L20 11l-5.8 2.2L12 19l-2.2-5.8L4 11l5.8-2.2z',
+  rocket: 'M5 15c-1.5 1.3-2 5-2 5s3.7-.5 5-2M9 15l-3-3 6-7c2-2 6-2.5 8-2.5 0 2-.5 6-2.5 8l-7 6zM15 9h.01',
+};
+export const Icon = ({ name, small }: { name: keyof typeof ICONS | string; small?: boolean }) => (
+  <svg className={`icon${small ? ' icon-sm' : ''}`} viewBox="0 0 24 24" aria-hidden="true"><path d={ICONS[name] ?? ''} /></svg>
+);

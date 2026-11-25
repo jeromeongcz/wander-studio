@@ -13,6 +13,8 @@ export interface AppConfig {
   tts?: Omit<TtsConfig, 'ffmpeg'>;
   /** Optional whisper.cpp alignment: binary and a model file YOU downloaded. */
   whisper?: { bin?: string; model?: string };
+  /** Optional AI research bridge: path to the Claude Code command (default: found automatically). */
+  llm?: { claudeBin?: string };
   /** Directories scanned for caption fonts (TTF/OTF). */
   fontDirs?: string[];
   maxImportBytes: number;
@@ -24,5 +26,5 @@ export function defaultRoot(): string {
 }
 
 export function resolveConfig(c: Partial<AppConfig> = {}): AppConfig {
-  return { root: c.root ?? defaultRoot(), ffprobePath: c.ffprobePath, fetchFn: c.fetchFn, tts: c.tts, whisper: c.whisper, fontDirs: c.fontDirs, maxImportBytes: c.maxImportBytes ?? 2 * 1024 ** 3, maxRemoteBytes: c.maxRemoteBytes ?? 25 * 1024 ** 2 };
+  return { root: c.root ?? defaultRoot(), ffprobePath: c.ffprobePath, fetchFn: c.fetchFn, tts: c.tts, whisper: c.whisper, llm: c.llm, fontDirs: c.fontDirs, maxImportBytes: c.maxImportBytes ?? 2 * 1024 ** 3, maxRemoteBytes: c.maxRemoteBytes ?? 25 * 1024 ** 2 };
 }

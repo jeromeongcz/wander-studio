@@ -1,9 +1,11 @@
-import { createContext, useContext, useMemo } from 'react';
+import { createContext, useContext, useMemo, useState } from 'react';
 import { api } from '../api';
 import { useAsync } from '../hooks';
-import { Card, ErrorBox, Loading, Pill, StateBadge } from '../ui';
+import { Btn, Card, ErrorBox, Icon, Loading, Modal, Pill, StateBadge, useToast } from '../ui';
 import { formatName, langName } from '../types';
 import type { Artifact, Project, State } from '../types';
+import { STEPS, aggregate, analyze, stepOfPart } from '../pipeline';
+import type { StepInfo } from '../pipeline';
 import { ProjectDetailsEditor } from '../stages/shared';
 import { DeleteProject } from '../stages/DeleteProject';
 import { ResearchStage } from '../stages/Research';
@@ -25,27 +27,113 @@ interface Ctx {
 const ProjectCtx = createContext<Ctx>(null as never);
 export const useProject = () => useContext(ProjectCtx);
 
-export const STAGES = [
-  { id: 'overview', label: 'Overview', kinds: [] as string[] },
-  { id: 'research', label: 'Research', kinds: ['research'] },
-  { id: 'script', label: 'Script', kinds: ['script_base'] },
-  { id: 'localize', label: 'Localization', kinds: ['script_lang'] },
-  { id: 'storyboard', label: 'Storyboard', kinds: ['storyboard'] },
-  { id: 'visuals', label: 'Visuals', kinds: ['scene_asset'] },
-  { id: 'audio', label: 'Voice & audio', kinds: ['audio'] },
-  { id: 'captions', label: 'Captions', kinds: ['caption'] },
-  { id: 'compose', label: 'Compose & render', kinds: ['composition', 'final_render'] },
-  { id: 'publish', label: 'Publish', kinds: ['subtitle_export'] },
-];
+const PARTS = STEPS.flatMap((s) => s.parts.map((p) => ({ ...p, step: s })));
 
-const aggregate = (arts: Artifact[]): State | 'none' => {
-  if (!arts.length) return 'none';
-  if (arts.some((a) => a.state === 'needs_revision' || a.state === 'rejected' || a.state === 'failed')) return 'needs_revision';
-  if (arts.every((a) => a.state === 'approved')) return 'approved';
-  if (arts.some((a) => a.state === 'awaiting_review')) return 'awaiting_review';
-  if (arts.every((a) => a.state === 'not_started')) return 'not_started';
-  return 'in_progress';
-};
+function Stepper({ infos, viewing, projectId }: { infos: StepInfo[]; viewing: number; projectId: string }) {
+  return (
+    <nav className="stepper" aria-label="Production steps">
+      <ol>
+        {infos.map((i, idx) => {
+          const cls = ['step', i.done ? 'done' : '', idx === viewing ? 'current' : '', i.locked ? 'locked' : '', i.attention ? 'attention' : i.waiting ? 'waiting' : ''].join(' ');
+          const sub = i.locked ? 'Locked' : i.done ? 'Approved' : i.attention ? 'Needs attention' : i.waiting ? 'Waiting for you' : i.step.short;
+          const inner = (
+            <>
+              <span className="step-dot">{i.done ? <Icon name="check" /> : i.locked ? <Icon name="lock" small /> : i.step.n}</span>
+              <span className="step-label">{i.step.label}</span>
+              <span className="step-sub">{sub}</span>
+            </>
+          );
+          const first = i.step.parts.find((p) => !i.artifacts.length || aggregate(i.artifacts.filter((a) => p.kinds.includes(a.kind))) !== 'approved') ?? i.step.parts[0];
+          return (
+            <li key={i.step.id}>
+              {i.locked ? (
+                <span className={cls} aria-disabled="true" title={`Approve ${infos[idx - 1].step.label} first`}>{inner}</span>
+              ) : (
+                <a className={cls} href={`#/p/${projectId}/${first.id}`} aria-current={idx === viewing ? 'step' : undefined}>{inner}</a>
+              )}
+            </li>
+          );
+        })}
+      </ol>
+    </nav>
+  );
+}
+
+/** The footer of every step: what is done, what unlocks the next step, and (for the topic) the explicit approval. */
+function StepFooter({ info, next, projectId, reload }: { info: StepInfo; next?: StepInfo; projectId: string; reload: () => void }) {
+  const { find } = useProject();
+  const { push } = useToast();
+  const [confirm, setConfirm] = useState(false);
+  const research = find('research');
+  const isTopic = info.step.id === 'topic' && research;
+  const go = () => { location.hash = `#/p/${projectId}/${next!.step.parts[0].id}`; };
+  if (info.done) {
+    return (
+      <div className="stepfoot ready">
+        <Icon name="check" /><strong>{info.step.label} approved.</strong>
+        <span className="grow" />
+        {next && <Btn kind="primary" onClick={go}>Continue to {next.step.label} <Icon name="arrow" small /></Btn>}
+        {!next && <span className="muted">Every step is approved. Export your package above.</span>}
+      </div>
+    );
+  }
+  if (isTopic) {
+    const r = research!;
+    return (
+      <>
+        <div className="stepfoot">
+          <Icon name="lock" />
+          <span className="grow">{r.state === 'awaiting_review' ? <><strong>Your topic is ready for your decision.</strong> Nothing moves on until you approve it.</> : r.current_version_id ? <>Submit the topic for review to run the checks, then approve it to unlock <strong>Script</strong>.</> : <>Pick a topic above with <strong>Use for this video</strong>, or fill in the research notes. Then you approve it to unlock <strong>Script</strong>.</>}</span>
+          {r.state === 'awaiting_review' ? (
+            <Btn kind="primary" onClick={() => setConfirm(true)}>Approve topic &amp; continue <Icon name="arrow" small /></Btn>
+          ) : (
+            <Btn kind="primary" disabled={!r.current_version_id} onClick={async () => {
+              const res = await api.post(`/artifacts/${r.id}/submit`);
+              push(res.warnings?.length ? 'warn' : 'ok', res.warnings?.length ? 'Submitted, with warnings' : 'Submitted: review and approve it', res.warnings);
+              reload();
+            }}>Submit topic for review</Btn>
+          )}
+        </div>
+        {confirm && <TopicApproval artifactId={r.id} onClose={() => setConfirm(false)} onApproved={() => { setConfirm(false); reload(); location.hash = `#/p/${projectId}/script`; }} />}
+      </>
+    );
+  }
+  return (
+    <div className="stepfoot">
+      <Icon name="lock" />
+      <span className="grow">{info.attention ? <>Something here needs revision. </> : null}Approve everything in <strong>{info.step.label}</strong>{next ? <> to unlock <strong>{next.step.label}</strong></> : null}. Only you can approve.</span>
+    </div>
+  );
+}
+
+function TopicApproval({ artifactId, onClose, onApproved }: { artifactId: string; onClose: () => void; onApproved: () => void }) {
+  const art = useAsync(() => api.get<any>(`/artifacts/${artifactId}`), [artifactId]);
+  const { push } = useToast();
+  const c = art.data?.content;
+  return (
+    <Modal title="Approve this topic?" onClose={onClose}>
+      {!c ? <Loading /> : (
+        <div className="stack">
+          <div>
+            <h2>{c.topic}</h2>
+            {c.angle && <p className="muted" style={{ margin: '6px 0 0' }}>{c.angle}</p>}
+          </div>
+          <div className="row gap wrap">
+            <Pill tone="info">{c.claims?.length ?? 0} facts</Pill>
+            <Pill>{c.sources?.length ?? 0} sources</Pill>
+            <Pill tone={(c.claims ?? []).some((x: any) => x.status === 'verified') ? 'good' : 'warn'}>{(c.claims ?? []).filter((x: any) => x.status === 'verified').length} marked verified</Pill>
+          </div>
+          <div className="notice">Approving unlocks the Script step. You can still change the topic later; the script and everything after it will then be marked for revision.</div>
+          <div className="row gap">
+            <span className="grow" />
+            <Btn onClick={onClose}>Not yet</Btn>
+            <Btn kind="primary" onClick={async () => { await api.post(`/artifacts/${artifactId}/approve`); push('ok', 'Topic approved. On to the script.'); onApproved(); }}>Approve topic</Btn>
+          </div>
+        </div>
+      )}
+    </Modal>
+  );
+}
 
 export function ProjectPage({ id, stage }: { id: string; stage: string }) {
   const p = useAsync(() => api.get<Project>(`/projects/${id}`), [id]);
@@ -62,42 +150,65 @@ export function ProjectPage({ id, stage }: { id: string; stage: string }) {
 
   if (p.error) return <ErrorBox error={p.error} retry={p.reload} />;
   if (!ctx) return <Loading what="Loading project" />;
-  const current = STAGES.find((s) => s.id === stage) ?? STAGES[0];
   const proj = ctx.project;
+  const flow = analyze(proj.artifacts);
+  const details = stage === 'overview';
+  const part = PARTS.find((x) => x.id === stage) ?? PARTS.find((x) => x.id === flow.steps[flow.current].step.parts[0].id)!;
+  const viewing = details ? -1 : stepOfPart(part.id);
+  const info = flow.steps[viewing];
+  const next = flow.steps[viewing + 1];
   return (
     <ProjectCtx.Provider value={ctx}>
       <div className="stack">
         <div className="row gap wrap">
+          <a className="btn btn-ghost btn-sm" href="#/">← Projects</a>
           <h1>{proj.name}</h1>
-          {proj.category && <Pill>{proj.category}</Pill>}
-          {proj.languages.map((l) => <Pill key={l} tone="info">{langName(l)}</Pill>)}
+          {proj.category && <Pill tone="info">{proj.category}</Pill>}
+          {proj.languages.map((l) => <Pill key={l}>{langName(l)}</Pill>)}
           {(proj.settings.formats ?? []).map((f) => <Pill key={f}>{formatName(f)}</Pill>)}
+          <span className="grow" />
+          <a className={`btn btn-sm${details ? ' btn-primary' : ''}`} href={`#/p/${id}/overview`}>Details &amp; settings</a>
         </div>
-        <div className="project">
-          <nav className="side" aria-label="Production stages">
-            {STAGES.map((s) => {
-              const st = aggregate(proj.artifacts.filter((a) => s.kinds.includes(a.kind)));
-              return (
-                <a key={s.id} href={`#/p/${id}/${s.id}`} className={current.id === s.id ? 'on' : ''} title={st === 'none' ? '' : st.replace('_', ' ')}>
-                  <span className={`dot ${st === 'none' ? '' : st}`} />
-                  {s.label}
-                </a>
-              );
-            })}
-          </nav>
-          <div className="stack" style={{ minWidth: 0 }}>
-            {current.id === 'overview' && <Overview />}
-            {current.id === 'research' && <ResearchStage />}
-            {current.id === 'script' && <ScriptStage />}
-            {current.id === 'localize' && <LocalizeStage />}
-            {current.id === 'storyboard' && <StoryboardStage />}
-            {current.id === 'visuals' && <VisualsStage />}
-            {current.id === 'audio' && <AudioStage />}
-            {current.id === 'captions' && <CaptionsStage />}
-            {current.id === 'compose' && <ComposeStage />}
-            {current.id === 'publish' && <PublishStage />}
-          </div>
-        </div>
+        <Stepper infos={flow.steps} viewing={viewing} projectId={id} />
+        {details ? <Overview /> : (
+          <>
+            <div className="step-head">
+              <span className="step-num">STEP {info.step.n} OF {STEPS.length}</span>
+              <div className="grow"><h2>{info.step.label}</h2><p className="muted" style={{ margin: '4px 0 0' }}>{info.step.blurb}</p></div>
+            </div>
+            {info.step.parts.length > 1 && !info.locked && (
+              <div className="tabs" role="tablist">
+                {info.step.parts.map((x) => {
+                  const st = aggregate(info.artifacts.filter((a) => x.kinds.includes(a.kind)));
+                  return <button key={x.id} role="tab" aria-selected={x.id === part.id} className={x.id === part.id ? 'on' : ''} onClick={() => { location.hash = `#/p/${id}/${x.id}`; }}>{x.label}{st === 'approved' && <> <Icon name="check" small /></>}</button>;
+                })}
+              </div>
+            )}
+            {info.locked ? (
+              <div className="callout lock">
+                <span className="icon-wrap"><Icon name="lock" /></span>
+                <div className="grow">
+                  <h3>{info.step.label} is locked</h3>
+                  <p className="muted" style={{ margin: '4px 0 12px' }}>Approve <strong>{flow.steps[viewing - 1].step.label}</strong> first. Every step needs your approval before the next one opens.</p>
+                  <a className="btn btn-primary" href={`#/p/${id}/${flow.steps[flow.current].step.parts[0].id}`}>Go to {flow.steps[flow.current].step.label}</a>
+                </div>
+              </div>
+            ) : (
+              <>
+                {part.id === 'research' && <ResearchStage />}
+                {part.id === 'script' && <ScriptStage />}
+                {part.id === 'localize' && <LocalizeStage />}
+                {part.id === 'storyboard' && <StoryboardStage />}
+                {part.id === 'visuals' && <VisualsStage />}
+                {part.id === 'audio' && <AudioStage />}
+                {part.id === 'captions' && <CaptionsStage />}
+                {part.id === 'compose' && <ComposeStage />}
+                {part.id === 'publish' && <PublishStage />}
+                <StepFooter info={info} next={next} projectId={id} reload={p.reload} />
+              </>
+            )}
+          </>
+        )}
       </div>
     </ProjectCtx.Provider>
   );
@@ -106,18 +217,10 @@ export function ProjectPage({ id, stage }: { id: string; stage: string }) {
 function Overview() {
   const { project, reload } = useProject();
   const arts = project.artifacts;
-  const counts = (Object.entries(
-    arts.reduce<Record<string, number>>((m, a) => ((m[a.state] = (m[a.state] ?? 0) + 1), m), {}),
-  ) as [State, number][]);
-  const next = STAGES.slice(1).find((s) => aggregate(arts.filter((a) => s.kinds.includes(a.kind))) !== 'approved');
   const attention = arts.filter((a) => a.state === 'awaiting_review' || a.state === 'needs_revision' || a.state === 'failed' || a.state === 'rejected');
-  const stageOf = (a: Artifact) => STAGES.find((s) => s.kinds.includes(a.kind))?.id ?? 'overview';
+  const stageOf = (a: Artifact) => PARTS.find((s) => s.kinds.includes(a.kind))?.id ?? 'overview';
   return (
     <>
-      <Card title="Where things stand" actions={<button className="btn btn-sm" onClick={reload}>Refresh</button>}>
-        <div className="row gap wrap">{counts.map(([s, n]) => <span key={s} className="row gap"><StateBadge state={s} /> {n}</span>)}</div>
-        {next && <p style={{ margin: '12px 0 0' }}>Next up: <a href={`#/p/${project.id}/${next.id}`}><strong>{next.label}</strong></a>. Every stage needs your explicit approval before the next can be approved.</p>}
-      </Card>
       <Card title="Project details"><ProjectDetailsEditor project={project} onSaved={reload} /></Card>
       {attention.length > 0 && (
         <Card title="Needs your attention">
@@ -130,7 +233,7 @@ function Overview() {
         <table>
           <thead><tr><th>Step</th><th>State</th></tr></thead>
           <tbody>
-            {STAGES.slice(1).flatMap((s) => arts.filter((a) => s.kinds.includes(a.kind)).map((a) => (
+            {PARTS.flatMap((s) => arts.filter((a) => s.kinds.includes(a.kind)).map((a) => (
               <tr key={a.id}><td><a href={`#/p/${project.id}/${s.id}`}>{a.label}</a></td><td><StateBadge state={a.state} /></td></tr>
             )))}
           </tbody>

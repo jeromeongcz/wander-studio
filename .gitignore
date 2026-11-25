@@ -12,3 +12,4 @@ dist/
 .DS_Store
 exports/
 app/web/dist/
+.claude/skills/ui-ux-pro-max/

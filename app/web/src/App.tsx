@@ -1,9 +1,21 @@
+import { useEffect, useState } from 'react';
 import { useHash } from './hooks';
+import { Icon } from './ui';
 import { Dashboard } from './pages/Dashboard';
 import { ProjectPage } from './pages/Project';
 import { SettingsPage } from './pages/Settings';
 
+function useTheme() {
+  const [theme, setTheme] = useState<'light' | 'dark'>(() => { try { return localStorage.getItem('wander-theme') === 'dark' ? 'dark' : 'light'; } catch { return 'light'; } });
+  useEffect(() => {
+    document.documentElement.dataset.theme = theme;
+    try { localStorage.setItem('wander-theme', theme); } catch { /* storage unavailable */ }
+  }, [theme]);
+  return [theme, () => setTheme(theme === 'light' ? 'dark' : 'light')] as const;
+}
+
 export function App() {
+  const [theme, toggle] = useTheme();
   const hash = useHash();
   const [, , projectId, stageId] = hash.split('/'); // "/p/<id>/<stage>" or "/settings"
   const route = hash.startsWith('/p/') ? 'project' : hash.startsWith('/settings') ? 'settings' : 'home';
@@ -21,7 +33,8 @@ export function App() {
           <a href="#/settings" className={route === 'settings' ? 'on' : ''}>Jobs &amp; settings</a>
         </nav>
         <span className="grow" />
-        <span className="muted small">Local-first · nothing is uploaded or published automatically</span>
+        <span className="muted small tag">Local-first · nothing is uploaded or published automatically</span>
+        <button className="icon-btn" onClick={toggle} aria-label={theme === 'light' ? 'Switch to dark theme' : 'Switch to light theme'} title="Switch theme"><Icon name={theme === 'light' ? 'moon' : 'sun'} /></button>
       </header>
       <main className="page">
         {route === 'home' && <Dashboard />}

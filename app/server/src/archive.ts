@@ -27,9 +27,11 @@ const TABLES: { name: string; where: string }[] = [
   { name: 'pronunciation_entries', where: 'project_id = :p' },
   { name: 'publishing_kits', where: 'project_id = :p' },
   { name: 'thumbnails', where: 'project_id = :p' },
+  { name: 'topic_batches', where: 'project_id = :p' },
+  { name: 'topic_ideas', where: 'project_id = :p' },
   { name: 'scene_timing', where: "scene_id IN (SELECT scene_id FROM artifacts WHERE project_id = :p AND scene_id IS NOT NULL)" },
 ];
-const ID_TABLES = ['projects', 'artifacts', 'versions', 'approval_events', 'assets', 'audio_clips', 'renders', 'pronunciation_entries', 'publishing_kits', 'thumbnails'];
+const ID_TABLES = ['projects', 'artifacts', 'versions', 'approval_events', 'assets', 'audio_clips', 'renders', 'pronunciation_entries', 'publishing_kits', 'thumbnails', 'topic_batches', 'topic_ideas'];
 
 export interface Manifest {
   format: number;

@@ -105,9 +105,9 @@ test('a project can be renamed and its category changed; this never touches appr
   const before = engine.list(p.id).map((a) => `${a.id}:${a.state}:${a.current_version_id}`);
   const patch = (payload: unknown) => app.inject({ method: 'PATCH', url: `/projects/${p.id}`, payload: payload as any });
 
-  let r = await patch({ category: 'Horror & Folklore' });
+  let r = await patch({ category: 'Mythology and Folklore' });
   assert.equal(r.statusCode, 200);
-  assert.equal(JSON.parse(r.body).category, 'Horror & Folklore');
+  assert.equal(JSON.parse(r.body).category, 'Mythology and Folklore');
   assert.equal(JSON.parse(r.body).name, 'Old', 'name untouched when not sent');
   r = await patch({ name: '  New name  ', category: 'My own category' });
   assert.equal(JSON.parse(r.body).name, 'New name');
@@ -120,8 +120,8 @@ test('a project can be renamed and its category changed; this never touches appr
   assert.equal((await app.inject({ method: 'PATCH', url: '/projects/NOPE', payload: { category: 'Sports' } })).statusCode, 404);
   assert.deepEqual(engine.list(p.id).map((a) => `${a.id}:${a.state}:${a.current_version_id}`), before, 'no artifact changed');
   // recommendations follow the new category
-  await patch({ category: 'Sports' });
-  const recs = JSON.parse((await app.inject({ method: 'GET', url: '/categories/Sports/recommendations' })).body);
+  await patch({ category: 'Superstitions' });
+  const recs = JSON.parse((await app.inject({ method: 'GET', url: '/categories/Superstitions/recommendations' })).body);
   assert.equal(recs.custom, false);
 });
 
@@ -209,13 +209,13 @@ test('deleting a project: needs the exact name, previews what goes, removes ever
   assert.equal(JSON.parse((await app.inject({ method: 'GET', url: '/library' })).body).length, 1);
 });
 
-test('categories come in two lists: Philippine-related first, then worldwide', async () => {
+test('the categories endpoint serves the six topics with their recommendations', async () => {
   const { app } = boot();
-  const cats = JSON.parse((await app.inject({ method: 'GET', url: '/categories' })).body) as { name: string; region: string; group: string }[];
-  const ph = cats.filter((c) => c.region === 'philippines');
-  assert.ok(ph.length >= 20);
-  assert.ok(cats.filter((c) => c.region === 'general').length >= 40);
-  assert.ok(cats.slice(0, ph.length).every((c) => c.region === 'philippines'));
-  assert.ok(ph.every((c) => /Filipino|Philippine|Pinoy|Tagalog|OFW/.test(c.name)), `non-Philippine name in the Philippine list: ${ph.filter((c) => !/Filipino|Philippine|Pinoy|Tagalog|OFW/.test(c.name)).map((c) => c.name)}`);
-  assert.ok(!cats.filter((c) => c.region === 'general').some((c) => /Filipino|Philippine|Pinoy|OFW/.test(c.name)), 'Philippine names stay out of the worldwide list');
+  const cats = JSON.parse((await app.inject({ method: 'GET', url: '/categories' })).body) as { name: string; profile: { assets: string[] } }[];
+  assert.deepEqual(cats.map((c) => c.name), ['Philippine History', 'Mythology and Folklore', 'Culture and Traditions', 'Food Origins', 'Geography', 'Superstitions']);
+  assert.ok(cats.every((c) => c.profile.assets.length >= 3));
+  const known = JSON.parse((await app.inject({ method: 'GET', url: '/categories/Food%20Origins/recommendations' })).body);
+  assert.equal(known.custom, false);
+  const other = JSON.parse((await app.inject({ method: 'GET', url: '/categories/Anything%20else/recommendations' })).body);
+  assert.equal(other.custom, true);
 });

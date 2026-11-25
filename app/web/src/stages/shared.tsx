@@ -96,36 +96,23 @@ export function ProjectDetailsEditor({ project, onSaved, compact }: { project: {
 }
 
 
-interface CategoryInfo { name: string; group: string; region: 'philippines' | 'general' }
+interface CategoryInfo { name: string }
 
-/** Category chooser with two lists: Philippine-related and Worldwide. Each is grouped; "Other" lets you type your own. */
+/** Category chooser: the six project topics, plus "Other" to type your own (custom categories get general recommendations). */
 export function CategoryPicker({ value, onChange, label = 'Category' }: { value: string; onChange: (v: string) => void; label?: string }) {
   const [cats, setCats] = useState<CategoryInfo[]>([]);
   const [custom, setCustom] = useState(false);
-  const [region, setRegion] = useState<'philippines' | 'general'>('philippines');
   useEffect(() => { api.get<CategoryInfo[]>('/categories').then(setCats).catch(() => {}); }, []);
   const match = cats.find((c) => c.name.toLowerCase() === value.trim().toLowerCase());
-  // follow the chosen category to its list (e.g. when editing a project that uses a worldwide category)
-  useEffect(() => { if (match) setRegion(match.region); }, [match?.name]); // eslint-disable-line
   const isCustom = custom || (!!value.trim() && cats.length > 0 && !match);
-  const inRegion = cats.filter((c) => c.region === region);
-  const groups = [...new Set(inRegion.map((c) => c.group))];
   const hint = !value.trim() ? 'No category: general recommendations' : isCustom ? 'Custom category: general recommendations' : 'Uses this category’s visual recommendations';
-  const counts = { philippines: cats.filter((c) => c.region === 'philippines').length, general: cats.filter((c) => c.region === 'general').length };
   return (
     <Field label={label} hint={hint} wide>
-      <div className="tabs" role="tablist" style={{ marginBottom: 6 }}>
-        {(['philippines', 'general'] as const).map((r) => (
-          <button key={r} type="button" role="tab" aria-selected={region === r} className={region === r ? 'on' : ''} onClick={() => { setRegion(r); setCustom(false); }}>
-            {r === 'philippines' ? 'Philippines' : 'Worldwide'}{counts[r] ? ` (${counts[r]})` : ''}
-          </button>
-        ))}
-      </div>
-      <select aria-label={label} value={isCustom ? '__other' : match && match.region === region ? match.name : ''} onChange={(e) => {
+      <select aria-label={label} value={isCustom ? '__other' : match?.name ?? ''} onChange={(e) => {
         if (e.target.value === '__other') { setCustom(true); onChange(match ? '' : value); } else { setCustom(false); onChange(e.target.value); }
       }}>
-        <option value="">{match && match.region !== region ? `Keeping: ${match.name}` : 'None (general)'}</option>
-        {groups.map((g) => <optgroup key={g} label={g}>{inRegion.filter((c) => c.group === g).map((c) => <option key={c.name} value={c.name}>{c.name}</option>)}</optgroup>)}
+        <option value="">None (general)</option>
+        {cats.map((c) => <option key={c.name} value={c.name}>{c.name}</option>)}
         <option value="__other">Other: type your own…</option>
       </select>
       {isCustom && <input aria-label="Custom category" style={{ marginTop: 6 }} autoFocus value={value} onChange={(e) => onChange(e.target.value)} maxLength={60} placeholder="e.g. Cooking for beginners" />}

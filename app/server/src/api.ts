@@ -116,6 +116,16 @@ export function buildApi(engine: Engine, config: Partial<AppConfig> = {}): Fasti
     const [research] = engine.list(id, { kind: 'research' });
     return reply.status(201).send({ id, researchArtifactId: research.id, researchTemplate: newResearchContent(b.topic ?? b.name, b.category) });
   });
+  // ---- topic research ----
+  app.get('/research/status', async () => studio.research.status());
+  app.get('/projects/:id/research/topics', async (req) => studio.research.list((req.params as { id: string }).id));
+  app.post('/projects/:id/research/prompt', async (req) => ({ prompt: studio.research.prompt((req.params as { id: string }).id, { count: body(req).count, focus: body(req).focus, notes: body(req).notes }) }));
+  app.post('/projects/:id/research/batches', async (req, reply) => reply.status(202).send(studio.research.startBatch((req.params as { id: string }).id, { count: body(req).count, focus: body(req).focus, notes: body(req).notes })));
+  app.post('/projects/:id/research/import', async (req, reply) => reply.status(201).send(await studio.research.importText((req.params as { id: string }).id, body(req).text, { focus: body(req).focus })));
+  app.post('/topic-ideas/:id/dismiss', async (req) => studio.research.setStatus((req.params as { id: string }).id, 'dismissed'));
+  app.post('/topic-ideas/:id/restore', async (req) => studio.research.setStatus((req.params as { id: string }).id, 'new'));
+  app.post('/topic-ideas/:id/use', async (req) => studio.research.useIdea((req.params as { id: string }).id, { reopen: body(req).reopen === true }));
+  app.post('/topic-ideas/:id/new-project', async (req, reply) => reply.status(201).send(studio.research.projectFromIdea((req.params as { id: string }).id)));
   app.get('/projects/:id/deletion-preview', async (req) => studio.deletionPreview((req.params as { id: string }).id));
   app.post('/projects/:id/delete', async (req) => studio.deleteProject((req.params as { id: string }).id, body(req).confirm_name));
   app.patch('/projects/:id', async (req) => {

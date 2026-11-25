@@ -48,3 +48,6 @@ Known gaps, stated plainly:
 - True parallax layers are approximated (slow zoom plus drift). Stock video clips play as-is.
 - Caption font defaults to macOS Arial Black, which cannot be redistributed; add an open-licensed font to `templates/fonts`.
 - Archives use plain zip (no zip64): files over 4 GB are refused.
+
+## Web UI process (six steps)
+The project page is a six-step stepper: Topic, Script, Storyboard & visuals, Voice & captions, Compose & render, Publish (`app/web/src/pipeline.ts`). A step opens only when the previous one is fully approved; earlier steps stay reachable and locked steps explain what unlocks them. The Topic step is the first gate: the user picks how many topics Claude researches, chooses one, and approves it in an explicit confirmation before Script opens. The UI only mirrors the server's approval rules; it never approves anything itself. Light theme by default with a dark toggle; tokens and rules are in `design-system/wander-ai-director/MASTER.md`. Not yet checked: a real Claude Code research run (needs `claude auth login`), the Script to Publish steps in the browser after the redesign (only Topic and Script were opened), and tablet widths.
