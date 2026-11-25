@@ -20,7 +20,7 @@ const host = (u: string) => { try { return new URL(u).hostname.replace(/^www\./,
 
 
 /** Research workspace: approved topics (with the rest below) on the left, the research form on the right. No project is needed. */
-export function ResearchWorkspace() {
+export function ResearchWorkspace({ approvedOnly }: { approvedOnly?: boolean } = {}) {
   const { push, fail } = useToast();
   const status = useAsync(() => api.get<any>('/research/status'), []);
   const data = useAsync(() => api.get<any>('/studio/research'), []);
@@ -88,8 +88,8 @@ export function ResearchWorkspace() {
 
   return (
     <>
-      <div className="ws">
-        <div className="ws-form">
+      <div className={approvedOnly ? undefined : 'ws'}>
+        {!approvedOnly && <div className="ws-form">
           <Card title="Research form">
             <div className="stack">
               <div className="form" style={{ gridTemplateColumns: '1fr' }}>
@@ -135,15 +135,16 @@ export function ResearchWorkspace() {
               )}
             </div>
           </Card>
-        </div>
+        </div>}
 
         <div className="ws-topics stack">
           <div>
             <div className="section-h" id="approved-topics" style={{ marginTop: 0 }}><h2>Approved topics</h2><span className="muted">{approved.length - started.length} ready to become a video{started.length ? ` · ${started.length} started` : ''}</span></div>
             {data.loading && !data.data && <Loading />}
-            {approved.length === 0 && !(data.loading && !data.data) && <Empty>Nothing approved yet. Approve a topic from the list below.</Empty>}
-            <div className="stack">{approved.map(card)}</div>
+            {approved.length === 0 && !(data.loading && !data.data) && <Empty>Nothing approved yet. {approvedOnly ? <>Approve a topic in the <a href="#/projects/research">Research Studio</a>.</> : 'Approve a topic from the list below.'}</Empty>}
+            <div className={approvedOnly ? 'grid g2' : 'stack'}>{approved.map(card)}</div>
           </div>
+          {!approvedOnly && <>
           <div>
             <div className="section-h"><h2>Not approved yet</h2><span className="muted">{toReview.length} to review. Read the facts and open the sources first.</span></div>
             <div className="notice small" style={{ marginBottom: 12 }}>AI research can be wrong. <strong>Nothing here is verified.</strong> A ✓ only means the link loads. Approving a topic means you want to make a video about it; you still verify the facts in the video.</div>
@@ -151,6 +152,7 @@ export function ResearchWorkspace() {
             <div className="stack">{toReview.map(card)}</div>
           </div>
           {dismissed.length > 0 && <details><summary className="muted">Dismissed ({dismissed.length})</summary><div className="stack" style={{ marginTop: 10 }}>{dismissed.map(card)}</div></details>}
+          </>}
         </div>
       </div>
 
