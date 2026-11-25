@@ -119,7 +119,7 @@ table { width: 100%; border-collapse: collapse; } th { text-align: left; font-si
 
 /* ---------- the six-step process ---------- */
 .stepper { background: var(--panel); border: 1px solid var(--line); border-radius: 18px; padding: 16px 12px 14px; box-shadow: var(--shadow); }
-.stepper ol { list-style: none; display: grid; grid-auto-flow: column; grid-auto-columns: minmax(96px, 1fr); margin: 0; padding: 0; overflow-x: auto; }
+.stepper ol { list-style: none; display: grid; grid-template-columns: repeat(6, minmax(118px, 1fr)); margin: 0; padding: 0; overflow-x: auto; }
 .step { position: relative; display: flex; flex-direction: column; align-items: center; text-align: center; gap: 6px; padding: 2px 8px 4px; color: var(--text); font-weight: 400; border-radius: 12px; }
 .step:hover { text-decoration: none; }
 a.step:hover .step-dot { border-color: var(--brand); }
@@ -179,7 +179,7 @@ a.step:hover .step-dot { border-color: var(--brand); }
 @media (max-width: 760px) {
   .content { padding: 4px 14px 110px; } .strip { padding: 0 14px; }
   h1 { font-size: 23px; } .hero { padding: 20px; border-radius: 18px; } .card { padding: 15px; }
-  .stepper ol { grid-auto-columns: minmax(104px, 1fr); } .step-sub { display: none; }
+  .stepper ol { grid-template-columns: repeat(6, minmax(104px, 1fr)); } .step-sub { display: none; }
   .modal-b { padding: 14px; }
 }
 
