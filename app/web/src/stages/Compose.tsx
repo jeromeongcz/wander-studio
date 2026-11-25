@@ -3,9 +3,10 @@ import { api, url } from '../api';
 import { ArtifactBar } from '../actions';
 import { useProject } from '../pages/Project';
 import { useAsync, useInterval } from '../hooks';
-import { Btn, Card, Empty, Icon, Loading, Pill, Tabs, fmtBytes, fmtSec, useToast } from '../ui';
+import { Btn, Card, Empty, Icon, Loading, Modal, Pill, Tabs, fmtBytes, fmtSec, useToast } from '../ui';
 import { formatName, langName } from '../types';
 import type { Artifact } from '../types';
+import { TimelinePlayer } from './TimelinePlayer';
 
 export function ComposeStage() {
   const { project } = useProject();
@@ -33,6 +34,13 @@ function Composition({ lang, format }: { lang: string; format: string }) {
   const renders = useAsync(() => api.get<any[]>(`/projects/${project.id}/renders?lang=${lang}&format=${format}`), [project.id, lang, format]);
   const [t, setT] = useState(0.5);
   const [captions, setCaptions] = useState(true);
+  const [popup, setPopup] = useState(false);
+  useEffect(() => {
+    if (!popup) return;
+    const esc = (e: KeyboardEvent) => { if (e.key === 'Escape') setPopup(false); };
+    document.addEventListener('keydown', esc);
+    return () => document.removeEventListener('keydown', esc);
+  }, [popup]);
   const [job, setJob] = useState<any>(null);
   const tl = doc.data?.content;
   const st = status.data;
@@ -73,17 +81,18 @@ function Composition({ lang, format }: { lang: string; format: string }) {
       {tl && (
         <>
           <Card title="Preview" actions={<><Pill>{tl.format.width}×{tl.format.height}</Pill><Pill>{fmtSec(tl.duration)}</Pill></>}>
-            <div className="grid" style={{ gridTemplateColumns: 'minmax(0, 340px) minmax(0, 1fr)' }}>
-              <div className="stack">
-                <PreviewFrame id={comp.id} version={comp.current_version_id ?? ''} t={t} captions={captions} stale={!!st?.stale} />
-              </div>
-              <div className="stack">
-                <label className="field"><span className="field-l">Time: {fmtSec(t)}</span><input type="range" min={0} max={tl.duration} step={0.1} value={t} onChange={(e) => setT(Number(e.target.value))} aria-label="Preview time" /></label>
-                <label className="row gap"><input type="checkbox" checked={captions} onChange={(e) => setCaptions(e.target.checked)} />Show captions</label>
-                <p className="muted small" style={{ margin: 0 }}>A single frame rendered with the real caption layout for this format, so you can check the safe zone and legibility before a full render.</p>
-              </div>
+            <div className="stack">
+              <TimelinePlayer key={comp.current_version_id ?? 'none'} timeline={tl} time={t} onTime={setT} captions={captions} onEnlarge={() => setPopup(true)}
+                still={popup ? undefined : <PreviewFrame id={comp.id} version={comp.current_version_id ?? ''} t={t} captions={captions} stale={!!st?.stale} />} />
+              <label className="row gap"><input type="checkbox" checked={captions} onChange={(e) => setCaptions(e.target.checked)} />Show captions</label>
+              <p className="muted small" style={{ margin: 0 }}>Paused, you see an exact frame from the renderer. Playing is a quick check of pictures, voice and caption timing: camera moves, transitions, music and exact caption styling appear in the rendered video.</p>
             </div>
           </Card>
+          {popup && (
+            <Modal title="Preview" wide onClose={() => setPopup(false)}>
+              <TimelinePlayer timeline={tl} time={t} onTime={setT} captions={captions} autoPlay />
+            </Modal>
+          )}
 
           <Card title="Scenes">
             <table>

@@ -389,3 +389,13 @@ textarea.vis { min-height: 0; field-sizing: content; }
 .tlb-strip button.on { border-color: var(--accent); } .tlb-strip button:hover { border-color: #5EEAD4; }
 .tlb-strip img { width: 100%; height: 100%; object-fit: cover; display: block; opacity: .85; }
 .tlb-n, .tlb-d { position: absolute; bottom: 4px; font: 700 11px/1 ui-monospace, Menlo, monospace; background: rgba(0, 0, 0, .65); padding: 3px 6px; border-radius: 6px; } .tlb-n { left: 4px; } .tlb-d { right: 4px; }
+
+/* ---------- timeline player ---------- */
+.tlp { display: flex; flex-direction: column; gap: 10px; align-items: center; }
+.tlp-stage { position: relative; width: 100%; background: #000; border-radius: var(--radius); overflow: hidden; cursor: pointer; container-type: inline-size; }
+.tlp-stage > img, .tlp-stage > video, .tlp-stage > div, .tlp-stage > div > img { width: 100%; height: 100%; object-fit: contain; display: block; }
+.tlp-stage .frame { max-height: none; border: 0; border-radius: 0; }
+.tlp-cap { position: absolute; left: 6%; right: 6%; transform: translateY(-50%); margin: 0; text-align: center; font-weight: 900; font-size: 5.2cqw; line-height: 1.2; -webkit-text-stroke-width: .35cqw; paint-order: stroke fill; text-shadow: 0 2px 8px rgba(0, 0, 0, .8); }
+.tlp-big { position: absolute; left: 50%; top: 50%; width: 64px; height: 64px; margin: -32px; border-radius: 50%; background: rgba(15, 118, 110, .9); color: #fff; display: grid; place-items: center; pointer-events: none; }
+.tlp-big .icon { width: 30px; height: 30px; fill: currentColor; }
+.tlp-bar { display: flex; align-items: center; gap: 12px; width: 100%; } .tlp-bar input[type="range"] { flex: 1; min-width: 80px; }
