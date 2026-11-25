@@ -281,3 +281,11 @@ textarea.vis { min-height: 0; field-sizing: content; }
 .scene-card .visual-text { max-height: 9.5em; overflow: auto; }
 @media (max-width: 760px) { .scene-card.wide { flex-direction: column; align-items: stretch; } .scene-card.wide .frame-slot { width: auto; margin: 14px 14px 0; } }
 .scene-facts { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 220px), 1fr)); gap: 8px 16px; margin: 0; } .scene-facts dt { font-weight: 700; text-transform: capitalize; } .scene-facts dd { margin: 0; color: var(--muted); }
+/* fixed-height scene cards: long text scrolls inside, the actions stay in view */
+.scene-card.wide { height: 340px; align-items: stretch; }
+.scene-card.wide .frame-slot { align-self: flex-start; max-height: 312px; }
+.scene-card.wide .scene-body { overflow-y: auto; overscroll-behavior: contain; padding-bottom: 0; min-height: 0; }
+.scene-body > * { flex-shrink: 0; }
+.scene-card .visual-text { max-height: none; overflow: visible; }
+.scene-actions { position: sticky; bottom: 0; margin-top: auto; padding: 10px 0 14px; background: var(--panel); border-top: 1px solid var(--line); }
+@media (max-width: 760px) { .scene-card.wide { height: 560px; } .scene-card.wide .frame-slot { align-self: stretch; max-height: 220px; flex: none; } .scene-card.wide .scene-body { flex: 1; } }

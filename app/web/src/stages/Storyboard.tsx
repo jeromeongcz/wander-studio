@@ -115,7 +115,7 @@ export function StoryboardStage() {
                   <div className="row gap"><span className="scene-n">{i + 1}</span><strong className="grow">{s.kind}</strong></div>
                   <p className="quote">“{s.text}”</p>
                   <dl className="scene-facts small">{['setting', 'characters', 'action', 'shot', 'mood', 'props'].filter((k) => s.visual?.[k]).map((k) => <div key={k}><dt>{k}</dt><dd>{s.visual[k]}</dd></div>)}</dl>
-                  <div className="row gap">{drawButton(i)}</div>
+                  <div className="row gap scene-actions">{drawButton(i)}</div>
                 </div>
               </article>
             ))}
@@ -143,13 +143,6 @@ export function StoryboardStage() {
                 </div>
                 {s.segment_text && <p className="quote">“{s.segment_text}”</p>}
                 <p className="visual-text">{s.visual_description}</p>
-                <div className="row gap wrap">
-                  <Pill>{fmtSec(s.target_duration)}</Pill><Pill>{s.camera.movement.replace('_', ' ')}</Pill><Pill>{(s.transition_in ?? 'cut')} in</Pill>
-                  {sketches.data?.[i] && <StateBadge state={sketches.data[i].state} />}
-                  <span className="grow" />
-                  {drawButton(i)}
-                  {sketches.data?.[i]?.asset_id && <a className="btn btn-sm" href={`#/p/${project.id}/visuals`}>Approve in Visuals <Icon name="arrow" small /></a>}
-                </div>
                 <details>
                 <summary className="muted small">Edit details</summary>
                 <Field label="What the viewer sees" wide><textarea style={{ marginTop: 6 }} value={s.visual_description} onChange={(e) => setScene(i, { visual_description: e.target.value, draft: false })} /></Field>
@@ -165,6 +158,13 @@ export function StoryboardStage() {
                   <Field label="Sound effects (comma separated)"><input value={(s.sfx_cues ?? []).join(', ')} onChange={(e) => setScene(i, { sfx_cues: e.target.value.split(',').map((x) => x.trim()).filter(Boolean) })} /></Field>
                 </div>
                 </details>
+                <div className="row gap wrap scene-actions">
+                  <Pill>{fmtSec(s.target_duration)}</Pill><Pill>{s.camera.movement.replace('_', ' ')}</Pill><Pill>{(s.transition_in ?? 'cut')} in</Pill>
+                  {sketches.data?.[i] && <StateBadge state={sketches.data[i].state} />}
+                  <span className="grow" />
+                  {drawButton(i)}
+                  {sketches.data?.[i]?.asset_id && <a className="btn btn-sm" href={`#/p/${project.id}/visuals`}>Approve in Visuals <Icon name="arrow" small /></a>}
+                </div>
                 </div>
               </div>
             ))}
