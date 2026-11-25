@@ -93,9 +93,10 @@ export function VideoProduction({ stepId }: { stepId?: string }) {
   const list = at(idx);
   return (
     <div className="stack">
-      <div className="step-head">
+      <div className="step-title">
+        <h2>{idx === 0 ? 'Research Studio' : step.label}</h2>
+        <p className="muted">{idx === 0 ? 'Search a topic, approve it, then start a video from it.' : step.blurb}</p>
         <span className="step-num">STEP {step.n} OF {STEPS.length}</span>
-        <div className="grow"><h2>{idx === 0 ? 'Research Studio' : step.label}</h2><p className="muted" style={{ margin: '4px 0 0' }}>{idx === 0 ? 'Search a topic, approve it, then start a video from it.' : step.blurb}</p></div>
       </div>
       <nav className="stepper" aria-label="Video production steps">
         <ol>
