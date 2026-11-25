@@ -23,6 +23,8 @@ export interface AssOptions {
   /** Shift all times (used to render a single scene or preview frame). */
   offset?: number;
   placement?: PlacementOverride[];
+  /** 'word': one big uppercase italic word at a time in the middle of the frame, names and numbers in red. */
+  mode?: 'word';
 }
 
 /**
@@ -61,6 +63,8 @@ export function buildAss(o: AssOptions): string {
     'Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text',
   ];
 
+  if (o.mode === 'word') return [...head, ...wordEvents(o), ''].join('\n');
+
   const segs = segmentWords(o.words, { maxWords: z.max_words, maxChars: z.max_chars });
   const lines: string[] = [];
   for (const seg of segs) {
@@ -92,4 +96,29 @@ export function buildAss(o: AssOptions): string {
     }
   }
   return [...head, ...lines, ''].join('\n');
+}
+
+const KEYWORD_RED = '#E01E24';
+/** A name (capitalised inside a sentence) or a number: the word a viewer should catch. */
+export function isKeyword(words: CaptionWord[], i: number): boolean {
+  const w = words[i].text;
+  if (/\d/.test(w)) return true;
+  const startsSentence = i === 0 || /[.!?…]["”']?$/.test(words[i - 1].text) || words[i - 1].section_id !== words[i].section_id;
+  return !startsSentence && /^\p{Lu}\p{Ll}/u.test(w);
+}
+
+function wordEvents(o: AssOptions): string[] {
+  const { format: f, style: s } = o;
+  const off = o.offset ?? 0;
+  const share = f.height / f.width > 1.2 ? 0.05 : f.width / f.height > 1.2 ? 0.125 : 0.085;
+  const size = f.height * share * s.font_scale;
+  return o.words.map((w, i) => {
+    const next = o.words[i + 1];
+    const end = next && next.start - w.end < 0.35 ? next.start : w.end + 0.12;
+    const text = esc(w.text.toUpperCase().replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}!?]+$/gu, '') || w.text.toUpperCase());
+    const fit = Math.min(size, (f.width * 0.86) / (Math.max(1, text.length) * 0.66));
+    const place = o.placement?.find((p) => w.start < p.to && w.end > p.from);
+    const y = Math.round(f.height * (place?.y_pct ?? 0.5));
+    return `Dialogue: 0,${t(w.start - off)},${t(end - off)},Cap,,0,0,0,,{\\an5\\pos(${Math.round(f.width / 2)},${y})\\fs${Math.round(fit)}\\b1\\i1\\bord${Math.max(2, Math.round(size * 0.07))}\\shad${Math.max(1, Math.round(size * 0.05))}\\3c&H000000&\\c${assColor(isKeyword(o.words, i) ? KEYWORD_RED : '#FFFFFF')}&}${text}`;
+  });
 }

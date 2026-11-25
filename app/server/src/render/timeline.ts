@@ -24,11 +24,12 @@ export interface TimelineScene {
 /** Engine-agnostic composition: everything a renderer needs, no references back into the database. */
 export interface Timeline {
   version: 1;
+  effects?: 'folklore'; // scene effect style; absent = clean
   lang: string;
   format: { id: string; width: number; height: number; fps: number; bitrate?: string };
   duration: number;
   scenes: TimelineScene[];
-  captions: { enabled: boolean; style: CaptionStyle; words: CaptionWord[]; placement: PlacementOverride[] };
+  captions: { enabled: boolean; style: CaptionStyle; words: CaptionWord[]; placement: PlacementOverride[]; mode?: 'word' };
   audio: { chunks: { clip_id: string; rel_path: string; start: number; duration: number }[]; narration_total: number; mix: MixSpec; music: { clip_id: string; rel_path: string }[]; sfx: { clip_id: string; rel_path: string }[] };
   overrides: Record<string, { crop?: Rect; caption_y_pct?: number }>;
   source: Record<string, string | null | Record<string, string | null>>;

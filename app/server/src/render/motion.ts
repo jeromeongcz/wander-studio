@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { LOOK_FILTERS, SHOT_SECONDS, glitchFilters } from './effects.ts';
 
 export interface Rect {
   x: number;
@@ -85,11 +86,35 @@ const f = (n: number) => Number(n.toFixed(5));
 /** ffmpeg zoompan expressions. Kept in single quotes by the caller so commas need no escaping. */
 export function zoompanFilter(p: MotionPlan, frames: number, size: { w: number; h: number }, fps: number): string {
   const n = Math.max(2, frames);
-  const prog = `on/${n - 1}`;
+  const [z, x, y] = motionExpressions(p, `on/${n - 1}`);
+  return `zoompan=z='${z}':x='${x}':y='${y}':d=${n}:s=${size.w}x${size.h}:fps=${fps}`;
+}
+
+function motionExpressions(p: MotionPlan, prog: string): [string, string, string] {
   const z = `${f(p.z0)}+(${f(p.z1)}-${f(p.z0)})*${prog}`;
   const x = `max(0,min(iw*(${f(p.cx0)}+(${f(p.cx1)}-${f(p.cx0)})*${prog})-iw/zoom/2,iw-iw/zoom))`;
   const y = `max(0,min(ih*(${f(p.cy0)}+(${f(p.cy1)}-${f(p.cy0)})*${prog})-ih/zoom/2,ih-ih/zoom))`;
-  return `zoompan=z='${z}':x='${x}':y='${y}':d=${n}:s=${size.w}x${size.h}:fps=${fps}`;
+  return [z, x, y];
+}
+
+/**
+ * Several shots cut from one picture ("scale cuts"): each shot holds its own framing and linear move, and the change
+ * between them is a hard cut on a single frame.
+ */
+export function shotsFilter(base: MotionPlan, shots: number, frames: number, size: { w: number; h: number }, fps: number, focalRel: { x: number; y: number }): string {
+  const n = Math.max(2, frames);
+  const per = Math.ceil(n / shots);
+  const plans: MotionPlan[] = Array.from({ length: shots }, (_, i) => {
+    if (i === 0) return base;
+    // alternate a tight framing near the subject with a slightly wider one, pushing in then pulling out
+    const z = i % 2 ? 1.34 : 1.12;
+    const side = i % 4 < 2 ? -0.08 : 0.08;
+    const cx = clamp(focalRel.x + (i % 2 ? 0 : side), 0, 1);
+    return { z0: i % 2 ? z : z + 0.1, z1: i % 2 ? z + 0.1 : z, cx0: cx, cx1: cx, cy0: focalRel.y, cy1: focalRel.y };
+  });
+  const parts = plans.map((p, i) => motionExpressions(p, `min(1,(on-${i * per})/${Math.max(1, per - 1)})`));
+  const pick = (k: 0 | 1 | 2) => parts.slice(0, -1).reduceRight((rest, e, i) => `if(lt(on,${(i + 1) * per}),${e[k]},${rest})`, parts[parts.length - 1][k]);
+  return `zoompan=z='${pick(0)}':x='${pick(1)}':y='${pick(2)}':d=${n}:s=${size.w}x${size.h}:fps=${fps}`;
 }
 
 export interface SceneClipSpec {
@@ -101,12 +126,14 @@ export interface SceneClipSpec {
   width: number;
   height: number;
   fps: number;
+  effects?: 'folklore';
+  glitch?: boolean; // the final shot of a folklore video
 }
 
 /** Cache key: any input that changes the pixels changes the key; anything else (captions, audio, other scenes) does not. */
 export function sceneClipKey(s: SceneClipSpec): string {
   const { path: _p, ...asset } = s.asset;
-  return createHash('sha256').update(JSON.stringify({ v: 1, asset, focal: s.focal, camera: s.camera, crop: s.crop ?? null, d: Math.round(s.duration * 1000), w: s.width, h: s.height, fps: s.fps })).digest('hex').slice(0, 32);
+  return createHash('sha256').update(JSON.stringify({ v: 1, asset, focal: s.focal, camera: s.camera, crop: s.crop ?? null, d: Math.round(s.duration * 1000), w: s.width, h: s.height, fps: s.fps, effects: s.effects, glitch: s.glitch })).digest('hex').slice(0, 32);
 }
 
 export function sceneClipArgs(s: SceneClipSpec, out: string): string[] {
@@ -121,6 +148,10 @@ export function sceneClipArgs(s: SceneClipSpec, out: string): string[] {
   const focalRel = { x: clamp((s.focal.x * s.asset.width - crop.x) / crop.w, 0, 1), y: clamp((s.focal.y * s.asset.height - crop.y) / crop.h, 0, 1) };
   const plan = motionPlan(s.camera, focalRel);
   const over = 2; // oversample before zoompan to avoid integer-pixel jitter
-  const chain = [cropF, `scale=${s.width * over}:${s.height * over}:flags=lanczos`, zoompanFilter(plan, frames, { w: s.width, h: s.height }, s.fps), 'setsar=1', 'format=yuv420p'];
+  const size = { w: s.width, h: s.height };
+  const shots = s.effects ? Math.max(1, Math.ceil(s.duration / SHOT_SECONDS - 0.25)) : 1;
+  const camera = shots > 1 ? shotsFilter(plan, shots, frames, size, s.fps, focalRel) : zoompanFilter(plan, frames, size, s.fps);
+  const look = s.effects ? [...LOOK_FILTERS, ...(s.glitch ? glitchFilters(frames / s.fps) : [])] : [];
+  const chain = [cropF, `scale=${s.width * over}:${s.height * over}:flags=lanczos`, camera, 'setsar=1', ...look, 'format=yuv420p'];
   return ['-i', s.asset.path, '-vf', chain.join(','), '-frames:v', String(frames), ...enc];
 }

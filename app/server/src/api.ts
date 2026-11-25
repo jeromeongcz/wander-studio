@@ -399,7 +399,7 @@ export function buildApi(engine: Engine, config: Partial<AppConfig> = {}): Fasti
     const has = !!content && content.version === 1;
     return { has_timeline: has, stale: has ? studio.render.isStale(id) : true, duration: has ? content!.duration : null, scenes: has ? content!.scenes?.length : 0, captions: has ? !!content!.captions?.enabled : false };
   });
-  app.post('/artifacts/:id/build-timeline', async (req) => studio.buildComposition((req.params as { id: string }).id, { reopen: body(req).reopen === true }));
+  app.post('/artifacts/:id/build-timeline', async (req) => studio.buildComposition((req.params as { id: string }).id, { reopen: body(req).reopen === true, effects: typeof body(req).effects === 'string' ? (body(req).effects as string) : undefined }));
   app.put('/artifacts/:id/scenes/:sceneId/override', async (req) => {
     const { id, sceneId } = req.params as { id: string; sceneId: string };
     const b = body(req);

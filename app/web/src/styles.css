@@ -399,3 +399,13 @@ textarea.vis { min-height: 0; field-sizing: content; }
 .tlp-big { position: absolute; left: 50%; top: 50%; width: 64px; height: 64px; margin: -32px; border-radius: 50%; background: rgba(15, 118, 110, .9); color: #fff; display: grid; place-items: center; pointer-events: none; }
 .tlp-big .icon { width: 30px; height: 30px; fill: currentColor; }
 .tlp-bar { display: flex; align-items: center; gap: 12px; width: 100%; } .tlp-bar input[type="range"] { flex: 1; min-width: 80px; }
+
+.tlb-style { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; padding: 10px 12px; background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius-sm); } .tlb-style .small { flex: 1 1 260px; }
+/* preview approximation of the dark folklore style */
+.tlp-stage > img { will-change: transform; }
+.tlp-stage.fx > img, .tlp-stage.fx > video { filter: contrast(1.12) saturate(.82) brightness(.9); }
+.tlp-stage.fx::after { content: ""; position: absolute; inset: 0; pointer-events: none; background: radial-gradient(ellipse at center, transparent 45%, rgba(0, 0, 0, .75) 100%); }
+.tlp-word { position: absolute; left: 4%; right: 4%; top: 50%; transform: translateY(-50%); z-index: 1; margin: 0; text-align: center; text-transform: uppercase; font-weight: 900; font-style: italic; font-size: 7cqw; -webkit-text-stroke: .5cqw #000; paint-order: stroke fill; text-shadow: 0 3px 10px rgba(0, 0, 0, .7); }
+.tlp-stage.glitch > img { animation: tlp-glitch .16s steps(2) infinite; }
+@keyframes tlp-glitch { 0% { filter: drop-shadow(-1.2cqw 0 rgba(255, 0, 60, .7)) drop-shadow(1.2cqw 0 rgba(0, 220, 255, .7)) brightness(1.5); } 100% { filter: contrast(1.5) brightness(.8); } }
+@media (prefers-reduced-motion: reduce) { .tlp-stage.glitch > img { animation: none; } }

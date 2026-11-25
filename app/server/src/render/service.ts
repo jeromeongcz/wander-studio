@@ -19,6 +19,8 @@ import { ulid } from '../../../shared/src/index.ts';
 import { parseFormat, safeZoneFor } from './formats.ts';
 import type { SceneClipSpec } from './motion.ts';
 import { sceneClipArgs, sceneClipKey } from './motion.ts';
+import { EFFECT_STYLES, applyEffects, impactTimes } from './effects.ts';
+import type { EffectStyle } from './effects.ts';
 import { buildTimeline, timelineHash, validateTimelineShape } from './timeline.ts';
 import type { Timeline, TimelineScene } from './timeline.ts';
 
@@ -142,7 +144,8 @@ export class RenderService {
     return { words: this.estimatedWords(layout, script), total: layout.total, source: 'estimate' };
   }
 
-  build(compId: string): Timeline {
+  /** `effects`: a style, 'none' to clear it, or left out to keep what the timeline already has. */
+  build(compId: string, effects?: string): Timeline {
     const { comp, sbc, audio, caption, source } = this.currentSource(compId);
     if (comp.kind !== 'composition' || !comp.lang_code || !comp.format) throw new EngineError('VALIDATION', 'Not a composition artifact');
     if (!sbc?.scenes.length) throw new EngineError('NO_VERSION', 'The storyboard has no scenes yet');
@@ -165,7 +168,9 @@ export class RenderService {
       }
     }
     const clipRel = (id: string) => ({ clip_id: id, rel_path: this.audio.get(id).rel_path });
-    return buildTimeline({
+    if (effects !== undefined && effects !== 'none' && !(EFFECT_STYLES as readonly string[]).includes(effects)) throw new EngineError('VALIDATION', `Unknown effect style "${effects}"`);
+    const style = effects === undefined ? prev?.effects : effects === 'none' ? undefined : (effects as EffectStyle);
+    return applyEffects(buildTimeline({
       lang: comp.lang_code,
       format: parseFormat(comp.format),
       scenes: sbc.scenes.map((s) => ({ scene_id: s.scene_id!, script_segment_id: s.script_segment_id, segment_text: s.segment_text, target_duration: s.target_duration, title: s.title, camera: s.camera, transition_in: s.transition_in })),
@@ -182,7 +187,7 @@ export class RenderService {
       style: track?.style ?? DEFAULT_STYLE,
       overrides: prev?.overrides ?? {},
       source,
-    });
+    }), style);
   }
 
   // ---- rendering ----
@@ -200,6 +205,7 @@ export class RenderService {
       width: tl.format.width,
       height: tl.format.height,
       fps: tl.format.fps,
+      ...(tl.effects ? { effects: tl.effects, ...(s.index === tl.scenes.length - 1 ? { glitch: true } : {}) } : {}),
     };
     const out = this.cache('scene_clips', `${sceneClipKey(spec)}.mp4`);
     if (existsSync(out) && (await stat(out)).size > 0) return { path: out, cached: true };
@@ -218,10 +224,12 @@ export class RenderService {
   private async ensureMix(tl: Timeline, signal?: AbortSignal): Promise<string> {
     const abs = (rel: string) => join(this.config.root, rel);
     const byId = (list: { clip_id: string; rel_path: string }[], id: string) => abs(list.find((x) => x.clip_id === id)!.rel_path);
+    // generated here, so the project's own audio and licences are untouched
+    const fx = tl.effects ? await this.effectSounds(tl, signal) : [];
     const graph = buildMixGraph({
       narration: tl.audio.chunks.map((c) => ({ path: abs(c.rel_path), start: c.start })),
       music: (tl.audio.mix.music ?? []).map((m) => ({ path: byId(tl.audio.music, m.clip_id), spec: m })),
-      sfx: (tl.audio.mix.sfx ?? []).map((m) => ({ path: byId(tl.audio.sfx, m.clip_id), spec: m })),
+      sfx: [...(tl.audio.mix.sfx ?? []).map((m) => ({ path: byId(tl.audio.sfx, m.clip_id), spec: m })), ...fx],
       spec: tl.audio.mix,
       duration: tl.duration,
     });
@@ -241,9 +249,35 @@ export class RenderService {
     return out;
   }
 
+  /** A low impact "hit" on a few cuts and, when no music was chosen, a quiet drone bed under the voice. */
+  private async effectSounds(tl: Timeline, signal?: AbortSignal) {
+    const make = async (name: string, args: string[]) => {
+      const out = this.cache('effects', name);
+      if (existsSync(out)) return out;
+      await mkdir(dirname(out), { recursive: true });
+      const tmp = `${out}.${ulid()}.tmp.wav`;
+      try {
+        await run(this.ffmpeg, ['-hide_banner', '-nostats', '-y', ...args, '-ar', '44100', '-ac', '2', '-c:a', 'pcm_s16le', tmp], { timeout: 120_000, signal });
+        await rename(tmp, out);
+      } catch (e) {
+        await unlink(tmp).catch(() => {});
+        throw e;
+      }
+      return out;
+    };
+    const hit = await make('hit_v1.wav', ['-f', 'lavfi', '-i', 'sine=frequency=52:duration=0.6', '-f', 'lavfi', '-i', 'anoisesrc=color=brown:amplitude=0.9:duration=0.18:seed=7', '-filter_complex', '[0:a]volume=3,afade=t=out:st=0.03:d=0.57:curve=exp[a];[1:a]afade=t=out:st=0.01:d=0.17[b];[a][b]amix=inputs=2:normalize=0:duration=longest']);
+    const sounds = impactTimes(tl).map((at) => ({ path: hit, spec: { clip_id: 'effect-hit', at, gain_db: -7 } }));
+    if (!(tl.audio.mix.music ?? []).length) {
+      const seconds = Math.ceil(tl.duration);
+      const drone = await make(`drone_v1_${seconds}.wav`, ['-f', 'lavfi', '-i', `sine=frequency=55:duration=${seconds}`, '-f', 'lavfi', '-i', `anoisesrc=color=brown:amplitude=0.6:duration=${seconds}:seed=11`, '-filter_complex', `[0:a]volume=0.6,tremolo=f=0.2:d=0.6[a];[1:a]lowpass=f=160[b];[a][b]amix=inputs=2:normalize=0:duration=longest,afade=t=in:d=1.5,afade=t=out:st=${Math.max(0, seconds - 1.5)}:d=1.5`]);
+      sounds.push({ path: drone, spec: { clip_id: 'effect-drone', at: 0, gain_db: -20 } });
+    }
+    return sounds;
+  }
+
   private async assFile(tl: Timeline, offset = 0): Promise<{ path: string; fontsDir: string }> {
     const fmt = parseFormat(tl.format.id, { fps: tl.format.fps, bitrate: tl.format.bitrate });
-    const text = buildAss({ words: tl.captions.words, style: tl.captions.style, format: fmt, zone: safeZoneFor(fmt), placement: tl.captions.placement, offset });
+    const text = buildAss({ words: tl.captions.words, style: tl.captions.style, format: fmt, zone: safeZoneFor(fmt), placement: tl.captions.placement, offset, mode: tl.captions.mode });
     const path = this.cache('ass', `${createHash('sha256').update(text).digest('hex').slice(0, 24)}.ass`);
     await mkdir(dirname(path), { recursive: true });
     await writeFile(path, text, 'utf8');
@@ -267,7 +301,8 @@ export class RenderService {
       last = 'cap';
     }
     filters.push(`[${last}]format=yuv420p[vout]`);
-    const rate = tl.format.bitrate ? ['-b:v', tl.format.bitrate] : ['-crf', '20'];
+    // film grain costs a lot of bits: cap the rate so an effects render stays a normal upload size
+    const rate = tl.format.bitrate ? ['-b:v', tl.format.bitrate] : tl.effects ? ['-crf', '23', '-maxrate', '12M', '-bufsize', '24M'] : ['-crf', '20'];
     await run(
       this.ffmpeg,
       ['-hide_banner', '-nostats', '-y', ...clips.flatMap((c) => ['-i', c]), '-i', mix, '-filter_complex', filters.join(';'), '-map', '[vout]', '-map', `${clips.length}:a`, '-t', tl.duration.toFixed(3), '-c:v', 'libx264', '-preset', 'medium', ...rate, '-pix_fmt', 'yuv420p', '-r', String(fps), '-c:a', 'aac', '-b:a', '192k', '-movflags', '+faststart', out],

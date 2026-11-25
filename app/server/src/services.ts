@@ -706,8 +706,8 @@ export class Studio {
     return { srt, vtt, files: [`captions/exports/${track.lang}.srt`, `captions/exports/${track.lang}.vtt`, `captions/tracks/${track.lang}.json`] };
   }
 
-  buildComposition(compId: string, opts: { reopen?: boolean } = {}) {
-    return { ...this.save(compId, this.render.build(compId), { actor: 'user', reopen: opts.reopen }) };
+  buildComposition(compId: string, opts: { reopen?: boolean; effects?: string } = {}) {
+    return { ...this.save(compId, this.render.build(compId, opts.effects), { actor: 'user', reopen: opts.reopen }) };
   }
 
   setSceneOverride(compId: string, sceneId: string, override: { crop?: { x: number; y: number; w: number; h: number }; caption_y_pct?: number | null }, opts: { reopen?: boolean } = {}) {

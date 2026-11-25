@@ -58,8 +58,8 @@ function Composition({ lang, format }: { lang: string; format: string }) {
     }
   }, job ? 600 : null);
 
-  const build = async () => {
-    const call = (reopen: boolean) => api.post(`/artifacts/${comp.id}/build-timeline`, { reopen });
+  const build = async (effects?: string) => {
+    const call = (reopen: boolean) => api.post(`/artifacts/${comp.id}/build-timeline`, { reopen, effects });
     try { await call(false); } catch (e: any) { if (e.code === 'PROTECTED' && confirm('This composition is approved. Rebuild it?\n\nIts final render will need revision.')) await call(true); else throw e; }
     push('ok', 'Timeline built from the current script, narration, captions and visuals');
     done();
@@ -85,7 +85,7 @@ function Composition({ lang, format }: { lang: string; format: string }) {
               <TimelinePlayer key={comp.current_version_id ?? 'none'} timeline={tl} time={t} onTime={setT} captions={captions} onEnlarge={() => setPopup(true)}
                 still={popup ? undefined : <PreviewFrame id={comp.id} version={comp.current_version_id ?? ''} t={t} captions={captions} stale={!!st?.stale} />} />
               <label className="row gap"><input type="checkbox" checked={captions} onChange={(e) => setCaptions(e.target.checked)} />Show captions</label>
-              <p className="muted small" style={{ margin: 0 }}>Paused, you see an exact frame from the renderer. Playing is a quick check of pictures, voice and caption timing: camera moves, transitions, music and exact caption styling appear in the rendered video.</p>
+              <p className="muted small" style={{ margin: 0 }}>Paused, you see an exact frame from the renderer. Playing is a quick check of pictures, voice, captions and an approximation of the camera and style: transitions, sound effects, music and exact styling appear in the rendered video.</p>
             </div>
           </Card>
           {popup && (
@@ -176,7 +176,7 @@ function PreviewFrame({ id, version, t, captions, stale }: { id: string; version
 }
 
 /** The timeline: what goes into it, one button to build it, and a strip of the scenes in order, sized by their length. */
-function TimelineBuilder({ lang, format, timeline, built, stale, onBuild, onPick, at }: { lang: string; format: string; timeline?: any; built: boolean; stale: boolean; onBuild: () => Promise<void>; onPick: (t: number) => void; at: number }) {
+function TimelineBuilder({ lang, format, timeline, built, stale, onBuild, onPick, at }: { lang: string; format: string; timeline?: any; built: boolean; stale: boolean; onBuild: (effects: string) => Promise<void>; onPick: (t: number) => void; at: number }) {
   const { project, find, all } = useProject();
   const storyboard = find('storyboard')!;
   const visuals = all('scene_asset');
@@ -190,24 +190,38 @@ function TimelineBuilder({ lang, format, timeline, built, stale, onBuild, onPick
     { label: 'Captions', ok: approved(find('caption', lang)), note: approved(find('caption', lang)) ? 'Approved' : 'Not approved', href: 'captions' },
   ];
   const all4 = parts.every((p) => p.ok);
-  const state = !built ? (all4 ? 'ready' : 'waiting') : stale ? 'stale' : 'built';
-  const headline = { waiting: 'A few approvals to go', ready: 'Everything is ready', stale: 'The timeline is out of date', built: 'Timeline built' }[state];
+  const current: string = timeline?.effects ?? 'none';
+  // before the first build, suggest the folklore style for folklore-type videos
+  const suggested = /folklore|horror|superstition|myth/i.test(project.category ?? '') ? 'folklore' : 'none';
+  const [picked, setPicked] = useState<string | null>(null);
+  const effects = picked ?? (timeline ? current : suggested);
+  const changed = !!timeline && effects !== current;
+  const state = !built ? (all4 ? 'ready' : 'waiting') : stale || changed ? 'stale' : 'built';
+  const headline = changed ? 'Scene style changed' : { waiting: 'A few approvals to go', ready: 'Everything is ready', stale: 'The timeline is out of date', built: 'Timeline built' }[state];
   const detail = {
     waiting: 'Approve the items below, then build the timeline.',
     ready: `Combine your scenes, narration and captions into the ${langName(lang)} video, ${formatName(format)}.`,
     stale: 'The storyboard, narration, captions or a visual changed. Rebuild before approving or rendering.',
     built: 'Click a scene in the strip to preview it.',
   }[state];
+  const shownDetail = changed ? 'Rebuild the timeline to apply the new style to the preview and the render.' : detail;
   return (
     <section className={`tlb tlb-${state}`} aria-label="Timeline">
       <div className="tlb-head">
         <span className="tlb-icon" aria-hidden="true"><Icon name={state === 'built' ? 'check' : state === 'stale' ? 'alert' : 'film'} /></span>
         <div className="grow">
           <h3>{headline}</h3>
-          <p className="muted small">{detail}</p>
+          <p className="muted small">{shownDetail}</p>
           {timeline && <div className="row gap wrap"><Pill tone="info">{timeline.scenes.length} scenes</Pill><Pill tone="info">{fmtSec(timeline.duration)}</Pill><Pill tone="info">{timeline.format.width}×{timeline.format.height}</Pill></div>}
         </div>
-        <Btn kind={state === 'built' ? 'default' : 'primary'} onClick={onBuild}><Icon name={built ? 'refresh' : 'spark'} small /> {built ? 'Rebuild timeline' : 'Build timeline'}</Btn>
+        <Btn kind={state === 'built' ? 'default' : 'primary'} onClick={async () => { await onBuild(effects); setPicked(null); }}><Icon name={built ? 'refresh' : 'spark'} small /> {changed ? 'Apply style & rebuild' : built ? 'Rebuild timeline' : 'Build timeline'}</Btn>
+      </div>
+      <div className="tlb-style">
+        <b>Scene style</b>
+        <div className="seg" role="group" aria-label="Scene style">
+          {([['none', 'Clean'], ['folklore', 'Dark folklore']] as const).map(([v, label]) => <button key={v} type="button" className={effects === v ? 'on' : ''} aria-pressed={effects === v} onClick={() => setPicked(v)}>{label}</button>)}
+        </div>
+        <span className="muted small">{effects === 'folklore' ? 'Like your reference videos: hard cuts, a new framing about every 3 seconds, dark grade with grain and flicker, one big word at a time (names and numbers in red), impact hits, a low drone when there is no music, and a glitch ending.' : 'Your storyboard camera moves and transitions, with normal captions.'}</span>
       </div>
       <ul className="tlb-parts">
         {parts.map((p) => (
