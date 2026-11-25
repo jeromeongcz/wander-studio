@@ -302,3 +302,4 @@ textarea.vis { min-height: 0; field-sizing: content; }
 .scene-text > * { flex-shrink: 0; }
 .scene-card.wide .scene-actions { position: static; margin: 0; padding: 0; border: 0; }
 .scene-card.wide .scene-body > dl.scene-text { display: grid; align-content: start; grid-auto-rows: max-content; }
+.scene-card.wide .scene-body > .scene-facts.scene-text { background: transparent; }
