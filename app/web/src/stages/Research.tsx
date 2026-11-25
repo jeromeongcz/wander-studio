@@ -96,7 +96,7 @@ export function ResearchStage() {
   const art = find('research')!;
   return (
     <>
-      {!art.current_version_id && <div className="notice">Looking for ideas? Search and approve a topic in the <a href="#/">Research Studio</a>, then start a video from it. Or fill in your own research notes below.</div>}
+      {!art.current_version_id && <div className="notice">Looking for ideas? Search and approve a topic in the <a href="#/research">Research Studio</a>, then start a video from it. Or fill in your own research notes below.</div>}
       <ResearchNotes />
     </>
   );

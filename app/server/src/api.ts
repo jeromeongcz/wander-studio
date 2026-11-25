@@ -116,6 +116,23 @@ export function buildApi(engine: Engine, config: Partial<AppConfig> = {}): Fasti
     const [research] = engine.list(id, { kind: 'research' });
     return reply.status(201).send({ id, researchArtifactId: research.id, researchTemplate: newResearchContent(b.topic ?? b.name, b.category) });
   });
+  // ---- notifications: derived from current state, nothing is stored or sent anywhere ----
+  app.get('/notifications', async () => {
+    const day = new Date(Date.now() - 24 * 3600 * 1000).toISOString();
+    const out: { id: string; kind: 'review' | 'revision' | 'job_failed' | 'research'; tone: 'warn' | 'bad' | 'good'; title: string; detail: string; at: string; project_id?: string; artifact_kind?: string }[] = [];
+    const db = engine.db;
+    const arts = db.prepare("SELECT a.id, a.project_id, a.kind, a.label, a.state, a.updated_at, p.name AS project FROM artifacts a JOIN projects p ON p.id = a.project_id WHERE a.state IN ('awaiting_review','needs_revision','rejected','failed') ORDER BY a.updated_at DESC LIMIT 40").all() as any[];
+    for (const a of arts) {
+      const review = a.state === 'awaiting_review';
+      out.push({ id: `${review ? 'review' : 'revision'}:${a.id}:${a.state}`, kind: review ? 'review' : 'revision', tone: review ? 'warn' : 'bad', title: review ? `${a.label} is waiting for your approval` : `${a.label} needs attention`, detail: a.project, at: a.updated_at, project_id: a.project_id, artifact_kind: a.kind });
+    }
+    const jobs = db.prepare("SELECT j.id, j.kind, j.updated_at, p.name AS project, j.project_id FROM jobs j JOIN projects p ON p.id = j.project_id WHERE j.state = 'failed' AND j.updated_at > ? ORDER BY j.updated_at DESC LIMIT 10").all(day) as any[];
+    for (const j of jobs) out.push({ id: `job:${j.id}`, kind: 'job_failed', tone: 'bad', title: `${String(j.kind).replace(/_/g, ' ')} failed`, detail: j.project, at: j.updated_at, project_id: j.project_id });
+    const batches = db.prepare("SELECT id, state, message, requested_count, focus, category, COALESCE(finished_at, created_at) AS at FROM topic_batches WHERE project_id IS NULL AND state IN ('done','partial','failed') AND COALESCE(finished_at, created_at) > ? ORDER BY id DESC LIMIT 10").all(day) as any[];
+    for (const b of batches) out.push({ id: `research:${b.id}`, kind: 'research', tone: b.state === 'failed' ? 'bad' : 'good', title: b.state === 'failed' ? 'Topic research failed' : b.state === 'partial' ? 'Topic research finished with fewer topics' : 'Topic research is ready to review', detail: b.focus || b.category || 'Research Studio', at: b.at });
+    return out.sort((x, y) => (x.at < y.at ? 1 : -1)).slice(0, 30);
+  });
+
   // ---- topic research ----
   app.get('/research/status', async () => studio.research.status());
   app.get('/projects/:id/research/topics', async (req) => studio.research.list((req.params as { id: string }).id));
@@ -281,6 +298,12 @@ export function buildApi(engine: Engine, config: Partial<AppConfig> = {}): Fasti
   app.get('/projects/:id/assets', async (req) => {
     const q = req.query as { type?: string; status?: string };
     return assets.list({ projectId: (req.params as { id: string }).id, type: q.type, status: q.status });
+  });
+  // every asset across all projects and the shared library, for the Asset Library page
+  app.get('/assets', async (req) => {
+    const q = req.query as { type?: string; status?: string };
+    const names = new Map(engine.listProjects().map((p) => [p.id, p.name]));
+    return assets.list({ type: q.type, status: q.status }).map((a) => ({ ...a, project_name: a.project_id ? (names.get(a.project_id) ?? null) : null }));
   });
   app.get('/library', async (req) => assets.list({ shared: true, type: (req.query as { type?: string }).type }));
   app.get('/assets/:id', async (req) => {

@@ -221,3 +221,19 @@ test('the categories endpoint serves the seven topics with their recommendations
   const other = JSON.parse((await app.inject({ method: 'GET', url: '/categories/Anything%20else/recommendations' })).body);
   assert.equal(other.custom, true);
 });
+
+test('notifications are derived from real state; the asset list spans projects', async () => {
+  const { app } = boot();
+  const get = async (url: string) => JSON.parse((await app.inject({ method: 'GET', url })).body);
+  assert.deepEqual(await get('/notifications'), [], 'nothing to report on a fresh install');
+  assert.deepEqual(await get('/assets'), []);
+  const p = JSON.parse((await app.inject({ method: 'POST', url: '/projects', payload: { name: 'Notify me', languages: ['en'] } })).body);
+  const research = (await get(`/projects/${p.id}`)).artifacts.find((a: any) => a.kind === 'research');
+  await app.inject({ method: 'PUT', url: `/artifacts/${research.id}/content`, payload: { content: { topic: 'T', sources: [{ id: 's1', url: 'https://example.org/a', title: 'A' }], claims: [], checklist: [{ id: 'c1', label: 'Checked', done: true }] } } });
+  const sub = await app.inject({ method: 'POST', url: `/artifacts/${research.id}/submit` });
+  assert.equal(sub.statusCode, 200, sub.body);
+  const n = await get('/notifications');
+  assert.ok(n.every((x: any) => x.id && x.title && x.at));
+  const review = n.find((x: any) => x.kind === 'review');
+  assert.ok(review && review.project_id === p.id && review.detail === 'Notify me' && review.artifact_kind === 'research', 'an artifact waiting for approval is reported');
+});

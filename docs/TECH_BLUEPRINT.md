@@ -54,3 +54,6 @@ The project page is a six-step stepper: Topic, Script, Storyboard & visuals, Voi
 
 ### Research Studio
 `#/` is the Research Studio: topic research needs no project. Migration v9 makes `topic_batches.project_id` and `topic_ideas.project_id` optional and adds an `approved` idea status. Studio runs live in `ResearchService` (not the project job queue, whose rows require a project), one at a time, cancellable; a restart marks a stuck run failed. Approving an idea is a user-only HTTP action (`POST /topic-ideas/:id/approve`); starting a video from a studio idea requires it to be approved, and the new project's Topic step still needs its own approval. The old per-project research routes remain on the server but the UI no longer uses them.
+
+### App shell
+Left sidebar: Dashboard (`#/`), Research Studio (`#/research`), Video Production (`#/projects`, `#/p/<id>/<stage>`), Asset Library (`#/assets`, read-only view over `GET /assets` with licences; managing assets stays in a video's Visuals step), Settings (`#/settings`). The top strip holds only notifications and the theme toggle; content is full width. `GET /notifications` is derived from current state (artifacts awaiting approval or needing revision, failed jobs and finished research in the last 24 hours); "read" is remembered in the browser's localStorage only. On phones the sidebar slides in from a menu button.

@@ -83,7 +83,7 @@ function StepFooter({ info, next, projectId, reload }: { info: StepInfo; next?: 
       <>
         <div className="stepfoot">
           <Icon name="lock" />
-          <span className="grow">{r.state === 'awaiting_review' ? <><strong>Your topic is ready for your decision.</strong> Nothing moves on until you approve it.</> : r.current_version_id ? <>Submit the topic for review to run the checks, then approve it to unlock <strong>Script</strong>.</> : <>Fill in the research notes (or start from a topic approved in the <a href="#/">Research Studio</a>). Then you approve it to unlock <strong>Script</strong>.</>}</span>
+          <span className="grow">{r.state === 'awaiting_review' ? <><strong>Your topic is ready for your decision.</strong> Nothing moves on until you approve it.</> : r.current_version_id ? <>Submit the topic for review to run the checks, then approve it to unlock <strong>Script</strong>.</> : <>Fill in the research notes (or start from a topic approved in the <a href="#/research">Research Studio</a>). Then you approve it to unlock <strong>Script</strong>.</>}</span>
           {r.state === 'awaiting_review' ? (
             <Btn kind="primary" onClick={() => setConfirm(true)}>Approve topic &amp; continue <Icon name="arrow" small /></Btn>
           ) : (
@@ -161,7 +161,7 @@ export function ProjectPage({ id, stage }: { id: string; stage: string }) {
     <ProjectCtx.Provider value={ctx}>
       <div className="stack">
         <div className="row gap wrap">
-          <a className="btn btn-ghost btn-sm" href="#/projects">← My videos</a>
+          <a className="btn btn-ghost btn-sm" href="#/projects">← Video Production</a>
           <h1>{proj.name}</h1>
           {proj.category && <Pill tone="info">{proj.category}</Pill>}
           {proj.languages.map((l) => <Pill key={l}>{langName(l)}</Pill>)}

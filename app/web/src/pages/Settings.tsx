@@ -19,7 +19,7 @@ export function SettingsPage() {
 
   return (
     <div className="stack">
-      <h1>Jobs &amp; settings</h1>
+      <h1>Settings</h1>
 
       <Card title="Background jobs" actions={<Btn small onClick={jobs.reload}>Refresh</Btn>}>
         {jobs.loading && !jobs.data && <Loading />}

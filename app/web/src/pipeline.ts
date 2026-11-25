@@ -58,3 +58,6 @@ export function analyze(arts: Artifact[]): { steps: StepInfo[]; current: number;
 }
 
 export const stepOfPart = (partId: string) => STEPS.findIndex((s) => s.parts.some((p) => p.id === partId));
+
+/** The stage page (route id) that shows an artifact of this kind. */
+export const partOfKind = (kind: string) => STEPS.flatMap((s) => s.parts).find((p) => p.kinds.includes(kind))?.id ?? 'overview';

@@ -64,7 +64,7 @@ export function ResearchStudio() {
           <h1>Research Studio</h1>
           <p>Search a topic and Claude researches it with sources. You read it, approve the one you want, then start a video from it. No project is created until you say so.</p>
         </div>
-        <a className="btn" href="#/projects">My videos</a>
+        <a className="btn" href="#/projects">Video Production</a>
       </section>
 
       <Card title="1. Search a topic">
