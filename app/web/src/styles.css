@@ -301,3 +301,4 @@ textarea.vis { min-height: 0; field-sizing: content; }
 .scene-card.wide .scene-body > .scene-text { flex: 1 1 0; min-height: 0; overflow-y: auto; overscroll-behavior: contain; display: flex; flex-direction: column; gap: 8px; padding: 10px 12px; background: var(--panel3); border: 1px solid var(--line); border-radius: var(--radius-sm); }
 .scene-text > * { flex-shrink: 0; }
 .scene-card.wide .scene-actions { position: static; margin: 0; padding: 0; border: 0; }
+.scene-card.wide .scene-body > dl.scene-text { display: grid; align-content: start; grid-auto-rows: max-content; }

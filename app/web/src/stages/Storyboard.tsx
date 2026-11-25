@@ -115,10 +115,8 @@ export function StoryboardStage() {
                 {picture(i)}
                 <div className="scene-body">
                   <div className="row gap"><span className="scene-n">{i + 1}</span><strong className="grow">{s.kind}</strong></div>
-                  <div className="scene-text" tabIndex={0}>
                   <p className="quote">“{s.text}”</p>
-                  <dl className="scene-facts small">{['setting', 'characters', 'action', 'shot', 'mood', 'props'].filter((k) => s.visual?.[k]).map((k) => <div key={k}><dt>{k}</dt><dd>{s.visual[k]}</dd></div>)}</dl>
-                  </div>
+                  <dl className="scene-facts small scene-text" tabIndex={0}>{['setting', 'characters', 'action', 'shot', 'mood', 'props'].filter((k) => s.visual?.[k]).map((k) => <div key={k}><dt>{k}</dt><dd>{s.visual[k]}</dd></div>)}</dl>
                 </div>
               </article>
             ))}
@@ -144,8 +142,8 @@ export function StoryboardStage() {
                   <Btn small kind="ghost" onClick={() => move(i, 1)} disabled={i === c.scenes.length - 1}>↓</Btn>
                   <Btn small kind="ghost" onClick={() => edit({ scenes: c.scenes.filter((_: any, k: number) => k !== i) })}>Remove</Btn>
                 </div>
-                <div className="scene-text" tabIndex={0}>
                 {s.segment_text && <p className="quote">“{s.segment_text}”</p>}
+                <div className="scene-text" tabIndex={0}>
                 <p className="visual-text">{s.visual_description}</p>
                 <details>
                 <summary className="muted small">Edit details</summary>
