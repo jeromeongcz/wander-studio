@@ -330,6 +330,7 @@ textarea.vis { min-height: 0; field-sizing: content; }
 .scene-tools { display: flex; align-items: center; justify-content: space-between; gap: 4px; flex-shrink: 0; }
 .scene-card.wide .frame-col { gap: 8px; }
 .scene-card.wide .frame-col .frame-slot { min-height: 100px; flex: 0 1 auto; }
-/* storyboard header: scene count and every button aligned to the left */
-.board-head { justify-content: flex-start; align-items: center; text-align: left; }
-.board-head > .btn-primary { margin-left: 0; }
+/* storyboard header: scene count on the left, buttons on the right */
+.board-head { justify-content: space-between; align-items: center; text-align: left; }
+.board-head > .grow { flex: 1 1 240px; }
+.board-actions { display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: 8px; margin-left: auto; max-width: 100%; }
