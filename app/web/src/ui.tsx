@@ -189,6 +189,7 @@ export function FilePick({ accept, onFile, label = 'Choose file' }: { accept: st
 }
 
 const ICONS: Record<string, string> = {
+  refresh: 'M3 12a9 9 0 0 1 15.5-6.2L21 8M21 3v5h-5M21 12a9 9 0 0 1-15.5 6.2L3 16M3 21v-5h5',
   bell: 'M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9M13.7 21a2 2 0 0 1-3.4 0',
   home: 'M3 11 12 3l9 8M5 10v10h5v-6h4v6h5V10',
   search: 'M11 4a7 7 0 1 0 0 14 7 7 0 0 0 0-14zM21 21l-4.3-4.3',

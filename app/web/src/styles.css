@@ -289,3 +289,10 @@ textarea.vis { min-height: 0; field-sizing: content; }
 .scene-card .visual-text { max-height: none; overflow: visible; }
 .scene-actions { position: sticky; bottom: 0; margin-top: auto; padding: 10px 0 14px; background: var(--panel); border-top: 1px solid var(--line); }
 @media (max-width: 760px) { .scene-card.wide { height: 560px; } .scene-card.wide .frame-slot { align-self: stretch; max-height: 220px; flex: none; } .scene-card.wide .scene-body { flex: 1; } }
+.frame-col { display: flex; flex-direction: column; gap: 10px; }
+.frame-col > .btn { width: 100%; }
+.scene-card.wide .frame-col { width: 220px; flex: none; margin: 14px 0 14px 14px; min-height: 0; }
+.scene-card.wide .frame-col .frame-slot { width: 100%; margin: 0; flex: 0 1 auto; min-height: 120px; max-height: 262px; }
+.scene-card.wide .scene-actions { padding: 8px 0 12px; }
+@media (max-width: 760px) { .scene-card.wide .frame-col { width: auto; margin: 14px 14px 0; } .scene-card.wide .frame-col .frame-slot { max-height: 180px; } }
+.frame-col > .btn { flex-shrink: 0; }
