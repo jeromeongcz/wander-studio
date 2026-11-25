@@ -27,6 +27,7 @@ const GUIDANCE: Record<string, string> = {
   'culture and traditions': 'Customs, festivals, crafts and everyday practices. Say where a practice is from, note regional variation, and avoid presenting one version as universal.',
   'food origins': 'Where dishes and ingredients come from. Origins are often disputed: show what each source claims, mark "disputed" when sources disagree, and never write that someone "invented" a dish unless a reliable source documents it.',
   geography: 'Places, landforms, islands, climate and borders. Give figures with the year and an official or scholarly source, because counts, areas and populations change.',
+  'dark folklore horror': 'Original-feeling scary stories rooted in real folk tales, urban legends and local beliefs. Name the tradition or place each comes from and say what is recorded versus invented. Prefer eerie, escalating premises that fit a 60-70 second spoken story; no gore, no real people or real tragedies.',
   superstitions: 'Folk beliefs and their origins. Present each as a belief, say which community holds it, and give the documented origin only if a reliable source records one; otherwise say the origin is unclear.',
 };
 const GENERAL = 'Interesting, well-sourced subjects within this category. Prefer reputable sources and mark uncertain material as disputed or legend.';

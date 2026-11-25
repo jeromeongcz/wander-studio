@@ -45,9 +45,9 @@ async function setup(ctx: Ctx, category = 'Science', approveBase = true) {
 const sceneAssets = (ctx: Ctx, id: string) => ctx.engine.list(id, { kind: 'scene_asset' });
 const getSb = async (ctx: Ctx, sb: string) => (await ctx.call('GET', `/artifacts/${sb}`)).json;
 
-test('categories: exactly your six topics, each well-formed; anything else is a custom category with general defaults', () => {
+test('categories: exactly your seven topics, each well-formed; anything else is a custom category with general defaults', () => {
   const list = listCategories();
-  assert.deepEqual(list.map((c) => c.name), ['Philippine History', 'Mythology and Folklore', 'Culture and Traditions', 'Food Origins', 'Geography', 'Superstitions']);
+  assert.deepEqual(list.map((c) => c.name), ['Philippine History', 'Mythology and Folklore', 'Culture and Traditions', 'Food Origins', 'Geography', 'Superstitions', 'Dark Folklore Horror']);
   for (const c of list) {
     assert.equal(profileFor(c.name).custom, false, c.name);
     assert.ok(c.profile.assets.length >= 3 && c.profile.assets.every((a) => ASSET_TYPES.includes(a)), `${c.name} assets`);

@@ -211,10 +211,10 @@ test('deleting a project: needs the exact name, previews what goes, removes ever
   assert.equal(JSON.parse((await app.inject({ method: 'GET', url: '/library' })).body).length, 1);
 });
 
-test('the categories endpoint serves the six topics with their recommendations', async () => {
+test('the categories endpoint serves the seven topics with their recommendations', async () => {
   const { app } = boot();
   const cats = JSON.parse((await app.inject({ method: 'GET', url: '/categories' })).body) as { name: string; profile: { assets: string[] } }[];
-  assert.deepEqual(cats.map((c) => c.name), ['Philippine History', 'Mythology and Folklore', 'Culture and Traditions', 'Food Origins', 'Geography', 'Superstitions']);
+  assert.deepEqual(cats.map((c) => c.name), ['Philippine History', 'Mythology and Folklore', 'Culture and Traditions', 'Food Origins', 'Geography', 'Superstitions', 'Dark Folklore Horror']);
   assert.ok(cats.every((c) => c.profile.assets.length >= 3));
   const known = JSON.parse((await app.inject({ method: 'GET', url: '/categories/Food%20Origins/recommendations' })).body);
   assert.equal(known.custom, false);

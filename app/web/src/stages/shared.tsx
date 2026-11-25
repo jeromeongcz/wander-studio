@@ -98,7 +98,7 @@ export function ProjectDetailsEditor({ project, onSaved, compact }: { project: {
 
 interface CategoryInfo { name: string; custom?: boolean }
 
-/** Category chooser: the six project topics, plus "Other" to type your own (custom categories get general recommendations). */
+/** Category chooser: the project topics, plus "Other" to type your own (custom categories get general recommendations). */
 export function CategoryPicker({ value, onChange, label = 'Category' }: { value: string; onChange: (v: string) => void; label?: string }) {
   const [cats, setCats] = useState<CategoryInfo[]>([]);
   const [custom, setCustom] = useState(false);
