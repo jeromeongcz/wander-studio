@@ -59,7 +59,17 @@ export function ResearchWorkspace() {
   const card = (t: any) => {
     const c = CONF[t.confidence];
     return (
-      <section key={t.id} className="card" style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+      <section key={t.id} className={`card topic topic-${t.status}`}>
+        {(t.status === 'approved' || t.status === 'used') && (
+          <header className="topic-top">
+            <span className="topic-state">
+              <i><Icon name={t.status === 'used' ? 'film' : 'check'} small /></i>
+              <span><b>{t.status === 'used' ? 'Video started' : 'Approved'}</b>{t.status === 'approved' && t.approved_at && <span>{new Date(t.approved_at).toLocaleDateString()}</span>}{t.status === 'used' && <span>Pick up where you left off</span>}</span>
+            </span>
+            {t.status === 'approved' && <button type="button" className="topic-go" onClick={() => setStarting(t)}><Icon name="play" small /> Start a video from this</button>}
+            {t.status === 'used' && <a className="topic-go open" href={videoOf(t) ? `#/p/${videoOf(t)}/research` : '#/projects'}>{videoOf(t) ? 'Open video' : 'Go to Video Production'} <Icon name="arrow" small /></a>}
+          </header>
+        )}
         <h3>{t.title}</h3>
         <div className="row gap wrap">
           <span title={c.help}><Pill tone={c.tone}>{c.label}</Pill></span>
@@ -83,11 +93,8 @@ export function ResearchWorkspace() {
         <div className="row gap wrap" style={{ marginTop: 'auto' }}>
           {t.status === 'new' && <Btn small kind="primary" onClick={() => setApproving(t)}><Icon name="check" small /> Approve topic</Btn>}
           {t.status === 'new' && <Btn small kind="ghost" onClick={async () => { await api.post(`/topic-ideas/${t.id}/dismiss`); data.reload(); }}>Dismiss</Btn>}
-          {t.status === 'approved' && <Btn small kind="primary" onClick={() => setStarting(t)}>Start a video from this <Icon name="arrow" small /></Btn>}
           {t.status === 'approved' && <Btn small kind="ghost" onClick={async () => { await api.post(`/topic-ideas/${t.id}/restore`); data.reload(); }}>Undo approval</Btn>}
           {t.status === 'dismissed' && <Btn small onClick={async () => { await api.post(`/topic-ideas/${t.id}/restore`); data.reload(); }}>Restore</Btn>}
-          {t.status === 'used' && <><Pill tone="good">video started</Pill>{videoOf(t) ? <a className="btn btn-sm btn-primary" href={`#/p/${videoOf(t)}/research`}>Open video <Icon name="arrow" small /></a> : <a className="btn btn-sm btn-primary" href="#/projects">Go to Video Production <Icon name="arrow" small /></a>}</>}
-          {t.approved_at && t.status === 'approved' && <span className="muted small">approved {new Date(t.approved_at).toLocaleDateString()}</span>}
         </div>
       </section>
     );
