@@ -59,6 +59,7 @@ function StepFooter({ info, next, projectId, reload }: { info: StepInfo; next?: 
       <div className="stepfoot ready">
         <Icon name="check" /><strong>{info.step.label} approved.</strong>
         <span className="grow" />
+        <Btn onClick={() => { const i = STEPS.findIndex((x) => x.id === info.step.id); location.hash = i > 0 ? `#/p/${projectId}/${STEPS[i - 1].parts[0].id}` : '#/projects'; }}>← Back</Btn>
         {next && <Btn kind="primary" onClick={go}>Continue to {next.step.label} <Icon name="arrow" small /></Btn>}
         {!next && <span className="muted">Every step is approved. Export your package above.</span>}
       </div>
