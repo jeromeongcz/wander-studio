@@ -62,10 +62,12 @@ export class ClaudeBridge {
   }
 
   /** Ask one research question and return the answer text. */
-  async ask(prompt: string, opts: { signal?: AbortSignal; timeoutMs?: number } = {}): Promise<string> {
+  async ask(prompt: string, opts: { signal?: AbortSignal; timeoutMs?: number; noTools?: boolean } = {}): Promise<string> {
     const cwd = await mkdtemp(join(tmpdir(), 'wander-claude-'));
     try {
-      const args = ['-p', '--output-format', 'json', '--tools', 'WebSearch,WebFetch', '--allowedTools', 'WebSearch,WebFetch', '--permission-mode', 'dontAsk', '--no-session-persistence', '--disable-slash-commands', '--strict-mcp-config'];
+      // research gets the two web tools; writing gets no tools at all
+      const tools = opts.noTools ? ['--tools', ''] : ['--tools', 'WebSearch,WebFetch', '--allowedTools', 'WebSearch,WebFetch'];
+      const args = ['-p', '--output-format', 'json', ...tools, '--permission-mode', 'dontAsk', '--no-session-persistence', '--disable-slash-commands', '--strict-mcp-config'];
       const r = await exec(this.bin, args, { input: prompt, cwd, timeout: opts.timeoutMs ?? 8 * 60_000, signal: opts.signal });
       let j: { is_error?: boolean; result?: unknown } | null = null;
       try {

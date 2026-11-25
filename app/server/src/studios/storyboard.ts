@@ -1,7 +1,7 @@
 import { EngineError } from '../engine.ts';
 import { estimate, PRESETS } from './estimator.ts';
 import type { CalibrationSample } from './estimator.ts';
-import type { ScriptContent } from './script.ts';
+import type { ScriptContent, SceneVisual, ScriptCharacter } from './script.ts';
 
 export const ASSET_TYPES = [
   'ai_image',
@@ -145,6 +145,17 @@ export function storyboardReadiness(
 }
 
 // ---- deterministic draft from the approved base script ----
+/** One readable description from a section's visual brief, repeating the fixed look of every character it names. */
+export function describeVisual(v: SceneVisual | undefined, cast: ScriptCharacter[] = []): string {
+  if (!v) return '';
+  const parts = ([['Setting', v.setting], ['Characters', v.characters], ['Action', v.action], ['Shot', v.shot], ['Mood and light', v.mood], ['Props', v.props]] as const)
+    .filter(([, x]) => x?.trim())
+    .map(([k, x]) => `${k}: ${x!.trim()}`);
+  if (!parts.length) return '';
+  const looks = cast.filter((c) => c.name.trim() && (v.characters ?? '').toLowerCase().includes(c.name.trim().toLowerCase())).map((c) => `${c.name.trim()}: ${c.description.trim()}`);
+  return [...parts, ...(looks.length ? [`Character looks: ${looks.join(' | ')}`] : [])].join('\n');
+}
+
 export function draftScenes(base: ScriptContent, category: string | undefined, opts: { samples: CalibrationSample[]; defaultWpm?: number; sceneSeconds?: number }): StoryboardContent {
   const { profile } = profileFor(category);
   const goal = opts.sceneSeconds ?? 4;
@@ -153,6 +164,8 @@ export function draftScenes(base: ScriptContent, category: string | undefined, o
   let flip = 0;
 
   for (const sec of base.sections) {
+    // a section with a visual brief is already one beat: keep it as one scene so the picture matches the description
+    const brief = describeVisual(sec.visual, base.characters);
     const sentences = sec.text.split(/(?<=[.!?…])\s+/).map((s) => s.trim()).filter(Boolean);
     const chunks: string[] = [];
     let cur = '';
@@ -165,6 +178,7 @@ export function draftScenes(base: ScriptContent, category: string | undefined, o
       } else cur = next;
     }
     if (cur) chunks.push(cur);
+    if (brief) chunks.splice(0, chunks.length, ...(sec.text.trim() ? [sec.text.trim()] : []));
 
     for (const text of chunks) {
       const idx = scenes.length;
@@ -180,7 +194,7 @@ export function draftScenes(base: ScriptContent, category: string | undefined, o
         script_segment_id: sec.id,
         segment_text: text,
         target_duration: Math.round(dur * 10) / 10,
-        visual_description: `${profile.hint}: ${text}`,
+        visual_description: brief || `${profile.hint}: ${text}`,
         visual_style: profile.styles[idx % profile.styles.length],
         asset_type: asset,
         camera: {

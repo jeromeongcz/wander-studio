@@ -5,10 +5,19 @@ import { SECTION_KINDS } from '../types';
 
 export const sid = () => `s${Math.random().toString(36).slice(2, 7)}`;
 
-export interface Section { id: string; kind: string; text: string; delivery_note?: string; tts_text?: string }
+export interface Section { id: string; kind: string; text: string; delivery_note?: string; tts_text?: string; visual?: Record<string, string> }
+
+const VISUALS: [string, string, string][] = [
+  ['setting', 'Setting / environment', 'Place, time of day, weather, foreground and background'],
+  ['characters', 'Characters on screen', 'Names from the character list, or "none"'],
+  ['action', 'What they are doing', 'Pose, gesture, expression, movement'],
+  ['shot', 'Shot and camera', 'Shot size, angle, composition, camera move'],
+  ['mood', 'Light and mood', 'Light source, colours, atmosphere'],
+  ['props', 'Props', 'Important objects'],
+];
 
 /** Ordered list of script sections with optional pronunciation text. */
-export function SectionsEditor({ sections, onChange, withTts, lockKinds }: { sections: Section[]; onChange: (s: Section[]) => void; withTts?: boolean; lockKinds?: boolean }) {
+export function SectionsEditor({ sections, onChange, withTts, lockKinds, withVisual }: { sections: Section[]; onChange: (s: Section[]) => void; withTts?: boolean; lockKinds?: boolean; withVisual?: boolean }) {
   const set = (i: number, patch: Partial<Section>) => onChange(sections.map((s, k) => (k === i ? { ...s, ...patch } : s)));
   const move = (i: number, d: number) => {
     const j = i + d;
@@ -34,7 +43,18 @@ export function SectionsEditor({ sections, onChange, withTts, lockKinds }: { sec
               <Btn small kind="ghost" onClick={() => onChange(sections.filter((_, k) => k !== i))}>Remove</Btn>
             </>)}
           </div>
+          {withVisual && <h4 style={{ marginTop: 10 }}>Narration</h4>}
           <textarea aria-label="Narration text" style={{ marginTop: 8 }} value={s.text} placeholder={s.delivery_note ? `Guidance: ${s.delivery_note}` : 'What the narrator says. This exact text is also what the captions show.'} onChange={(e) => set(i, { text: e.target.value })} />
+          {withVisual && (
+            <div className="visual">
+              <h4>What we see</h4>
+              <div className="form">
+                {VISUALS.map(([k, label, hint]) => (
+                  <Field key={k} label={label}><textarea className="vis" rows={3} value={s.visual?.[k] ?? ''} placeholder={hint} onChange={(e) => set(i, { visual: { ...s.visual, [k]: e.target.value } })} /></Field>
+                ))}
+              </div>
+            </div>
+          )}
           <div className="form" style={{ marginTop: 8 }}>
             <Field label="Delivery note"><input value={s.delivery_note ?? ''} onChange={(e) => set(i, { delivery_note: e.target.value })} placeholder="e.g. slow, curious" /></Field>
             {withTts && <Field label="Pronunciation text (voice only)" hint="Phonetic respelling for the voice. Never shown in captions."><input value={s.tts_text ?? ''} onChange={(e) => set(i, { tts_text: e.target.value })} /></Field>}

@@ -35,6 +35,7 @@ import { CacheService } from './cache.ts';
 import { TemplateService } from './templates.ts';
 import { JobRunner } from './jobs.ts';
 import { ResearchService } from './research/service.ts';
+import { ScriptWriter } from './research/scriptwriter.ts';
 import type { JobHandler } from './jobs.ts';
 import { requireHealthy, runPreflight } from './preflight.ts';
 import { scriptEstimate } from './studios/script.ts';
@@ -59,6 +60,7 @@ export class Studio {
   templates: TemplateService;
   jobs: JobRunner;
   research: ResearchService;
+  writer: ScriptWriter;
   constructor(engine: Engine, config: Partial<AppConfig> = {}) {
     this.engine = engine;
     this.config = resolveConfig(config);
@@ -71,6 +73,7 @@ export class Studio {
     this.templates = new TemplateService(engine);
     this.jobs = new JobRunner(engine, this.jobHandlers());
     this.research = new ResearchService(this);
+    this.writer = new ScriptWriter(this);
   }
 
   estimateScript(sc: ScriptContent): number {

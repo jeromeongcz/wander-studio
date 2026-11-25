@@ -535,3 +535,102 @@ test('Research Studio: one run at a time, cancel keeps what was found, restart m
   assert.equal(idea.project_id, null);
   assert.match((await t.call('POST', '/studio/research/prompt', { count: 3, category: 'Geography' })).json.prompt, /"Geography"/);
 });
+
+// ---------------- writing the script ----------------
+const scene = (n: number, over: object = {}) => ({ kind: n === 1 ? 'main' : 'main', text: `Narration sentence number ${n} for the story.`, delivery_note: 'calm', visual: { setting: `A harbour at dawn, view ${n}`, characters: 'Lolo Andres', action: 'He mends a net and looks up', shot: 'wide, slow push in', mood: 'warm side light', props: 'wooden boat' }, ...over });
+const scriptAnswer = (sections: object[] = [scene(1), scene(2), scene(3, { kind: 'cta' })]) => JSON.stringify({ title: 'The net maker', characters: [{ name: 'Lolo Andres', description: 'Old fisherman, white hair, blue shirt' }], sections });
+
+async function approvedResearch() {
+  const t = boot();
+  const pid = await t.project('Secret name', 'Philippine History');
+  const research = t.engine.list(pid, { kind: 'research' })[0];
+  const script = t.engine.list(pid, { kind: 'script_base' })[0];
+  await t.call('PUT', `/artifacts/${research.id}/content`, { content: { topic: 'The galleon trade', angle: 'Ships of silver', sources: [{ id: 's1', url: 'https://ok.example.org/a' }], claims: [{ id: 'c1', text: 'Galleons sailed between Manila and Acapulco.', status: 'unverified', sourceIds: ['s1'] }], checklist: [{ id: 'k', label: 'checked', done: true }] } });
+  return { ...t, pid, research, script };
+}
+const approveResearch = async (t: Awaited<ReturnType<typeof approvedResearch>>) => {
+  assert.equal((await t.call('POST', `/artifacts/${t.research.id}/submit`)).status, 200);
+  assert.equal((await t.call('POST', `/artifacts/${t.research.id}/approve`)).status, 200);
+};
+
+test('the script is written only from approved research, with narration and a visual brief per section, as a draft', async () => {
+  const t = await approvedResearch();
+  t.stub.answer(1, scriptAnswer());
+  const early = await t.call('POST', `/artifacts/${t.script.id}/script/generate`, { seconds: 30 });
+  assert.equal(early.status, 422);
+  assert.equal(early.json.error.code, 'NOT_READY');
+  assert.equal(t.stub.calls(), 0);
+  await approveResearch(t);
+  for (const seconds of [0, 5, 10000, 'x', 30.5]) assert.equal((await t.call('POST', `/artifacts/${t.script.id}/script/generate`, { seconds })).status, 422, String(seconds));
+
+  const r = await t.call('POST', `/artifacts/${t.script.id}/script/generate`, { seconds: 45, notes: 'gentle tone' });
+  assert.equal(r.status, 200, JSON.stringify(r.json));
+  const prompt = t.stub.read('prompt_1');
+  assert.match(prompt, /about 45 seconds/);
+  assert.match(prompt, /9:16/);
+  assert.match(prompt, /NOT verified.*Galleons sailed/);
+  assert.match(prompt, /gentle tone/);
+  assert.doesNotMatch(prompt, /Secret name|ok\.example\.org|\/Users/, 'no project name, links or paths are sent');
+  assert.doesNotMatch(t.stub.read('args_1'), /WebSearch|WebFetch/, 'writing gets no tools');
+
+  const a = (await t.call('GET', `/artifacts/${t.script.id}`)).json;
+  assert.equal(a.state, 'in_progress', 'never approved or submitted by the writer');
+  assert.equal(a.content.preset, 'short_30_45');
+  assert.equal(a.content.target_seconds, 45);
+  assert.equal(a.content.sections[0].kind, 'hook', 'the opening is the hook');
+  assert.equal(a.content.sections[0].visual.setting, 'A harbour at dawn, view 1');
+  assert.equal(a.content.characters[0].name, 'Lolo Andres');
+  assert.equal(t.engine.versions(t.script.id)[0].created_by, 'ai');
+
+  // the storyboard is built from the visual brief, with the character's fixed look
+  await t.call('POST', `/artifacts/${t.script.id}/submit`);
+  assert.equal((await t.call('POST', `/artifacts/${t.script.id}/approve`)).status, 200);
+  const storyboard = t.engine.list(t.pid, { kind: 'storyboard' })[0];
+  assert.equal((await t.call('POST', `/artifacts/${storyboard.id}/seed-storyboard`, {})).status, 201);
+  const sb = t.engine.getContent(storyboard.id) as any;
+  assert.equal(sb.scenes.length, 3, 'one scene per described section');
+  assert.match(sb.scenes[0].visual_description, /Setting: A harbour at dawn, view 1/);
+  assert.match(sb.scenes[0].visual_description, /Action: He mends a net/);
+  assert.match(sb.scenes[0].visual_description, /Character looks: Lolo Andres: Old fisherman/);
+
+  // approved scripts are protected, and no run is spent finding that out
+  const again = await t.call('POST', `/artifacts/${t.script.id}/script/generate`, { seconds: 45 });
+  assert.equal(again.status, 409);
+  assert.equal(t.stub.calls(), 1);
+});
+
+test('unusable script answers are refused with a reason and nothing is saved; the paste path uses the same checks', async () => {
+  const t = await approvedResearch();
+  await approveResearch(t);
+  const bad = [
+    'no json at all',
+    JSON.stringify({ sections: [] }),
+    scriptAnswer([scene(1), scene(2, { text: '' })]),
+    scriptAnswer([scene(1), scene(2, { visual: { setting: 'only a setting' } })]),
+  ];
+  for (const text of bad) {
+    const r = await t.call('POST', `/artifacts/${t.script.id}/script/import`, { text, seconds: 30 });
+    assert.ok(r.status === 422 || r.status === 502, `${r.status} ${text.slice(0, 40)}`);
+  }
+  assert.equal(t.engine.versions(t.script.id).length, 0);
+  assert.equal((await t.call('POST', `/artifacts/${t.script.id}/script/import`, { text: scriptAnswer(), seconds: 90 })).status, 200);
+  assert.equal((t.engine.getContent(t.script.id) as any).preset, 'custom');
+  assert.match((await t.call('POST', `/artifacts/${t.script.id}/script/prompt`, { seconds: 60 })).json.prompt, /about 60 seconds/);
+  assert.equal(t.stub.calls(), 0);
+});
+
+test('video dimensions can be added and removed without touching existing work', async () => {
+  const t = await approvedResearch();
+  const count = () => t.engine.list(t.pid).filter((a) => a.format === 'horizontal_16x9').length;
+  assert.equal((await t.call('POST', `/projects/${t.pid}/formats`, { format: 'horizontal_16x9' })).status, 201);
+  assert.equal(count(), 4, 'a composition and a render for each of two languages');
+  assert.equal((await t.call('POST', `/projects/${t.pid}/formats`, { format: 'horizontal_16x9' })).status, 422);
+  assert.equal((await t.call('POST', `/projects/${t.pid}/formats`, { format: 'circle' })).status, 422);
+  assert.equal((await t.call('DELETE', `/projects/${t.pid}/formats/horizontal_16x9`)).status, 200);
+  assert.equal(count(), 0);
+  assert.equal((await t.call('DELETE', `/projects/${t.pid}/formats/vertical_9x16`)).status, 422, 'the last format stays');
+  await t.call('POST', `/projects/${t.pid}/formats`, { format: 'square_1x1' });
+  const comp = t.engine.list(t.pid, { kind: 'composition' }).find((a) => a.format === 'square_1x1')!;
+  t.engine.saveVersion(comp.id, { some: 'work' }, { actor: 'user' });
+  assert.equal((await t.call('DELETE', `/projects/${t.pid}/formats/square_1x1`)).status, 409, 'saved work is never deleted');
+});

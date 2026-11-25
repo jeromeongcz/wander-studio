@@ -202,3 +202,16 @@ details summary { cursor: pointer; padding: 6px 0; font-weight: 600; }
 .ws .section-h { flex-direction: column; align-items: flex-start; gap: 2px; }
 .step-title { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; }
 .step-title p { margin: 0; }
+
+/* ---------- script writer ---------- */
+fieldset.choices { border: 0; padding: 0; margin: 0; } .choices legend { font-weight: 700; font-size: 12.5px; padding: 0; margin-bottom: 8px; }
+.chip { font: inherit; font-weight: 600; min-height: 40px; padding: 8px 16px; border-radius: 999px; border: 1px solid var(--line-strong); background: var(--panel); color: var(--text); }
+.chip:hover { border-color: var(--brand); } .chip.on { background: var(--brand); border-color: var(--brand); color: var(--brand-ink); }
+.shape { font: inherit; text-align: left; display: flex; align-items: center; gap: 12px; padding: 10px 16px 10px 12px; border-radius: var(--radius); border: 1.5px solid var(--line-strong); background: var(--panel); color: var(--text); }
+.shape:hover { border-color: var(--brand); } .shape.on { border-color: var(--brand); background: var(--brand-soft); } .shape b, .shape .small { display: block; }
+.shape-box { width: 40px; height: 36px; display: grid; place-items: center; } .shape-box i { display: block; border: 2px solid var(--brand); border-radius: 4px; }
+.shape.on .shape-box i { background: var(--brand-tint); }
+.visual { margin-top: 12px; padding: 12px; background: var(--panel3); border: 1px solid var(--line); border-radius: var(--radius-sm); } .visual h4 { margin-bottom: 8px; }
+textarea.vis { min-height: 0; field-sizing: content; }
+.cast { display: grid; grid-template-columns: minmax(120px, 200px) 1fr auto; gap: 8px; align-items: start; }
+@media (max-width: 760px) { .cast { grid-template-columns: 1fr; } }

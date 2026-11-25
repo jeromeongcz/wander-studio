@@ -7,6 +7,7 @@ import { Btn, Card, Empty, Field, Loading, Pill, useToast } from '../ui';
 import { EstimateBar, SectionsEditor, sid } from './shared';
 import type { Section } from './shared';
 import { langName } from '../types';
+import { ScriptWriterCard } from './ScriptWriter';
 
 export function ScriptStage() {
   const { project, find, reload } = useProject();
@@ -36,7 +37,7 @@ export function ScriptStage() {
   return (
     <>
       <ArtifactBar artifact={art} onChanged={() => { reload(); loaded.reload(); }}>{dirty && <Pill tone="warn">unsaved</Pill>}</ArtifactBar>
-      {research.state !== 'approved' && <div className="notice warn">The research is not approved yet. You can draft now, but the script cannot be approved until it is.</div>}
+      <ScriptWriterCard artifactId={art.id} initialSeconds={c.target_seconds ?? 45} hasText={!empty} onWritten={() => { reload(); loaded.reload(); }} />
       <Card title="Base script">
         <div className="form">
           <Field label="Title"><input value={c.title} onChange={(e) => edit({ title: e.target.value })} /></Field>
@@ -54,7 +55,22 @@ export function ScriptStage() {
         )}
       </Card>
       <EstimateBar sections={c.sections} lang={c.lang} preset={c.preset} target={c.target_seconds} />
-      <SectionsEditor sections={c.sections} onChange={(sections) => edit({ sections })} />
+      <Card title={`Characters (${c.characters?.length ?? 0})`} actions={<Btn small onClick={() => edit({ characters: [...(c.characters ?? []), { name: '', description: '' }] })}>Add character</Btn>}>
+        <p className="muted small" style={{ marginTop: 0 }}>Describe each recurring character once. The same look is repeated in every scene that names them.</p>
+        <div className="stack">
+          {(c.characters ?? []).map((ch: { name: string; description: string }, i: number) => {
+            const set = (patch: object) => edit({ characters: c.characters.map((x: object, k: number) => (k === i ? { ...x, ...patch } : x)) });
+            return (
+              <div key={i} className="cast">
+                <input aria-label="Character name" placeholder="Name" value={ch.name} onChange={(e) => set({ name: e.target.value })} />
+                <textarea aria-label="Character look" className="vis" rows={2} placeholder="Age, build, face, hair, clothing, colours, signature items" value={ch.description} onChange={(e) => set({ description: e.target.value })} />
+                <Btn small kind="ghost" onClick={() => edit({ characters: c.characters.filter((_: object, k: number) => k !== i) })}>Remove</Btn>
+              </div>
+            );
+          })}
+        </div>
+      </Card>
+      <SectionsEditor withVisual sections={c.sections} onChange={(sections) => edit({ sections })} />
       {c.sections.length === 0 && <Empty>Add a hook to begin. Shorts scripts must open with a hook.</Empty>}
       <div className="row gap"><Btn kind="primary" onClick={save} disabled={!dirty}>Save script</Btn><span className="muted small">Editing an approved script asks first, and marks its language versions, storyboard and everything after as needing revision.</span></div>
     </>

@@ -9,7 +9,7 @@ import type { AppConfig } from './config.ts';
 import type { FastifyInstance } from 'fastify';
 import { Engine, EngineError } from './engine.ts';
 import { Studio } from './services.ts';
-import { addLanguage, createProject, removeLanguage } from './pipeline.ts';
+import { addFormat, addLanguage, createProject, removeFormat, removeLanguage } from './pipeline.ts';
 import { estimate, isPreset, PRESETS } from './studios/estimator.ts';
 import { newResearchContent } from './studios/research.ts';
 import { listCategories, profileFor } from './studios/storyboard.ts';
@@ -232,6 +232,20 @@ export function buildApi(engine: Engine, config: Partial<AppConfig> = {}): Fasti
     const { id, lang } = req.params as { id: string; lang: string };
     return { removedArtifacts: removeLanguage(engine, id, lang) };
   });
+  app.post('/projects/:id/formats', async (req, reply) => {
+    const { id } = req.params as { id: string };
+    addFormat(engine, id, String(body(req).format ?? ''));
+    return reply.status(201).send(engine.getProject(id));
+  });
+  app.delete('/projects/:id/formats/:format', async (req) => {
+    const { id, format } = req.params as { id: string; format: string };
+    removeFormat(engine, id, format);
+    return engine.getProject(id);
+  });
+  // ---- script writing: draft only; the person reviews and approves ----
+  app.post('/artifacts/:id/script/generate', async (req) => studio.writer.generate((req.params as { id: string }).id, { seconds: body(req).seconds, notes: body(req).notes as string | undefined, reopen: body(req).reopen === true }));
+  app.post('/artifacts/:id/script/prompt', async (req) => ({ prompt: studio.writer.prompt((req.params as { id: string }).id, { seconds: body(req).seconds, notes: body(req).notes as string | undefined }) }));
+  app.post('/artifacts/:id/script/import', async (req) => studio.writer.importText((req.params as { id: string }).id, { text: body(req).text, seconds: body(req).seconds, reopen: body(req).reopen === true }));
   app.post('/artifacts/:id/seed-from-base', async (req, reply) => reply.status(201).send(studio.seedFromBase((req.params as { id: string }).id)));
   app.get('/artifacts/:id/adaptation-prompt', async (req) => {
     const q = req.query as { notes?: string };

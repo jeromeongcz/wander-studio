@@ -11,6 +11,15 @@ export interface ScriptSection {
   text: string; // clean display text (also what captions are anchored to)
   delivery_note?: string;
   tts_text?: string; // optional phonetic respelling for TTS, never shown in captions
+  visual?: SceneVisual; // what the viewer sees while this narration plays; never narrated or captioned
+}
+/** The visual brief for one beat. Storyboard scenes are built from it. */
+export const VISUAL_FIELDS = ['setting', 'characters', 'action', 'shot', 'mood', 'props'] as const;
+export type SceneVisual = Partial<Record<(typeof VISUAL_FIELDS)[number], string>>;
+/** A recurring character, described once so every scene draws them the same way. */
+export interface ScriptCharacter {
+  name: string;
+  description: string;
 }
 export interface ScriptContent {
   title: string;
@@ -21,6 +30,7 @@ export interface ScriptContent {
   hook_variants?: { id: string; text: string; selected?: boolean }[];
   source_version_id?: string; // base-script version this adaptation was made from
   adaptation_notes?: string;
+  characters?: ScriptCharacter[];
 }
 
 const bad = (message: string, details?: unknown) => new EngineError('VALIDATION', message, details);
@@ -40,7 +50,9 @@ export function validateScriptShape(content: unknown): ScriptContent {
     if (ids.has(s.id)) throw bad(`Duplicate section id ${s.id}`);
     ids.add(s.id);
     for (const k of ['delivery_note', 'tts_text'] as const) if (s[k] !== undefined && typeof s[k] !== 'string') throw bad(`${k} must be a string`);
+    if (s.visual !== undefined && !(isObj(s.visual) && Object.entries(s.visual).every(([k, v]) => (VISUAL_FIELDS as readonly string[]).includes(k) && typeof v === 'string'))) throw bad(`Section ${s.id} has an invalid visual description`);
   }
+  if (content.characters !== undefined && !(Array.isArray(content.characters) && content.characters.every((c) => isObj(c) && typeof c.name === 'string' && typeof c.description === 'string'))) throw bad('Invalid characters');
   for (const k of ['source_version_id', 'adaptation_notes'] as const) if (content[k] !== undefined && typeof content[k] !== 'string') throw bad(`${k} must be a string`);
   if (content.hook_variants !== undefined) {
     if (!Array.isArray(content.hook_variants) || !content.hook_variants.every((h) => isObj(h) && typeof h.id === 'string' && typeof h.text === 'string')) {

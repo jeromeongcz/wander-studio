@@ -1,6 +1,6 @@
 import { Engine, EngineError } from './engine.ts';
 import type { Artifact } from './engine.ts';
-import { ulid } from '../../shared/src/index.ts';
+import { FORMATS, ulid } from '../../shared/src/index.ts';
 
 export interface PipelineOptions {
   name: string;
@@ -81,6 +81,46 @@ export function removeLanguage(engine: Engine, projectId: string, lang: string):
     for (const a of arts) engine.db.prepare('DELETE FROM artifacts WHERE id = ?').run(a.id);
     engine.db.prepare('DELETE FROM project_languages WHERE project_id = ? AND lang_code = ?').run(projectId, lang);
     return arts.length;
+  });
+}
+
+const projectFormats = (engine: Engine, projectId: string) => (engine.getProject(projectId).settings.formats as string[] | undefined) ?? ['vertical_9x16'];
+const saveFormats = (engine: Engine, projectId: string, formats: string[]) => {
+  const p = engine.getProject(projectId);
+  engine.db.prepare('UPDATE projects SET settings_json = ? WHERE id = ?').run(JSON.stringify({ ...p.settings, formats }), projectId);
+};
+
+/** Adds a video dimension to a project: a composition and a final render for every language. Existing formats are untouched. */
+export function addFormat(engine: Engine, projectId: string, format: string): void {
+  if (!(FORMATS as readonly string[]).includes(format)) throw new EngineError('VALIDATION', `Unknown format "${format}"`);
+  engine.tx(() => {
+    const formats = projectFormats(engine, projectId);
+    if (formats.includes(format)) throw new EngineError('VALIDATION', 'The project already has this format');
+    const [storyboard] = engine.list(projectId, { kind: 'storyboard' });
+    const scenes = engine.list(projectId, { kind: 'scene_asset' });
+    for (const l of engine.getProject(projectId).languages) {
+      const comp = mk(engine, projectId, 'composition', `Composition (${l}, ${format})`, { lang: l, format });
+      const render = mk(engine, projectId, 'final_render', `Final render (${l}, ${format})`, { lang: l, format });
+      engine.addDependency(comp, storyboard.id);
+      for (const kind of ['audio', 'caption'] as const) engine.addDependency(comp, engine.list(projectId, { kind }).find((a) => a.lang_code === l)!.id);
+      for (const a of scenes) engine.addDependency(comp, a.id);
+      engine.addDependency(render, comp);
+    }
+    saveFormats(engine, projectId, [...formats, format]);
+  });
+}
+
+/** Removes a format. Refused for the last one, or when any of its work exists (nothing saved is ever thrown away). */
+export function removeFormat(engine: Engine, projectId: string, format: string): void {
+  engine.tx(() => {
+    const formats = projectFormats(engine, projectId);
+    if (!formats.includes(format)) throw new EngineError('NOT_FOUND', 'The project does not have this format');
+    if (formats.length === 1) throw new EngineError('VALIDATION', 'A video needs at least one format');
+    const arts = engine.list(projectId).filter((a) => a.format === format);
+    const worked = arts.filter((a) => a.current_version_id);
+    if (worked.length) throw new EngineError('PROTECTED', 'This format already has work, so it is kept', worked.map((a) => a.label));
+    for (const a of arts) engine.db.prepare('DELETE FROM artifacts WHERE id = ?').run(a.id);
+    saveFormats(engine, projectId, formats.filter((f) => f !== format));
   });
 }
 
