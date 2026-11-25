@@ -2,7 +2,6 @@ import { createContext, useContext, useMemo, useState } from 'react';
 import { api } from '../api';
 import { useAsync } from '../hooks';
 import { Btn, Card, ErrorBox, Icon, Loading, Modal, Pill, StateBadge, useToast } from '../ui';
-import { formatName, langName } from '../types';
 import type { Artifact, Project, State } from '../types';
 import { STEPS, aggregate, analyze, stepOfPart } from '../pipeline';
 import type { StepInfo } from '../pipeline';
@@ -148,15 +147,15 @@ export function ProjectPage({ id, stage }: { id: string; stage: string }) {
   return (
     <ProjectCtx.Provider value={ctx}>
       <div className="stack">
-        <div className="row gap wrap">
-          <a className="btn btn-ghost btn-sm" href="#/projects">← Video Production</a>
+        <header className="video-head">
+          <div className="row gap video-head-top">
+            <a className="btn btn-ghost btn-sm" href="#/projects">← Video Production</a>
+            <span className="grow" />
+            <a className={`btn btn-sm${details ? ' btn-primary' : ''}`} href={`#/p/${id}/overview`}>Details &amp; settings</a>
+          </div>
           <h1>{proj.name}</h1>
           {proj.category && <Pill tone="info">{proj.category}</Pill>}
-          {proj.languages.map((l) => <Pill key={l}>{langName(l)}</Pill>)}
-          {(proj.settings.formats ?? []).map((f) => <Pill key={f}>{formatName(f)}</Pill>)}
-          <span className="grow" />
-          <a className={`btn btn-sm${details ? ' btn-primary' : ''}`} href={`#/p/${id}/overview`}>Details &amp; settings</a>
-        </div>
+        </header>
         <Stepper items={stepItems(flow.steps, id)} current={viewing} title={details ? undefined : info.step.label} blurb={details ? undefined : info.step.blurb} />
         {details ? <Overview /> : (
           <>

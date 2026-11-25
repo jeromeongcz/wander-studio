@@ -215,3 +215,5 @@ fieldset.choices { border: 0; padding: 0; margin: 0; } .choices legend { font-we
 textarea.vis { min-height: 0; field-sizing: content; }
 .cast { display: grid; grid-template-columns: minmax(120px, 200px) 1fr auto; gap: 8px; align-items: start; }
 @media (max-width: 760px) { .cast { grid-template-columns: 1fr; } }
+.video-head { display: flex; flex-direction: column; align-items: flex-start; gap: 10px; } .video-head-top { align-self: stretch; }
+.video-head-top .btn-ghost { padding-left: 0; }
