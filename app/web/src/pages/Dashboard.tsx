@@ -84,7 +84,7 @@ export function Dashboard() {
   );
 }
 
-/** Video Production: a horizontal stepper on top; the chosen step's panel below. Step 1 is the research workspace. */
+/** Video Production: the chosen step's title on top, then the horizontal stepper, then that step's panel. Step 1 is the research workspace. */
 export function VideoProduction({ stepId }: { stepId?: string }) {
   const { projects, jobs, rows } = useBoard();
   const idx = Math.max(0, STEPS.findIndex((s) => s.id === stepId));
@@ -93,6 +93,10 @@ export function VideoProduction({ stepId }: { stepId?: string }) {
   const list = at(idx);
   return (
     <div className="stack">
+      <div className="step-head">
+        <span className="step-num">STEP {step.n} OF {STEPS.length}</span>
+        <div className="grow"><h2>{idx === 0 ? 'Research Studio' : step.label}</h2><p className="muted" style={{ margin: '4px 0 0' }}>{idx === 0 ? 'Search a topic, approve it, then start a video from it.' : step.blurb}</p></div>
+      </div>
       <nav className="stepper" aria-label="Video production steps">
         <ol>
           {STEPS.map((s, i) => {
@@ -109,10 +113,6 @@ export function VideoProduction({ stepId }: { stepId?: string }) {
           })}
         </ol>
       </nav>
-      <div className="step-head">
-        <span className="step-num">STEP {step.n} OF {STEPS.length}</span>
-        <div className="grow"><h2>{idx === 0 ? 'Research Studio' : step.label}</h2><p className="muted" style={{ margin: '4px 0 0' }}>{idx === 0 ? 'Search a topic, approve it, then start a video from it.' : step.blurb}</p></div>
-      </div>
       <JobsCard jobs={jobs.data} />
       {projects.error && <ErrorBox error={projects.error} retry={projects.reload} />}
       {idx === 0 && <ResearchWorkspace />}
