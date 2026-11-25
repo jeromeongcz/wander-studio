@@ -165,11 +165,14 @@ export function StoryboardStage() {
             {c.scenes.map((s: any, i: number) => (
               <div key={s.scene_id ?? i} className={cardClass}>
                 {picture(i, (
-                  <div className="scene-tools">
-                    {s.draft && <Pill tone="warn">draft</Pill>}
-                    <Btn small kind="ghost" title="Move up" onClick={() => move(i, -1)} disabled={i === 0}>↑</Btn>
-                    <Btn small kind="ghost" title="Move down" onClick={() => move(i, 1)} disabled={i === c.scenes.length - 1}>↓</Btn>
-                    <Btn small kind="ghost" onClick={() => edit({ scenes: c.scenes.filter((_: any, k: number) => k !== i) })}>Remove</Btn>
+                  <div className="scene-tools" role="group" aria-label={`Scene ${i + 1} order and removal`}>
+                    {s.draft && <span className="draft-note" title="Written automatically from the script. Edit the description under Edit details to mark it as yours.">Draft: not edited by you yet</span>}
+                    <div className="tool-row">
+                      <Btn small title="Show this scene one place earlier" onClick={() => move(i, -1)} disabled={i === 0}>↑ Earlier</Btn>
+                      <Btn small title="Show this scene one place later" onClick={() => move(i, 1)} disabled={i === c.scenes.length - 1}>↓ Later</Btn>
+                      <Btn small kind="danger" title="Delete this scene from the storyboard" onClick={() => { if (confirm(`Delete scene ${i + 1} from the storyboard?\n\nIt is removed when you press Save storyboard.`)) edit({ scenes: c.scenes.filter((_: any, k: number) => k !== i) }); }}><Icon name="trash" small /> Delete</Btn>
+                    </div>
+                    {dirty && <span className="draft-note">Changes are not saved: press Save storyboard below.</span>}
                   </div>
                 ))}
                 <div className="scene-body">
