@@ -122,10 +122,17 @@ export function buildApi(engine: Engine, config: Partial<AppConfig> = {}): Fasti
   app.post('/projects/:id/research/prompt', async (req) => ({ prompt: studio.research.prompt((req.params as { id: string }).id, { count: body(req).count, focus: body(req).focus, notes: body(req).notes }) }));
   app.post('/projects/:id/research/batches', async (req, reply) => reply.status(202).send(studio.research.startBatch((req.params as { id: string }).id, { count: body(req).count, focus: body(req).focus, notes: body(req).notes })));
   app.post('/projects/:id/research/import', async (req, reply) => reply.status(201).send(await studio.research.importText((req.params as { id: string }).id, body(req).text, { focus: body(req).focus })));
+  // Research Studio: research without a project
+  app.get('/studio/research', async () => studio.research.list(null));
+  app.post('/studio/research/prompt', async (req) => ({ prompt: studio.research.prompt(null, { count: body(req).count, focus: body(req).focus, notes: body(req).notes, category: body(req).category }) }));
+  app.post('/studio/research/batches', async (req, reply) => reply.status(202).send(studio.research.startStudioBatch({ count: body(req).count, focus: body(req).focus, notes: body(req).notes, category: body(req).category })));
+  app.post('/studio/research/batches/:id/cancel', async (req) => studio.research.cancelStudioBatch((req.params as { id: string }).id));
+  app.post('/studio/research/import', async (req, reply) => reply.status(201).send(await studio.research.importText(null, body(req).text, { focus: body(req).focus, category: body(req).category })));
+  app.post('/topic-ideas/:id/approve', async (req) => studio.research.approveIdea((req.params as { id: string }).id));
   app.post('/topic-ideas/:id/dismiss', async (req) => studio.research.setStatus((req.params as { id: string }).id, 'dismissed'));
   app.post('/topic-ideas/:id/restore', async (req) => studio.research.setStatus((req.params as { id: string }).id, 'new'));
   app.post('/topic-ideas/:id/use', async (req) => studio.research.useIdea((req.params as { id: string }).id, { reopen: body(req).reopen === true }));
-  app.post('/topic-ideas/:id/new-project', async (req, reply) => reply.status(201).send(studio.research.projectFromIdea((req.params as { id: string }).id)));
+  app.post('/topic-ideas/:id/new-project', async (req, reply) => reply.status(201).send(studio.research.projectFromIdea((req.params as { id: string }).id, { languages: Array.isArray(body(req).languages) ? (body(req).languages as string[]) : undefined, formats: Array.isArray(body(req).formats) ? (body(req).formats as string[]) : undefined })));
   app.get('/projects/:id/deletion-preview', async (req) => studio.deletionPreview((req.params as { id: string }).id));
   app.post('/projects/:id/delete', async (req) => studio.deleteProject((req.params as { id: string }).id, body(req).confirm_name));
   app.patch('/projects/:id', async (req) => {

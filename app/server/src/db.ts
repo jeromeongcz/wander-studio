@@ -265,6 +265,44 @@ const MIGRATIONS: string[] = [
   );
   CREATE INDEX idx_topic_ideas_project ON topic_ideas(project_id, status);
   `,
+  // v9: Research Studio. Topic research no longer needs a project, so project_id becomes optional; ideas can be approved before any project exists.
+  `
+  CREATE TABLE topic_batches_new (
+    id TEXT PRIMARY KEY,
+    project_id TEXT REFERENCES projects(id) ON DELETE CASCADE,
+    category TEXT,
+    focus TEXT,
+    notes TEXT,
+    requested_count INTEGER NOT NULL,
+    source TEXT NOT NULL CHECK (source IN ('claude-code','manual')),
+    state TEXT NOT NULL CHECK (state IN ('queued','running','done','partial','failed','cancelled')),
+    message TEXT,
+    rejected_json TEXT NOT NULL DEFAULT '[]',
+    job_id TEXT,
+    created_at TEXT NOT NULL,
+    finished_at TEXT
+  );
+  INSERT INTO topic_batches_new SELECT id, project_id, category, focus, notes, requested_count, source, state, message, rejected_json, job_id, created_at, finished_at FROM topic_batches;
+  CREATE TABLE topic_ideas_new (
+    id TEXT PRIMARY KEY,
+    project_id TEXT REFERENCES projects(id) ON DELETE CASCADE,
+    batch_id TEXT NOT NULL REFERENCES topic_batches_new(id) ON DELETE CASCADE,
+    title TEXT NOT NULL,
+    hook TEXT NOT NULL,
+    confidence TEXT NOT NULL CHECK (confidence IN ('well-documented','disputed','legend')),
+    note TEXT,
+    facts_json TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'new' CHECK (status IN ('new','approved','used','dismissed')),
+    approved_at TEXT,
+    created_at TEXT NOT NULL
+  );
+  INSERT INTO topic_ideas_new SELECT id, project_id, batch_id, title, hook, confidence, note, facts_json, status, NULL, created_at FROM topic_ideas;
+  DROP TABLE topic_ideas;
+  DROP TABLE topic_batches;
+  ALTER TABLE topic_batches_new RENAME TO topic_batches;
+  ALTER TABLE topic_ideas_new RENAME TO topic_ideas;
+  CREATE INDEX idx_topic_ideas_project ON topic_ideas(project_id, status);
+  `,
 ];
 
 export function openDb(path: string = ':memory:'): DatabaseSync {

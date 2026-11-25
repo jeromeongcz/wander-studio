@@ -454,3 +454,78 @@ test('topics are removed with their project and travel with a project archive', 
   assert.equal(((await t.call('GET', `/projects/${restored.projectId}/research/topics`)).json.ideas as any[]).length, 2, 'the restored copy is unaffected');
   assert.ok(!existsSync(join(t.root, 'cache')) || readdirSync(join(t.root, 'cache')).every((f) => !f.startsWith('trash_')));
 });
+
+// ---------------- Research Studio (no project) ----------------
+test('Research Studio: research without any project, approve a topic, then start a video from it only when approved', async () => {
+  const t = boot();
+  t.stub.answer(1, answer(topic('Studio topic one'), topic('Studio topic two')));
+  const r = await t.call('POST', '/studio/research/batches', { count: 2, category: 'Dark Folklore Horror', focus: 'Visayas' });
+  assert.equal(r.status, 202);
+  // wait for the run (no job row: it reports through the batch)
+  for (let i = 0; i < 200; i++) {
+    const b = (await t.call('GET', '/studio/research')).json.batches[0];
+    if (b.state !== 'queued' && b.state !== 'running') break;
+    await new Promise((x) => setTimeout(x, 40));
+  }
+  const list = (await t.call('GET', '/studio/research')).json;
+  assert.equal(list.batches[0].state, 'done');
+  assert.equal(list.batches[0].project_id, null);
+  assert.equal(list.ideas.length, 2);
+  assert.ok(list.ideas.every((i: any) => i.project_id === null && i.category === 'Dark Folklore Horror' && i.status === 'new' && i.approved_at === null), 'research never approves anything');
+  assert.equal((await t.call('GET', '/projects')).json.length, 0, 'no project was created');
+  assert.match(t.stub.read('prompt_1'), /Dark Folklore Horror/);
+  assert.doesNotMatch(t.stub.read('prompt_1'), /secret|\/Users|@/, 'only the category, focus and count are sent');
+
+  const [one] = list.ideas;
+  // cannot start a video from a topic that is not approved
+  assert.equal((await t.call('POST', `/topic-ideas/${one.id}/new-project`, {})).status, 409);
+  const ap = await t.call('POST', `/topic-ideas/${one.id}/approve`);
+  assert.equal(ap.status, 200);
+  assert.equal(ap.json.status, 'approved');
+  assert.ok(ap.json.approved_at);
+  // a dismissed topic cannot be approved until restored
+  const two = list.ideas[1];
+  await t.call('POST', `/topic-ideas/${two.id}/dismiss`);
+  assert.equal((await t.call('POST', `/topic-ideas/${two.id}/approve`)).status, 409);
+  // an approved topic can be un-approved (restore)
+  assert.equal((await t.call('POST', `/topic-ideas/${one.id}/restore`)).json.approved_at, null);
+  await t.call('POST', `/topic-ideas/${one.id}/approve`);
+
+  const np = await t.call('POST', `/topic-ideas/${one.id}/new-project`, { languages: ['en', 'tl'], formats: ['vertical_9x16'] });
+  assert.equal(np.status, 201);
+  const p = (await t.call('GET', `/projects/${np.json.projectId}`)).json;
+  assert.equal(p.name, one.title);
+  assert.equal(p.category, 'Dark Folklore Horror');
+  assert.deepEqual(p.languages, ['en', 'tl']);
+  const research = p.artifacts.find((a: any) => a.kind === 'research');
+  assert.equal(research.state, 'in_progress', 'the project gets the notes but the topic still needs approval in the project');
+  assert.equal((await t.call('GET', '/studio/research')).json.ideas.find((i: any) => i.id === one.id).status, 'used');
+  // a studio topic cannot be pushed into a project via "use"
+  assert.equal((await t.call('POST', `/topic-ideas/${two.id}/use`, {})).status, 422);
+});
+
+test('Research Studio: one run at a time, cancel keeps what was found, restart marks stuck runs failed, paste import works with no project', async () => {
+  const t = boot();
+  t.stub.sleeps(1);
+  const r = await t.call('POST', '/studio/research/batches', { count: 3, category: 'Geography' });
+  assert.equal(r.status, 202);
+  assert.equal((await t.call('POST', '/studio/research/batches', { count: 1 })).status, 409, 'a second run is refused while one is going');
+  await new Promise((x) => setTimeout(x, 400));
+  const c = await t.call('POST', `/studio/research/batches/${r.json.id}/cancel`);
+  assert.equal(c.status, 200);
+  for (let i = 0; i < 200; i++) {
+    if ((await t.call('GET', '/studio/research')).json.batches[0].state === 'cancelled') break;
+    await new Promise((x) => setTimeout(x, 40));
+  }
+  assert.equal((await t.call('GET', '/studio/research')).json.batches[0].state, 'cancelled');
+  assert.equal((await t.call('POST', `/studio/research/batches/${r.json.id}/cancel`)).status, 409);
+  assert.equal((await t.call('POST', '/studio/research/batches', { count: 0 })).status, 422);
+  assert.equal((await t.call('POST', '/studio/research/batches', { count: 21 })).status, 422);
+
+  const imp = await t.call('POST', '/studio/research/import', { text: answer(topic('Pasted studio topic')), category: 'Food Origins' });
+  assert.equal(imp.status, 201);
+  const idea = (await t.call('GET', '/studio/research')).json.ideas.find((i: any) => i.title === 'Pasted studio topic');
+  assert.equal(idea.category, 'Food Origins');
+  assert.equal(idea.project_id, null);
+  assert.match((await t.call('POST', '/studio/research/prompt', { count: 3, category: 'Geography' })).json.prompt, /"Geography"/);
+});

@@ -30,10 +30,11 @@ export function Dashboard() {
     <div className="stack">
       <section className="hero">
         <div className="grow">
-          <h1>Make your next video</h1>
-          <p>Six steps from idea to export. You choose the topic and approve every step; nothing is published for you.</p>
+          <h1>My videos</h1>
+          <p>Every video moves through six steps, and you approve each one. Start from an approved topic in the Research Studio, or begin with a blank video.</p>
         </div>
-        <Btn kind="primary" onClick={() => setCreating(true)}><Icon name="plus" small /> New video</Btn>
+        <a className="btn btn-primary" href="#/"><Icon name="spark" small /> Research a topic</a>
+        <Btn onClick={() => setCreating(true)}><Icon name="plus" small /> Blank video</Btn>
       </section>
       <div className="how" aria-label="How it works">
         {STEPS.map((s) => <div key={s.id}><em>{s.n}</em><b>{s.label}</b><span>{s.short}</span></div>)}
@@ -59,7 +60,7 @@ export function Dashboard() {
       )}
       {projects.loading && !projects.data && <Loading what="Loading projects" />}
       {projects.error && <ErrorBox error={projects.error} retry={projects.reload} />}
-      {projects.data && projects.data.length === 0 && !creating && <Empty>No videos yet. Press <strong>New video</strong> to pick a category and start researching topics.</Empty>}
+      {projects.data && projects.data.length === 0 && !creating && <Empty>No videos yet. Go to the <a href="#/">Research Studio</a> to search and approve a topic.</Empty>}
       {needsYou.length > 0 && <><div className="section-h"><h2>Needs you</h2><span className="muted">Approvals and fixes waiting on you</span></div><div className="grid g2">{needsYou.map((r) => <ProjectCard key={r.p.id} {...r} />)}</div></>}
       {rows.length - needsYou.length > 0 && <><div className="section-h"><h2>{needsYou.length ? 'Everything else' : 'Your videos'}</h2></div><div className="grid g2">{rows.filter((r) => !needsYou.includes(r)).map((r) => <ProjectCard key={r.p.id} {...r} />)}</div></>}
     </div>
@@ -96,7 +97,7 @@ function NewProject({ onDone, onCancel }: { onDone: (id: string) => void; onCanc
   const toggle = (arr: string[], v: string, set: (x: string[]) => void) => set(arr.includes(v) ? arr.filter((x) => x !== v) : [...arr, v]);
   const valid = name.trim() && langs.length && formats.length;
   return (
-    <Card title="New video" actions={<Btn small kind="ghost" onClick={onCancel}>Cancel</Btn>}>
+    <Card title="Blank video" actions={<Btn small kind="ghost" onClick={onCancel}>Cancel</Btn>}>
       <div className="form">
         <Field label="Name"><input autoFocus value={name} onChange={(e) => setName(e.target.value)} placeholder="Why octopuses have three hearts" /></Field>
         <CategoryPicker value={category} onChange={setCategory} />

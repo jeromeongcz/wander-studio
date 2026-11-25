@@ -3,8 +3,7 @@ import { api } from '../api';
 import { ArtifactBar, saveArtifact } from '../actions';
 import { useProject } from '../pages/Project';
 import { useAsync } from '../hooks';
-import { Btn, Card, Empty, Field, Loading, Pill, Tabs, useToast } from '../ui';
-import { TopicsPanel } from './Topics';
+import { Btn, Card, Empty, Field, Loading, Pill, useToast } from '../ui';
 
 const CHECKLIST = ['Every key fact has at least one source', 'Dates, names and numbers were double-checked', 'Unverified claims are marked or removed', 'Creative speculation is labelled as speculation', 'No AI-generated summary is treated as verified'];
 const uid = (p: string) => `${p}${Math.random().toString(36).slice(2, 7)}`;
@@ -91,15 +90,14 @@ function ResearchNotes() {
   );
 }
 
-/** Research has two parts: find sourced topic ideas with AI, then keep research notes for the chosen topic. */
+/** Topic step inside a project: the research notes. Finding topics happens in the Research Studio. */
 export function ResearchStage() {
   const { find } = useProject();
   const art = find('research')!;
-  const [tab, setTab] = useState<'topics' | 'notes'>(art.current_version_id ? 'notes' : 'topics');
   return (
     <>
-      <Tabs value={tab} onChange={setTab} items={[{ id: 'topics', label: 'Find topics' }, { id: 'notes', label: 'Research notes' }]} />
-      {tab === 'topics' ? <TopicsPanel hasNotes={!!art.current_version_id} onUsed={() => setTab('notes')} /> : <ResearchNotes />}
+      {!art.current_version_id && <div className="notice">Looking for ideas? Search and approve a topic in the <a href="#/">Research Studio</a>, then start a video from it. Or fill in your own research notes below.</div>}
+      <ResearchNotes />
     </>
   );
 }

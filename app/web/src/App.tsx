@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { useHash } from './hooks';
 import { Icon } from './ui';
 import { Dashboard } from './pages/Dashboard';
+import { ResearchStudio } from './pages/ResearchStudio';
 import { ProjectPage } from './pages/Project';
 import { SettingsPage } from './pages/Settings';
 
@@ -18,7 +19,7 @@ export function App() {
   const [theme, toggle] = useTheme();
   const hash = useHash();
   const [, , projectId, stageId] = hash.split('/'); // "/p/<id>/<stage>" or "/settings"
-  const route = hash.startsWith('/p/') ? 'project' : hash.startsWith('/settings') ? 'settings' : 'home';
+  const route = hash.startsWith('/p/') ? 'project' : hash.startsWith('/settings') ? 'settings' : hash.startsWith('/projects') ? 'projects' : 'studio';
   return (
     <>
       <header className="topbar">
@@ -29,7 +30,8 @@ export function App() {
           Wander AI Director
         </a>
         <nav className="nav row gap">
-          <a href="#/" className={route !== 'settings' ? 'on' : ''}>Projects</a>
+          <a href="#/" className={route === 'studio' ? 'on' : ''}>Research Studio</a>
+          <a href="#/projects" className={route === 'projects' || route === 'project' ? 'on' : ''}>My videos</a>
           <a href="#/settings" className={route === 'settings' ? 'on' : ''}>Jobs &amp; settings</a>
         </nav>
         <span className="grow" />
@@ -37,7 +39,8 @@ export function App() {
         <button className="icon-btn" onClick={toggle} aria-label={theme === 'light' ? 'Switch to dark theme' : 'Switch to light theme'} title="Switch theme"><Icon name={theme === 'light' ? 'moon' : 'sun'} /></button>
       </header>
       <main className="page">
-        {route === 'home' && <Dashboard />}
+        {route === 'studio' && <ResearchStudio />}
+        {route === 'projects' && <Dashboard />}
         {route === 'settings' && <SettingsPage />}
         {route === 'project' && <ProjectPage id={projectId} stage={stageId || 'overview'} />}
       </main>

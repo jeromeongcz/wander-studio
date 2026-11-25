@@ -52,7 +52,7 @@ function DeleteDialog({ project, onClose }: { project: { id: string; name: strin
             <Btn kind="danger" disabled={!matches || p.active_jobs > 0} onClick={async () => {
               await api.post(`/projects/${project.id}/delete`, { confirm_name: typed });
               push('ok', `Deleted “${project.name}”`);
-              location.hash = '#/';
+              location.hash = '#/projects';
             }}>Delete permanently</Btn>
             <Btn kind="ghost" onClick={onClose}>Cancel</Btn>
             {typed && !matches && <Pill tone="warn">Name does not match yet</Pill>}
