@@ -320,3 +320,7 @@ textarea.vis { min-height: 0; field-sizing: content; }
 .scene-card { position: relative; }
 .scene-card .scene-n { position: absolute; top: 8px; left: 8px; z-index: 2; width: 34px; height: 34px; border: 3px solid var(--panel); box-shadow: 0 3px 10px rgba(11, 37, 34, .35); }
 .scene-card.wide .scene-body > div.scene-text { background: transparent; border: 0; padding: 0; }
+/* breathing room under the text and buttons of every scene card */
+.scene-card.wide, .scene-card.tall { padding-bottom: 16px; }
+.scene-card.wide .scene-body, .scene-card.tall .scene-body { padding-bottom: 0; }
+.scene-card.wide .frame-col { margin-bottom: 0; }
