@@ -217,3 +217,4 @@ textarea.vis { min-height: 0; field-sizing: content; }
 @media (max-width: 760px) { .cast { grid-template-columns: 1fr; } }
 .video-head { display: flex; flex-direction: column; align-items: flex-start; gap: 10px; } .video-head-top { align-self: stretch; }
 .video-head-top .btn-ghost { padding-left: 0; }
+.video-head p { margin: 0; } .video-head h1 { font-size: 24px; } .video-head .crumb { color: var(--brand); }

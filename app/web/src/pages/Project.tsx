@@ -153,10 +153,14 @@ export function ProjectPage({ id, stage }: { id: string; stage: string }) {
             <span className="grow" />
             <a className={`btn btn-sm${details ? ' btn-primary' : ''}`} href={`#/p/${id}/overview`}>Details &amp; settings</a>
           </div>
-          <h1>{proj.name}</h1>
-          {proj.category && <Pill tone="info">{proj.category}</Pill>}
+          <p className="muted">{details ? 'Project details, every step and deletion.' : info.step.blurb}</p>
+          <h1><span className="crumb">{details ? 'Details' : info.step.label}</span> <span aria-hidden="true">&gt;</span> {proj.name}</h1>
+          <div className="row gap wrap">
+            {proj.category && <Pill tone="info">{proj.category}</Pill>}
+            {!details && <span className="step-num">STEP {viewing + 1} OF {STEPS.length}</span>}
+          </div>
         </header>
-        <Stepper items={stepItems(flow.steps, id)} current={viewing} title={details ? undefined : info.step.label} blurb={details ? undefined : info.step.blurb} />
+        <Stepper items={stepItems(flow.steps, id)} current={viewing} />
         {details ? <Overview /> : (
           <>
             {info.step.parts.length > 1 && !info.locked && (
