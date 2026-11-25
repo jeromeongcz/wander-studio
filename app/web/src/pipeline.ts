@@ -13,7 +13,7 @@ export interface Step {
 }
 
 export const STEPS: Step[] = [
-  { id: 'topic', n: 1, label: 'Topic', short: 'Research and approve a topic', blurb: 'Choose how many ideas you want, let Claude research them with sources, then approve the one you will make.', action: 'Approve your topic', parts: [{ id: 'research', label: 'Topic & research', kinds: ['research'] }] },
+  { id: 'topic', n: 1, label: 'Research Studio', short: 'Search and approve a topic', blurb: 'Search a topic, approve it, then start a video from it.', action: 'Approve your topic', parts: [{ id: 'research', label: 'Topic & research', kinds: ['research'] }] },
   { id: 'script', n: 2, label: 'Script', short: 'Write and localize', blurb: 'Write the base script, then create and approve each language version.', action: 'Write and approve the script', parts: [{ id: 'script', label: 'Base script', kinds: ['script_base'] }, { id: 'localize', label: 'Languages', kinds: ['script_lang'] }] },
   { id: 'visuals', n: 3, label: 'Storyboard & visuals', short: 'Plan scenes, add images', blurb: 'Turn the script into scenes, then give every scene its approved visual.', action: 'Approve storyboard and visuals', parts: [{ id: 'storyboard', label: 'Storyboard', kinds: ['storyboard'] }, { id: 'visuals', label: 'Visuals', kinds: ['scene_asset'] }] },
   { id: 'voice', n: 4, label: 'Voice & captions', short: 'Narration and timing', blurb: 'Record or generate the narration, then check caption timing against the approved script.', action: 'Approve voice and captions', parts: [{ id: 'audio', label: 'Voice & audio', kinds: ['audio'] }, { id: 'captions', label: 'Captions', kinds: ['caption'] }] },

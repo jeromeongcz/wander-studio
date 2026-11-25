@@ -3,6 +3,7 @@ import { useAsync, useInterval } from '../hooks';
 import { Card, Empty, ErrorBox, Icon, Loading, Pill } from '../ui';
 import { STEPS, analyze } from '../pipeline';
 import { ResearchWorkspace } from './ResearchStudio';
+import { Stepper } from '../Stepper';
 import { formatName, langName } from '../types';
 import type { Project } from '../types';
 
@@ -93,27 +94,15 @@ export function VideoProduction({ stepId }: { stepId?: string }) {
   const list = at(idx);
   return (
     <div className="stack">
-      <div className="step-title">
-        <h2>{idx === 0 ? 'Research Studio' : step.label}</h2>
-        <p className="muted">{idx === 0 ? 'Search a topic, approve it, then start a video from it.' : step.blurb}</p>
-        <span className="step-num">STEP {step.n} OF {STEPS.length}</span>
-      </div>
-      <nav className="stepper" aria-label="Video production steps">
-        <ol>
-          {STEPS.map((s, i) => {
-            const n = at(i).length;
-            return (
-              <li key={s.id}>
-                <a className={`step${i === idx ? ' current' : ''}`} href={`#/projects/${s.id}`} aria-current={i === idx ? 'step' : undefined}>
-                  <span className="step-dot">{s.n}</span>
-                  <span className="step-label">{i === 0 ? 'Research Studio' : s.label}</span>
-                  <span className="step-sub">{n ? `${n} video${n === 1 ? '' : 's'}` : i === 0 ? 'Search and approve a topic' : s.short}</span>
-                </a>
-              </li>
-            );
-          })}
-        </ol>
-      </nav>
+      <Stepper
+        current={idx}
+        title={idx === 0 ? 'Research Studio' : step.label}
+        blurb={idx === 0 ? 'Search a topic, approve it, then start a video from it.' : step.blurb}
+        items={STEPS.map((x, i) => {
+          const n = at(i).length;
+          return { key: x.id, label: x.label, sub: n ? `${n} video${n === 1 ? '' : 's'}` : x.short, href: `#/projects/${x.id}` };
+        })}
+      />
       <JobsCard jobs={jobs.data} />
       {projects.error && <ErrorBox error={projects.error} retry={projects.reload} />}
       {idx === 0 && <ResearchWorkspace />}

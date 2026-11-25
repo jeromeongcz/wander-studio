@@ -6,6 +6,7 @@ import { formatName, langName } from '../types';
 import type { Artifact, Project, State } from '../types';
 import { STEPS, aggregate, analyze, stepOfPart } from '../pipeline';
 import type { StepInfo } from '../pipeline';
+import { Stepper } from '../Stepper';
 import { ProjectDetailsEditor } from '../stages/shared';
 import { DeleteProject } from '../stages/DeleteProject';
 import { ResearchStage } from '../stages/Research';
@@ -29,35 +30,22 @@ export const useProject = () => useContext(ProjectCtx);
 
 const PARTS = STEPS.flatMap((s) => s.parts.map((p) => ({ ...p, step: s })));
 
-function Stepper({ infos, viewing, projectId }: { infos: StepInfo[]; viewing: number; projectId: string }) {
-  return (
-    <nav className="stepper" aria-label="Production steps">
-      <ol>
-        {infos.map((i, idx) => {
-          const cls = ['step', i.done ? 'done' : '', idx === viewing ? 'current' : '', i.locked ? 'locked' : '', i.attention ? 'attention' : i.waiting ? 'waiting' : ''].join(' ');
-          const sub = i.locked ? 'Locked' : i.done ? 'Approved' : i.attention ? 'Needs attention' : i.waiting ? 'Waiting for you' : i.step.short;
-          const inner = (
-            <>
-              <span className="step-dot">{i.done ? <Icon name="check" /> : i.locked ? <Icon name="lock" small /> : i.step.n}</span>
-              <span className="step-label">{i.step.label}</span>
-              <span className="step-sub">{sub}</span>
-            </>
-          );
-          const first = i.step.parts.find((p) => !i.artifacts.length || aggregate(i.artifacts.filter((a) => p.kinds.includes(a.kind))) !== 'approved') ?? i.step.parts[0];
-          return (
-            <li key={i.step.id}>
-              {i.locked ? (
-                <span className={cls} aria-disabled="true" title={`Approve ${infos[idx - 1].step.label} first`}>{inner}</span>
-              ) : (
-                <a className={cls} href={`#/p/${projectId}/${first.id}`} aria-current={idx === viewing ? 'step' : undefined}>{inner}</a>
-              )}
-            </li>
-          );
-        })}
-      </ol>
-    </nav>
-  );
-}
+/** The same stepper as Video Production, showing how far this video is. */
+const stepItems = (infos: StepInfo[], projectId: string) =>
+  infos.map((i, idx) => {
+    const first = i.step.parts.find((p) => !i.artifacts.length || aggregate(i.artifacts.filter((a) => p.kinds.includes(a.kind))) !== 'approved') ?? i.step.parts[0];
+    return {
+      key: i.step.id,
+      label: i.step.label,
+      sub: i.locked ? 'Locked' : i.done ? 'Approved' : i.attention ? 'Needs attention' : i.waiting ? 'Waiting for you' : i.step.short,
+      href: `#/p/${projectId}/${first.id}`,
+      done: i.done,
+      locked: i.locked,
+      attention: i.attention,
+      waiting: i.waiting,
+      title: i.locked ? `Approve ${infos[idx - 1].step.label} first` : undefined,
+    };
+  });
 
 /** The footer of every step: what is done, what unlocks the next step, and (for the topic) the explicit approval. */
 function StepFooter({ info, next, projectId, reload }: { info: StepInfo; next?: StepInfo; projectId: string; reload: () => void }) {
@@ -169,13 +157,9 @@ export function ProjectPage({ id, stage }: { id: string; stage: string }) {
           <span className="grow" />
           <a className={`btn btn-sm${details ? ' btn-primary' : ''}`} href={`#/p/${id}/overview`}>Details &amp; settings</a>
         </div>
-        <Stepper infos={flow.steps} viewing={viewing} projectId={id} />
+        <Stepper items={stepItems(flow.steps, id)} current={viewing} title={details ? undefined : info.step.label} blurb={details ? undefined : info.step.blurb} />
         {details ? <Overview /> : (
           <>
-            <div className="step-head">
-              <span className="step-num">STEP {info.step.n} OF {STEPS.length}</span>
-              <div className="grow"><h2>{info.step.label}</h2><p className="muted" style={{ margin: '4px 0 0' }}>{info.step.blurb}</p></div>
-            </div>
             {info.step.parts.length > 1 && !info.locked && (
               <div className="tabs" role="tablist">
                 {info.step.parts.map((x) => {
