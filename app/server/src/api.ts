@@ -249,7 +249,7 @@ export function buildApi(engine: Engine, config: Partial<AppConfig> = {}): Fasti
   app.post('/artifacts/:id/script/import', async (req) => studio.writer.importText((req.params as { id: string }).id, { text: body(req).text, seconds: body(req).seconds, scenes: body(req).scenes, reopen: body(req).reopen === true }));
   // ---- storyboard sketch pictures: drawn as a background job, approved by the person in Visuals ----
   app.get('/artifacts/:id/sketches', async (req) => studio.sketches.list((req.params as { id: string }).id));
-  app.post('/artifacts/:id/sketches', async (req, reply) => reply.status(202).send(studio.sketches.start((req.params as { id: string }).id, { indexes: body(req).indexes, reopen: body(req).reopen === true })));
+  app.post('/artifacts/:id/sketches', async (req, reply) => reply.status(202).send(studio.sketches.start((req.params as { id: string }).id, { indexes: body(req).indexes, reopen: body(req).reopen === true, captionSpace: typeof body(req).captionSpace === 'boolean' ? (body(req).captionSpace as boolean) : undefined })));
   app.post('/artifacts/:id/seed-from-base', async (req, reply) => reply.status(201).send(studio.seedFromBase((req.params as { id: string }).id)));
   app.get('/artifacts/:id/adaptation-prompt', async (req) => {
     const q = req.query as { notes?: string };

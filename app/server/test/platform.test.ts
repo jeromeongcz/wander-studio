@@ -33,7 +33,7 @@ test('filter paths: a Windows drive colon is escaped and backslashes become slas
 test('fonts and pictures per platform', () => {
   assert.match(systemFontDirs('win32', { WINDIR: 'C:\\Windows', LOCALAPPDATA: 'C:\\L' }, 'C:\\H')[0], /Windows.Fonts$/);
   assert.ok(systemFontDirs('darwin', {}, '/Users/me').includes('/Library/Fonts'));
-  assert.deepEqual(rasterCommands('a.svg', 'a.png', 'ffmpeg', 'darwin').map((c) => c.bin), ['/usr/bin/sips']);
+  assert.deepEqual(rasterCommands('a.svg', 'a.png', 'ffmpeg', 'darwin').map((c) => c.bin), ['ffmpeg', 'rsvg-convert', '/usr/bin/sips'], 'librsvg first, sips only as the last resort');
   assert.deepEqual(rasterCommands('a.svg', 'a.png', 'ffmpeg', 'win32').map((c) => c.bin), ['ffmpeg', 'rsvg-convert.exe']);
   assert.equal(fontFullName('/no/such/font.ttf'), null);
 });
