@@ -92,10 +92,33 @@ export function StoryboardStage() {
     const row = sketches.data?.[i];
     if (!row?.asset_id || !row.artifact_id) return;
     if (art.state !== 'approved') { push('warn', 'Approve the storyboard first (the card at the top), then approve each picture.'); window.scrollTo({ top: 0, behavior: 'smooth' }); return; }
+    await approveRow(row);
+    push('ok', `Scene ${i + 1} approved`);
+    sketches.reload();
+    done();
+  };
+  const approveRow = async (row: any) => {
     await api.post(`/assets/${row.asset_id}/approve`);
+    // a scene marked for revision (for example after the storyboard changed) is resumed by saving it again, unchanged
+    if (['needs_revision', 'rejected', 'failed'].includes(row.state)) {
+      const cur = await api.get<{ content: unknown }>(`/artifacts/${row.artifact_id}`);
+      await api.put(`/artifacts/${row.artifact_id}/content`, { content: cur.content });
+    }
     if (row.state !== 'awaiting_review') await api.post(`/artifacts/${row.artifact_id}/submit`);
     await api.post(`/artifacts/${row.artifact_id}/approve`);
-    push('ok', `Scene ${i + 1} approved`);
+  };
+  /** Approve every picture still waiting, after the person confirms. Scenes without a picture are left alone. */
+  const waiting = (sketches.data ?? []).map((row, i) => ({ row, i })).filter(({ row }) => row.asset_id && row.artifact_id && row.state !== 'approved');
+  const approveAll = async () => {
+    if (art.state !== 'approved') { push('warn', 'Approve the storyboard first (the card at the top), then approve the pictures.'); window.scrollTo({ top: 0, behavior: 'smooth' }); return; }
+    const without = total - have;
+    if (!confirm(`Approve ${waiting.length} picture${waiting.length === 1 ? '' : 's'}?\n\nCheck them first: approved pictures are used in your video.${without ? `\n\n${without} scene(s) have no picture yet and stay unapproved.` : ''}`)) return;
+    let ok = 0;
+    const problems: string[] = [];
+    for (const { row, i } of waiting) {
+      try { await approveRow(row); ok++; } catch (e) { problems.push(`Scene ${i + 1}: ${(e as Error).message}`); }
+    }
+    push(problems.length ? 'warn' : 'ok', `${ok} of ${waiting.length} pictures approved`, problems.length ? problems : undefined);
     sketches.reload();
     done();
   };
@@ -123,9 +146,7 @@ export function StoryboardStage() {
           <div className="bar-prog"><i style={{ width: `${total ? (have / total) * 100 : 0}%` }} /></div>
         </div>
         <div className="board-actions">
-          {c && <div className="row gap wrap">
-            <Btn small onClick={() => edit({ scenes: [...c.scenes, { title: 'New scene', script_segment_id: sections[0]?.id ?? '', target_duration: 3, visual_description: '', asset_type: 'stock_photo', camera: { movement: 'ken_burns', direction: 'in', intensity: 'subtle' }, transition_in: 'dissolve', sfx_cues: [] }] })}>Add scene</Btn>
-          </div>}
+          {c && <Btn disabled={!!drawing || !waiting.length} title={waiting.length ? 'Approve every picture that is waiting' : have ? 'Every picture is approved' : 'No pictures to approve yet'} onClick={approveAll}><Icon name="check" small /> {waiting.length ? `Approve all (${waiting.length})` : have ? 'All approved' : 'Approve all'}</Btn>}
           <div className="seg" role="group" aria-label="Scene layout">
             {([['list', 'rows', 'Horizontal'], ['grid', 'grid', 'Grid']] as const).map(([v, icon, label]) => <button key={v} type="button" className={view === v ? 'on' : ''} aria-pressed={view === v} onClick={() => layout(v)}><Icon name={icon} small /> {label}</button>)}
           </div>
