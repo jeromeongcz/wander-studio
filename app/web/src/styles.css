@@ -280,3 +280,4 @@ textarea.vis { min-height: 0; field-sizing: content; }
 .scene-card .kv { grid-template-columns: minmax(70px, max-content) 1fr; } .scene-card .kv dt { text-transform: capitalize; font-weight: 700; }
 .scene-card .visual-text { max-height: 9.5em; overflow: auto; }
 @media (max-width: 760px) { .scene-card.wide { flex-direction: column; align-items: stretch; } .scene-card.wide .frame-slot { width: auto; margin: 14px 14px 0; } }
+.scene-facts { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 220px), 1fr)); gap: 8px 16px; margin: 0; } .scene-facts dt { font-weight: 700; text-transform: capitalize; } .scene-facts dd { margin: 0; color: var(--muted); }

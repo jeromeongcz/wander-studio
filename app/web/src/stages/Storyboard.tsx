@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { api } from '../api';
 import { ArtifactBar, saveArtifact } from '../actions';
 import { useProject } from '../pages/Project';
@@ -23,7 +23,6 @@ export function StoryboardStage() {
   const [c, setC] = useState<any>(null);
   const [dirty, setDirty] = useState(false);
   const [prompt, setPrompt] = useState<string | null>(null);
-  const [secs, setSecs] = useState(4);
   const [pickCat, setPickCat] = useState(false);
   const sketches = useAsync(() => api.get<any[]>(`/artifacts/${art.id}/sketches`), [art.id, art.current_version_id, project.artifacts.map((a) => a.current_version_id).join()]);
   const jobs = useAsync(() => api.get<any[]>(`/jobs?project_id=${project.id}`), [project.id]);
@@ -108,27 +107,19 @@ export function StoryboardStage() {
       {!drawing && lastDraw?.state === 'failed' && have < total && <div className="notice bad"><strong>Last drawing run had problems.</strong> {lastDraw.error?.message}</div>}
       {!c ? (
         <>
-          <div className="board">
+          <div className="stack">
             {preview.map((s, i) => (
-              <article key={s.id} className="scene-card">
+              <article key={s.id} className="scene-card wide">
                 {frame(i)}
                 <div className="scene-body">
                   <div className="row gap"><span className="scene-n">{i + 1}</span><strong className="grow">{s.kind}</strong></div>
                   <p className="quote">“{s.text}”</p>
-                  <dl className="kv small">{Object.entries(s.visual ?? {}).map(([k, v]) => <Fragment key={k}><dt>{k}</dt><dd>{String(v)}</dd></Fragment>)}</dl>
+                  <dl className="scene-facts small">{['setting', 'characters', 'action', 'shot', 'mood', 'props'].filter((k) => s.visual?.[k]).map((k) => <div key={k}><dt>{k}</dt><dd>{s.visual[k]}</dd></div>)}</dl>
                   <div className="row gap">{drawButton(i)}</div>
                 </div>
               </article>
             ))}
           </div>
-          <details>
-            <summary className="muted">Create the storyboard without pictures</summary>
-            <div className="row gap wrap" style={{ marginTop: 8 }}>
-              <Field label="Aim for scenes of about (seconds)" hint="Only for scripts without visual descriptions"><input type="number" min={2} max={20} style={{ width: 100 }} value={secs} onChange={(e) => setSecs(Number(e.target.value))} /></Field>
-              <Btn disabled={base.state !== 'approved'} onClick={async () => { await api.post(`/artifacts/${art.id}/seed-storyboard`, { scene_seconds: secs }); push('ok', 'Draft storyboard created'); done(); }}>Create scenes</Btn>
-              <Btn disabled={!base.current_version_id} onClick={async () => setPrompt((await api.get(`/artifacts/${art.id}/storyboard-prompt`)).prompt)}>Prompt for my own AI</Btn>
-            </div>
-          </details>
         </>
       ) : (
         <>
