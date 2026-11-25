@@ -409,3 +409,4 @@ textarea.vis { min-height: 0; field-sizing: content; }
 .tlp-stage.glitch > img { animation: tlp-glitch .16s steps(2) infinite; }
 @keyframes tlp-glitch { 0% { filter: drop-shadow(-1.2cqw 0 rgba(255, 0, 60, .7)) drop-shadow(1.2cqw 0 rgba(0, 220, 255, .7)) brightness(1.5); } 100% { filter: contrast(1.5) brightness(.8); } }
 @media (prefers-reduced-motion: reduce) { .tlp-stage.glitch > img { animation: none; } }
+.vid { display: flex; flex-direction: column; gap: 10px; } .vid video { width: 100%; aspect-ratio: 16 / 9; object-fit: contain; background: #000; border-radius: var(--radius-sm); }

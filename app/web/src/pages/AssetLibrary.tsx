@@ -1,16 +1,17 @@
 import { useState } from 'react';
 import { api, url } from '../api';
 import { useAsync } from '../hooks';
-import { Empty, ErrorBox, Loading, Modal, Pill, Tabs, fmtBytes } from '../ui';
-import { ASSET_TYPES } from '../types';
+import { Empty, ErrorBox, Loading, Modal, Pill, Tabs, fmtBytes, fmtSec } from '../ui';
+import { ASSET_TYPES, formatName, langName } from '../types';
 
 const STATUS_TONE: Record<string, 'good' | 'warn' | 'bad'> = { approved: 'good', pending: 'warn', rejected: 'bad' };
 const label = (s: string) => s.replace(/_/g, ' ');
-type Scope = 'all' | 'shared' | 'project';
+type Scope = 'all' | 'shared' | 'project' | 'videos';
 
 /** Every image and clip across all videos and the shared library. Managing an asset (approve, license, focal point) still happens in its video's Visuals step. */
 export function AssetLibrary() {
   const list = useAsync(() => api.get<any[]>('/assets'), []);
+  const renders = useAsync(() => api.get<any[]>('/renders'), []);
   const [scope, setScope] = useState<Scope>('all');
   const [type, setType] = useState('');
   const [status, setStatus] = useState('');
@@ -18,13 +19,15 @@ export function AssetLibrary() {
   const [open, setOpen] = useState<any>(null);
   const all = list.data ?? [];
   const shown = all.filter((a) => (scope === 'all' || a.scope === scope) && (!type || a.type === type) && (!status || a.approval_status === status) && (!q.trim() || `${a.name} ${a.tags.join(' ')} ${a.project_name ?? ''}`.toLowerCase().includes(q.trim().toLowerCase())));
-  const count = (s: Scope) => (s === 'all' ? all.length : all.filter((a) => a.scope === s).length);
+  const count = (s: Scope) => (s === 'videos' ? (renders.data?.length ?? 0) : s === 'all' ? all.length : all.filter((a) => a.scope === s).length);
+  const videos = (renders.data ?? []).filter((r) => !q.trim() || `${r.project_name ?? ''} ${r.variant} ${r.lang_code}`.toLowerCase().includes(q.trim().toLowerCase()));
   return (
     <div className="stack">
       <section className="hero">
-        <div className="grow"><h1>Asset Library</h1><p>Every image and clip in your videos and the shared library, with its licence. To approve or edit one, open it in its video's Visuals step.</p></div>
+        <div className="grow"><h1>Asset Library</h1><p>Your generated videos, plus every image and clip in your videos and the shared library with its licence. To approve or edit one, open it in its video's Visuals step.</p></div>
       </section>
-      <Tabs value={scope} onChange={setScope} items={[{ id: 'all', label: `All (${count('all')})` }, { id: 'shared', label: `Shared library (${count('shared')})` }, { id: 'project', label: `In videos (${count('project')})` }]} />
+      <Tabs value={scope} onChange={setScope} items={[{ id: 'all', label: `All (${count('all')})` }, { id: 'shared', label: `Shared library (${count('shared')})` }, { id: 'project', label: `In videos (${count('project')})` }, { id: 'videos', label: `Generated videos (${count('videos')})` }]} />
+      {scope === 'videos' ? <Videos list={videos} loading={renders.loading && !renders.data} error={renders.error} retry={renders.reload} total={count('videos')} q={q} onSearch={setQ} /> : <>
       <div className="bar">
         <input style={{ maxWidth: 280 }} placeholder="Search name, tag or video" aria-label="Search assets" value={q} onChange={(e) => setQ(e.target.value)} />
         <select style={{ maxWidth: 200 }} aria-label="Type" value={type} onChange={(e) => setType(e.target.value)}><option value="">All types</option>{ASSET_TYPES.map((t) => <option key={t} value={t}>{label(t)}</option>)}</select>
@@ -47,6 +50,7 @@ export function AssetLibrary() {
           </button>
         ))}
       </div>
+      </>}
       {open && (
         <Modal title={open.name} wide onClose={() => setOpen(null)}>
           <div className="grid g2">
@@ -68,5 +72,45 @@ export function AssetLibrary() {
         </Modal>
       )}
     </div>
+  );
+}
+
+/** Every rendered video, newest first, playable here and downloadable. */
+function Videos({ list, loading, error, retry, total, q, onSearch }: { list: any[]; loading: boolean; error: Error | null; retry: () => void; total: number; q: string; onSearch: (v: string) => void }) {
+  // the newest render of each video, language, format and variant; older ones are kept and marked
+  const seen = new Set<string>();
+  return (
+    <>
+      <div className="bar">
+        <input style={{ maxWidth: 280 }} placeholder="Search by video name" aria-label="Search videos" value={q} onChange={(e) => onSearch(e.target.value)} />
+        <span className="grow" /><span className="muted small">{list.length} shown</span>
+      </div>
+      {loading && <Loading what="Loading videos" />}
+      {error && <ErrorBox error={error} retry={retry} />}
+      {!loading && total === 0 && <Empty>No videos yet. Render one in a video's Compose &amp; render step.</Empty>}
+      {total > 0 && list.length === 0 && <Empty>Nothing matches that search.</Empty>}
+      <div className="grid g2">
+        {list.map((r) => {
+          const key = `${r.project_id}|${r.lang_code}|${r.format}|${r.variant}`;
+          const latest = !seen.has(key);
+          seen.add(key);
+          return (
+            <article key={r.id} className="card vid">
+              <video controls preload="metadata" src={url(`/renders/${r.id}/file`)} />
+              <h3><a href={`#/p/${r.project_id}/compose`}>{r.project_name ?? 'Video'}</a></h3>
+              <div className="row gap wrap">
+                <Pill tone={latest ? 'good' : 'neutral'}>{latest ? 'latest' : 'older'}</Pill>
+                <Pill tone="info">{r.variant === 'captioned' ? 'With captions' : 'No captions'}</Pill>
+                <Pill>{formatName(r.format)}</Pill><Pill>{langName(r.lang_code)}</Pill>
+              </div>
+              <div className="row gap wrap">
+                <span className="muted small grow">{fmtSec(r.duration_seconds)} · {r.width}×{r.height} · {fmtBytes(r.bytes)} · {new Date(r.created_at).toLocaleString()}</span>
+                <a className="btn btn-sm" href={url(`/renders/${r.id}/file`)} download={`${(r.project_name ?? 'video').replace(/[^\p{L}\p{N}]+/gu, '-').slice(0, 60)}-${r.variant}.mp4`}>Download</a>
+              </div>
+            </article>
+          );
+        })}
+      </div>
+    </>
   );
 }

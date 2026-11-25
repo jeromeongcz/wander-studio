@@ -227,6 +227,7 @@ test('notifications are derived from real state; the asset list spans projects',
   const get = async (url: string) => JSON.parse((await app.inject({ method: 'GET', url })).body);
   assert.deepEqual(await get('/notifications'), [], 'nothing to report on a fresh install');
   assert.deepEqual(await get('/assets'), []);
+  assert.deepEqual(await get('/renders'), [], 'no finished videos yet');
   const p = JSON.parse((await app.inject({ method: 'POST', url: '/projects', payload: { name: 'Notify me', languages: ['en'] } })).body);
   const research = (await get(`/projects/${p.id}`)).artifacts.find((a: any) => a.kind === 'research');
   await app.inject({ method: 'PUT', url: `/artifacts/${research.id}/content`, payload: { content: { topic: 'T', sources: [{ id: 's1', url: 'https://example.org/a', title: 'A' }], claims: [], checklist: [{ id: 'c1', label: 'Checked', done: true }] } } });

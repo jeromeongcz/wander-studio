@@ -241,6 +241,8 @@ test('10-second multi-format captioned video: research -> script -> storyboard -
   assert.equal(Object.values(renders).flatMap((r: any) => r.renders).length, 6);
   const listed = (await call('GET', `/projects/${pid}/renders?lang=en`)).json as any[];
   assert.equal(listed.length, 6);
+  const everywhere = JSON.parse((await app.inject({ method: 'GET', url: '/renders' })).body) as { id: string; project_name: string }[];
+  assert.ok(everywhere.length >= 6 && everywhere.every((r) => r.project_name), 'the library lists every finished video with its project');
   const served = await call('GET', `/renders/${listed[0].id}/file`);
   assert.equal(served.status, 200);
   assert.ok(served.raw.length === listed[0].bytes);

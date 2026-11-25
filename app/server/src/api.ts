@@ -415,6 +415,11 @@ export function buildApi(engine: Engine, config: Partial<AppConfig> = {}): Fasti
     return reply.status(201).send(await studio.renderComposition((req.params as { id: string }).id, variants, { reopen: b.reopen === true }));
   });
   app.get('/projects/:id/renders', async (req) => studio.render.listRenders((req.params as { id: string }).id, req.query as { lang?: string; format?: string }));
+  // every finished video across all projects, newest first, for the Asset Library
+  app.get('/renders', async () => {
+    const names = new Map(engine.listProjects().map((p) => [p.id, p.name]));
+    return engine.listProjects().flatMap((p) => studio.render.listRenders(p.id)).map((r) => ({ ...r, project_name: names.get(r.project_id) ?? null })).sort((a, b) => (a.id < b.id ? 1 : -1));
+  });
   app.get('/renders/:id/file', async (req, reply) => {
     const r = studio.render.getRender((req.params as { id: string }).id);
     return reply.type('video/mp4').send(createReadStream(join(studio.config.root, r.rel_path)));
