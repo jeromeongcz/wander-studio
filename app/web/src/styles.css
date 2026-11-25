@@ -326,3 +326,4 @@ textarea.vis { min-height: 0; field-sizing: content; }
 .scene-card.wide .frame-col { margin-bottom: 0; }
 .approved-mark { display: flex; align-items: center; justify-content: center; gap: 6px; min-height: 32px; border-radius: 8px; background: var(--good-bg); color: var(--good); font-weight: 700; font-size: 12.5px; }
 .scene-card.wide .frame-col .frame-slot { max-height: 220px; }
+.board-head { row-gap: 12px; column-gap: 8px; } .board-head > .grow { flex-basis: 100%; } .board-head > .btn-primary { margin-left: auto; }
