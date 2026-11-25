@@ -115,17 +115,6 @@ function LangAudio({ lang }: { lang: string }) {
           </div>
         )}
         {lang !== 'en' && <p className="muted small" style={{ marginBottom: 0 }}>Standard macOS voices have no Filipino voice. For Tagalog or Taglish, use Edge TTS (online), Piper with a model you provide, or import your own recording below. Mixed-language lines can mispronounce words: use pronunciation respellings in Localization.</p>}
-        <div className="row gap wrap" style={{ marginTop: 12 }}>
-          <Btn kind="primary" disabled={!provInfo?.status.ok || !voice} onClick={() => synth()}>Generate narration for the whole script</Btn>
-          <Btn disabled={!picked.length || !provInfo?.status.ok} onClick={() => synth(picked)}>Regenerate {picked.length || ''} selected</Btn>
-          <FilePick accept="audio/*,.wav,.mp3,.m4a,.aiff,.flac,.ogg" label="Import my own voiceover…" onFile={async (f) => {
-            const u = await api.upload(f);
-            const call = (reopen: boolean) => api.post(`/artifacts/${art.id}/narration/import`, { path: u.path, name: f.name, section_ids: picked.length ? picked : undefined, reopen });
-            try { await call(false); } catch (e: any) { if (e.code === 'PROTECTED' && confirm('Narration is approved. Replace it?')) await call(true); else throw e; }
-            push('ok', 'Voiceover imported'); done();
-          }} />
-        </div>
-        <p className="muted small" style={{ marginBottom: 0 }}>A voiceover file covers the whole script unless you tick sections below. Imported recordings are your own (license “own”).</p>
       </Card>
 
       <Card title="Narration by section" actions={content && <span className="muted small">measured total ≈ {fmtSec(content.chunks.reduce((n: number, c: any) => n + (clips.data?.find((x) => x.id === c.clip_id)?.duration_seconds ?? 0), 0))}</span>}>
@@ -155,6 +144,17 @@ function LangAudio({ lang }: { lang: string }) {
           </tbody>
         </table>
         <p className="muted small" style={{ marginBottom: 0 }}>The measured length of the audio becomes the authoritative timing for scenes and captions once you approve it.</p>
+        <div className="row gap wrap" style={{ marginTop: 14 }}>
+          <Btn kind="primary" disabled={!provInfo?.status.ok || !voice} onClick={() => synth()}>Generate narration for the whole script</Btn>
+          <Btn disabled={!picked.length || !provInfo?.status.ok} onClick={() => synth(picked)}>Regenerate {picked.length || ''} selected</Btn>
+          <FilePick accept="audio/*,.wav,.mp3,.m4a,.aiff,.flac,.ogg" label="Import my own voiceover…" onFile={async (f) => {
+            const u = await api.upload(f);
+            const call = (reopen: boolean) => api.post(`/artifacts/${art.id}/narration/import`, { path: u.path, name: f.name, section_ids: picked.length ? picked : undefined, reopen });
+            try { await call(false); } catch (e: any) { if (e.code === 'PROTECTED' && confirm('Narration is approved. Replace it?')) await call(true); else throw e; }
+            push('ok', 'Voiceover imported'); done();
+          }} />
+        </div>
+        <p className="muted small" style={{ marginBottom: 0 }}>A voiceover file covers the whole script unless you tick sections above. Imported recordings are your own (license “own”).</p>
       </Card>
 
       <Card title="Music and mix">
