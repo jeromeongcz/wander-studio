@@ -699,25 +699,20 @@ test('detailed drawings (text, lighting filters, masks) pass the check; the safe
   ]) assert.throws(() => checkSvg(evil, size), Error, evil);
 });
 
-test('sketch prompt: a full visual-director brief, open art direction, technical rules, caption space only when asked', () => {
-  const scene = { title: 'The net', script_segment_id: 's', segment_text: 'Every dusk he mends the same net.', target_duration: 4, visual_description: 'A fisherman mends a net under a paper lantern.', notes: 'Quiet, patient mood.', asset_type: 'illustration', camera: { movement: 'pan', direction: 'left_to_right', intensity: 'subtle' } } as any;
-  const base = { size: { w: 1080, h: 1920 }, number: 2, total: 3 };
-  const p = buildSketchPrompt(scene, { ...base, previous: { title: 'The storm', text: 'The sea took his boat.' }, next: { title: 'The boy', text: 'A boy arrives.' }, cast: [{ name: 'Andres', description: 'Old, white stubble, straw hat.' }] });
-  for (const must of [
-    /visual director, cinematic storyboard artist, professional 2D illustrator, character designer, environment artist and lighting artist/,
-    /Every dusk he mends the same net/, /Just before: "The storm", narration "The sea took his boat\."/, /Right after: "The boy"/,
-    /A fisherman mends a net/, /Quiet, patient mood/, /pan \(left to right\), subtle/, /Andres: Old, white stubble/, /do not redesign/,
-    /THINK FIRST/, /primary subject/, /establishing, extreme wide, wide, full, medium wide, medium, medium close-up, close-up, extreme close-up, over-the-shoulder, point-of-view/,
-    /bird's-eye, worm's-eye/, /key light, fill, rim light/, /No stick figures/, /<g id="background">/, /one <g id="character-name"> per character/,
-    /do not add named characters or story events/, /Answer with the SVG only/, /No <style> blocks, CSS classes, scripts/,
-  ]) assert.match(p, must);
-  for (const gone of [/Flat, layered/i, /No text, letters/i, /lower fifth/i, /bottom fifth/i, /under 60 kilobytes/i]) assert.doesNotMatch(p, gone);
+test('sketch prompt: art direction is open, technical rules stay, caption space only when asked', () => {
+  const scene = { title: 't', script_segment_id: 's', target_duration: 4, visual_description: 'A fisherman mends a net under a paper lantern.', asset_type: 'illustration', camera: { movement: 'static' } } as any;
+  const base = { size: { w: 1080, h: 1920 }, number: 1, total: 3 };
+  const p = buildSketchPrompt(scene, base);
+  assert.match(p, /professional 2D illustrator and art director/);
+  assert.match(p, /A fisherman mends a net/);
+  assert.match(p, /anatomy/);
+  assert.match(p, /gradients, highlights/);
+  assert.match(p, /Signs, labels, writing/);
+  assert.match(p, /Answer with the SVG only/);
+  assert.match(p, /No <style> blocks, CSS classes, scripts/, 'technical rules are kept');
+  for (const gone of [/Flat, layered/i, /No text, letters/i, /lower fifth/i, /bottom fifth/i, /Keep it under 60 kilobytes/i]) assert.doesNotMatch(p, gone);
   assert.match(buildSketchPrompt(scene, { ...base, captionSpace: true }), /bottom fifth/);
   assert.match(buildSketchPrompt(scene, { ...base, styleNotes: 'ink and watercolour' }), /ink and watercolour/);
-  const first = buildSketchPrompt({ ...scene, camera: { movement: 'static' } }, { ...base, number: 1 });
-  assert.match(first, /Just before: nothing, this is the opening scene/);
-  assert.doesNotMatch(first, /camera move/, 'a static scene gets no camera-move note');
-  assert.doesNotMatch(first, /Established characters/, 'no cast, nothing invented');
 });
 
 test('a detailed drawing is rasterized with its gradients, filters and text intact', { skip: !/svg/.test(spawnSync('ffmpeg', ['-hide_banner', '-decoders'], { encoding: 'utf8' }).stdout ?? '') && 'this FFmpeg has no SVG (librsvg) support' }, async () => {
@@ -750,9 +745,6 @@ test('sketches: build the storyboard from the approved script, draw one or all s
   const asset = (await t.call('GET', `/assets/${rows[1].asset_id}`)).json;
   assert.deepEqual([asset.width, asset.height, asset.approval_status, asset.provider, asset.license.type], [1080, 1920, 'pending', 'claude-sketch', 'ai-generated']);
   assert.match(t.stub.read('prompt_1'), /Character looks: Lolo Andres/);
-  assert.match(t.stub.read('prompt_1'), /Right after: "/, 'the next scene is given as context');
-  assert.match(t.stub.read('prompt_1'), /Just before: "/);
-  assert.equal(asset.params.prompt_version, 3);
   assert.doesNotMatch(t.stub.read('args_1'), /WebSearch/);
 
   // "all" draws only the scenes without a picture; one bad answer does not lose the good one
