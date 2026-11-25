@@ -499,7 +499,13 @@ test('Research Studio: research without any project, approve a topic, then start
   assert.deepEqual(p.languages, ['en', 'tl']);
   const research = p.artifacts.find((a: any) => a.kind === 'research');
   assert.equal(research.state, 'in_progress', 'the project gets the notes but the topic still needs approval in the project');
-  assert.equal((await t.call('GET', '/studio/research')).json.ideas.find((i: any) => i.id === one.id).status, 'used');
+  const started = (await t.call('GET', '/studio/research')).json.ideas.find((i: any) => i.id === one.id);
+  assert.equal(started.status, 'used');
+  assert.equal(started.video_project_id, np.json.projectId, 'the topic links to its video');
+  assert.equal((await t.call('POST', `/projects/${np.json.projectId}/delete`, { confirm_name: p.name })).status, 200);
+  const back = (await t.call('GET', '/studio/research')).json.ideas.find((i: any) => i.id === one.id);
+  assert.equal(back.status, 'approved', 'deleting the video makes the topic available again');
+  assert.equal(back.video_project_id, null);
   // a studio topic cannot be pushed into a project via "use"
   assert.equal((await t.call('POST', `/topic-ideas/${two.id}/use`, {})).status, 422);
 });

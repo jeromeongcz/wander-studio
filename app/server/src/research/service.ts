@@ -222,7 +222,10 @@ export class ResearchService {
   private idea(r: any) {
     const facts = JSON.parse(r.facts_json) as TopicFact[];
     const count = (s: string) => facts.filter((f) => f.link_status === s).length;
-    return { id: r.id, project_id: r.project_id as string | null, category: (r.category ?? null) as string | null, approved_at: (r.approved_at ?? null) as string | null, batch_id: r.batch_id, title: r.title, hook: r.hook, confidence: r.confidence, note: r.note, facts, status: r.status, created_at: r.created_at, links: { reachable: count('reachable'), unclear: count('unclear'), dead: count('dead'), unchecked: count('unchecked') } };
+    // a Studio topic whose video was deleted is simply an approved topic again
+    const video = r.video_project_id && this.db.prepare('SELECT 1 FROM projects WHERE id = ?').get(r.video_project_id) ? (r.video_project_id as string) : null;
+    const status = r.status === 'used' && !r.project_id && !video ? 'approved' : r.status;
+    return { video_project_id: video, id: r.id, project_id: r.project_id as string | null, category: (r.category ?? null) as string | null, approved_at: (r.approved_at ?? null) as string | null, batch_id: r.batch_id, title: r.title, hook: r.hook, confidence: r.confidence, note: r.note, facts, status, created_at: r.created_at, links: { reachable: count('reachable'), unclear: count('unclear'), dead: count('dead'), unchecked: count('unchecked') } };
   }
 
   private getIdea(id: string) {
@@ -273,7 +276,7 @@ export class ResearchService {
     const projectId = createProject(this.s.engine, { name: i.title.slice(0, 120), category: category ?? undefined, languages, formats });
     const research = this.s.engine.list(projectId, { kind: 'research' })[0];
     this.s.save(research.id, researchFromTopic(i, category), { actor: 'user' });
-    this.db.prepare("UPDATE topic_ideas SET status = 'used' WHERE id = ?").run(id);
+    this.db.prepare("UPDATE topic_ideas SET status = 'used', video_project_id = ? WHERE id = ?").run(i.project_id ? null : projectId, id);
     return { projectId };
   }
 }

@@ -303,6 +303,12 @@ const MIGRATIONS: string[] = [
   ALTER TABLE topic_ideas_new RENAME TO topic_ideas;
   CREATE INDEX idx_topic_ideas_project ON topic_ideas(project_id, status);
   `,
+  // v10: remember which video was started from a Research Studio topic, so the topic stays visible and links to it.
+  `
+  ALTER TABLE topic_ideas ADD COLUMN video_project_id TEXT;
+  UPDATE topic_ideas SET video_project_id = (SELECT p.id FROM projects p WHERE p.name = substr(topic_ideas.title, 1, 120) ORDER BY p.id DESC LIMIT 1)
+    WHERE status = 'used' AND project_id IS NULL;
+  `,
 ];
 
 export function openDb(path: string = ':memory:'): DatabaseSync {

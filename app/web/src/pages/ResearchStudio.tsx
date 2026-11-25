@@ -40,7 +40,7 @@ export function ResearchWorkspace() {
   const cc = status.data;
   const ready = !!cc?.loggedIn;
   const by = (s: string) => ideas.filter((i) => i.status === s);
-  const approved = by('approved'), toReview = by('new'), started = by('used'), dismissed = by('dismissed');
+  const started = by('used'), approved = [...by('approved'), ...started], toReview = by('new'), dismissed = by('dismissed');
 
   const start = async () => {
     if (!sessionStorage.getItem('wander-cc-research-ok')) {
@@ -79,7 +79,7 @@ export function ResearchWorkspace() {
           {t.status === 'approved' && <Btn small kind="primary" onClick={() => setStarting(t)}>Start a video from this <Icon name="arrow" small /></Btn>}
           {t.status === 'approved' && <Btn small kind="ghost" onClick={async () => { await api.post(`/topic-ideas/${t.id}/restore`); data.reload(); }}>Undo approval</Btn>}
           {t.status === 'dismissed' && <Btn small onClick={async () => { await api.post(`/topic-ideas/${t.id}/restore`); data.reload(); }}>Restore</Btn>}
-          {t.status === 'used' && <Pill tone="good">video started</Pill>}
+          {t.status === 'used' && <><Pill tone="good">video started</Pill>{t.video_project_id && <a className="btn btn-sm btn-primary" href={`#/p/${t.video_project_id}/research`}>Open video <Icon name="arrow" small /></a>}</>}
           {t.approved_at && t.status === 'approved' && <span className="muted small">approved {new Date(t.approved_at).toLocaleDateString()}</span>}
         </div>
       </section>
@@ -139,7 +139,7 @@ export function ResearchWorkspace() {
 
         <div className="ws-topics stack">
           <div>
-            <div className="section-h" style={{ marginTop: 0 }}><h2>Approved topics</h2><span className="muted">{approved.length} ready to become a video</span></div>
+            <div className="section-h" id="approved-topics" style={{ marginTop: 0 }}><h2>Approved topics</h2><span className="muted">{approved.length - started.length} ready to become a video{started.length ? ` · ${started.length} started` : ''}</span></div>
             {data.loading && !data.data && <Loading />}
             {approved.length === 0 && !(data.loading && !data.data) && <Empty>Nothing approved yet. Approve a topic from the list below.</Empty>}
             <div className="stack">{approved.map(card)}</div>
@@ -150,12 +150,7 @@ export function ResearchWorkspace() {
             {toReview.length === 0 && <Empty>No topics to review. Fill in the form and press Research.</Empty>}
             <div className="stack">{toReview.map(card)}</div>
           </div>
-          {(dismissed.length > 0 || started.length > 0) && (
-            <div className="stack">
-              {dismissed.length > 0 && <details><summary className="muted">Dismissed ({dismissed.length})</summary><div className="stack" style={{ marginTop: 10 }}>{dismissed.map(card)}</div></details>}
-              {started.length > 0 && <details><summary className="muted">Video started ({started.length})</summary><div className="stack" style={{ marginTop: 10 }}>{started.map(card)}</div></details>}
-            </div>
-          )}
+          {dismissed.length > 0 && <details><summary className="muted">Dismissed ({dismissed.length})</summary><div className="stack" style={{ marginTop: 10 }}>{dismissed.map(card)}</div></details>}
         </div>
       </div>
 
@@ -166,7 +161,7 @@ export function ResearchWorkspace() {
             <div className="row gap wrap"><Pill tone="info">{approving.facts.length} facts</Pill><Pill tone={approving.links.dead ? 'bad' : approving.links.reachable === approving.facts.length ? 'good' : 'warn'}>{approving.links.reachable} of {approving.facts.length} links load</Pill><Pill tone="warn">none verified</Pill></div>
             {approving.links.dead > 0 && <div className="notice bad">{approving.links.dead} source link(s) did not load. You can still approve the topic, but find real sources before using those facts.</div>}
             <div className="row gap"><span className="grow" /><Btn onClick={() => setApproving(null)}>Not yet</Btn>
-              <Btn kind="primary" onClick={async () => { await api.post(`/topic-ideas/${approving.id}/approve`); push('ok', 'Topic approved. Start a video from it when you are ready.'); setApproving(null); data.reload(); }}>Approve topic</Btn></div>
+              <Btn kind="primary" onClick={async () => { await api.post(`/topic-ideas/${approving.id}/approve`); push('ok', 'Topic approved. It is now under Approved topics.'); setApproving(null); data.reload(); setTimeout(() => document.getElementById('approved-topics')?.scrollIntoView({ behavior: 'smooth' }), 300); }}>Approve topic</Btn></div>
           </div>
         </Modal>
       )}
