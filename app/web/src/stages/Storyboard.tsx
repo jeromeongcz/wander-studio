@@ -1,9 +1,10 @@
 import { useEffect, useState } from 'react';
+import type { ReactNode } from 'react';
 import { api } from '../api';
 import { ArtifactBar, saveArtifact } from '../actions';
 import { useProject } from '../pages/Project';
 import { useAsync, useInterval } from '../hooks';
-import { Btn, Card, CopyBtn, Empty, Field, Icon, Loading, Modal, Pill, StateBadge, fmtSec, useToast } from '../ui';
+import { Btn, Card, Empty, Field, Icon, Loading, Pill, StateBadge, fmtSec, useToast } from '../ui';
 import { url } from '../api';
 import { ASSET_TYPES } from '../types';
 import { ProjectDetailsEditor } from './shared';
@@ -22,7 +23,6 @@ export function StoryboardStage() {
   const recs = useAsync(() => api.get<any>(`/categories/${encodeURIComponent(project.category ?? 'custom')}/recommendations`), [project.category]);
   const [c, setC] = useState<any>(null);
   const [dirty, setDirty] = useState(false);
-  const [prompt, setPrompt] = useState<string | null>(null);
   const [pickCat, setPickCat] = useState(false);
   // how the scenes are laid out; remembered in this browser
   const [view, setView] = useState<'list' | 'grid'>(() => { try { return localStorage.getItem('wander-storyboard-view') === 'grid' ? 'grid' : 'list'; } catch { return 'list'; } });
@@ -96,7 +96,7 @@ export function StoryboardStage() {
     sketches.reload();
     done();
   };
-  const picture = (i: number) => {
+  const picture = (i: number, tools?: ReactNode) => {
     const row = sketches.data?.[i];
     return (
       <div className="frame-col">
@@ -105,6 +105,7 @@ export function StoryboardStage() {
         {row?.asset_id && (row.state === 'approved'
           ? <span className="approved-mark"><Icon name="check" small /> Approved</span>
           : <Btn small kind="primary" disabled={!!drawing} onClick={() => approveScene(i)}><Icon name="check" small /> Approve</Btn>)}
+        {tools}
       </div>
     );
   };
@@ -131,7 +132,6 @@ export function StoryboardStage() {
           <div className="bar-prog"><i style={{ width: `${total ? (have / total) * 100 : 0}%` }} /></div>
         </div>
         {c && <div className="row gap wrap">
-          <Btn small onClick={async () => setPrompt((await api.get(`/artifacts/${art.id}/storyboard-prompt`)).prompt)}>Prompt for my own AI</Btn>
           <Btn small onClick={() => edit({ scenes: [...c.scenes, { title: 'New scene', script_segment_id: sections[0]?.id ?? '', target_duration: 3, visual_description: '', asset_type: 'stock_photo', camera: { movement: 'ken_burns', direction: 'in', intensity: 'subtle' }, transition_in: 'dissolve', sfx_cues: [] }] })}>Add scene</Btn>
         </div>}
         <div className="seg" role="group" aria-label="Scene layout">
@@ -162,15 +162,18 @@ export function StoryboardStage() {
           <div className={listClass}>
             {c.scenes.map((s: any, i: number) => (
               <div key={s.scene_id ?? i} className={cardClass}>
-                {picture(i)}
+                {picture(i, (
+                  <div className="scene-tools">
+                    {s.draft && <Pill tone="warn">draft</Pill>}
+                    <Btn small kind="ghost" title="Move up" onClick={() => move(i, -1)} disabled={i === 0}>↑</Btn>
+                    <Btn small kind="ghost" title="Move down" onClick={() => move(i, 1)} disabled={i === c.scenes.length - 1}>↓</Btn>
+                    <Btn small kind="ghost" onClick={() => edit({ scenes: c.scenes.filter((_: any, k: number) => k !== i) })}>Remove</Btn>
+                  </div>
+                ))}
                 <div className="scene-body">
                 <div className="row gap wrap">
                   <span className="scene-n">{i + 1}</span>
                   <input aria-label="Scene title" value={s.title} onChange={(e) => setScene(i, { title: e.target.value })} />
-                  {s.draft && <Pill tone="warn">draft</Pill>}
-                  <Btn small kind="ghost" onClick={() => move(i, -1)} disabled={i === 0}>↑</Btn>
-                  <Btn small kind="ghost" onClick={() => move(i, 1)} disabled={i === c.scenes.length - 1}>↓</Btn>
-                  <Btn small kind="ghost" onClick={() => edit({ scenes: c.scenes.filter((_: any, k: number) => k !== i) })}>Remove</Btn>
                 </div>
                 {s.segment_text && <p className="quote">“{s.segment_text}”</p>}
                 <div className="scene-text" tabIndex={0}>
@@ -204,7 +207,6 @@ export function StoryboardStage() {
           <div className="row gap"><Btn kind="primary" disabled={!dirty} onClick={async () => { const r = await saveArtifact(art.id, c); push('ok', r.changed ? 'Storyboard saved' : 'No changes'); done(); }}>Save storyboard</Btn><span className="muted small">Saving keeps one visual slot per scene in sync. A scene whose visual is already approved cannot be removed.</span></div>
         </>
       )}
-      {prompt && <Modal title="Storyboard prompt" wide onClose={() => setPrompt(null)}><div className="row gap" style={{ marginBottom: 8 }}><CopyBtn text={prompt} /></div><pre>{prompt}</pre></Modal>}
     </>
   );
 }
