@@ -57,7 +57,7 @@ export function App() {
         <main className="content">
           {route === 'dashboard' && <Dashboard />}
           {route === 'research' && <ResearchStudio />}
-          {route === 'production' && (hash.startsWith('/p/') ? <ProjectPage id={projectId} stage={stageId || 'overview'} /> : <VideoProduction />)}
+          {route === 'production' && (hash.startsWith('/p/') ? <ProjectPage id={projectId} stage={stageId || 'overview'} /> : <VideoProduction stepId={projectId} />)}
           {route === 'assets' && <AssetLibrary />}
           {route === 'settings' && <SettingsPage />}
         </main>

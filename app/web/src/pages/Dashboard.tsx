@@ -84,36 +84,42 @@ export function Dashboard() {
   );
 }
 
-/** Video Production: the six steps in order. Step 1 is the research workspace; the others show which videos are at that step. */
-export function VideoProduction() {
+/** Video Production: a horizontal stepper on top; the chosen step's panel below. Step 1 is the research workspace. */
+export function VideoProduction({ stepId }: { stepId?: string }) {
   const { projects, jobs, rows } = useBoard();
+  const idx = Math.max(0, STEPS.findIndex((s) => s.id === stepId));
+  const step = STEPS[idx];
+  const at = (i: number) => rows.filter((r) => (r.flow.allDone ? i === STEPS.length - 1 : r.flow.current === i));
+  const list = at(idx);
   return (
     <div className="stack">
-      <section className="hero">
-        <div className="grow">
-          <h1>Video Production</h1>
-          <p>Every video moves through six steps and you approve each one. Start from an approved topic in step 1.</p>
-        </div>
-      </section>
+      <nav className="stepper" aria-label="Video production steps">
+        <ol>
+          {STEPS.map((s, i) => {
+            const n = at(i).length;
+            return (
+              <li key={s.id}>
+                <a className={`step${i === idx ? ' current' : ''}`} href={`#/projects/${s.id}`} aria-current={i === idx ? 'step' : undefined}>
+                  <span className="step-dot">{s.n}</span>
+                  <span className="step-label">{i === 0 ? 'Research Studio' : s.label}</span>
+                  <span className="step-sub">{n ? `${n} video${n === 1 ? '' : 's'}` : i === 0 ? 'Search and approve a topic' : s.short}</span>
+                </a>
+              </li>
+            );
+          })}
+        </ol>
+      </nav>
+      <div className="step-head">
+        <span className="step-num">STEP {step.n} OF {STEPS.length}</span>
+        <div className="grow"><h2>{idx === 0 ? 'Research Studio' : step.label}</h2><p className="muted" style={{ margin: '4px 0 0' }}>{idx === 0 ? 'Search a topic, approve it, then start a video from it.' : step.blurb}</p></div>
+      </div>
       <JobsCard jobs={jobs.data} />
       {projects.error && <ErrorBox error={projects.error} retry={projects.reload} />}
-      <div className="pipeline">
-        {STEPS.map((s, idx) => {
-          const here = rows.filter((r) => r.flow.current === idx && !r.flow.allDone);
-          const finished = idx === STEPS.length - 1 ? rows.filter((r) => r.flow.allDone) : [];
-          const list = [...here, ...finished];
-          return (
-            <section key={s.id} className="stage" aria-labelledby={`st-${s.id}`}>
-              <header className="stage-h">
-                <span className="stage-n">{s.n}</span>
-                <div className="grow"><h2 id={`st-${s.id}`}>{idx === 0 ? 'Research Studio' : s.label}</h2><span className="muted">{idx === 0 ? 'Search a topic, approve it, start a video' : s.short}</span></div>
-                <Pill tone={list.length ? 'info' : 'neutral'}>{list.length} video{list.length === 1 ? '' : 's'}</Pill>
-              </header>
-              {idx === 0 ? <div className="stack"><ResearchWorkspace />{list.length > 0 && <div><h3 style={{ margin: '4px 0 10px' }}>Videos at this step</h3><div className="grid g2">{list.map((r) => <ProjectCard key={r.p.id} {...r} />)}</div></div>}</div> : list.length === 0 ? <div className="stage-empty">{projects.loading && !projects.data ? 'Loading…' : 'No videos at this step.'}</div> : <div className="grid g2">{list.map((r) => <ProjectCard key={r.p.id} {...r} />)}</div>}
-            </section>
-          );
-        })}
-      </div>
+      {idx === 0 && <ResearchWorkspace />}
+      {projects.loading && !projects.data && <Loading what="Loading videos" />}
+      {idx === 0 && list.length > 0 && <h3>Videos at this step</h3>}
+      {list.length > 0 && <div className="grid g2">{list.map((r) => <ProjectCard key={r.p.id} {...r} />)}</div>}
+      {idx > 0 && projects.data && list.length === 0 && <Empty>No videos at this step. Approve a topic in <a href="#/projects/topic">step 1</a> and start a video from it.</Empty>}
     </div>
   );
 }

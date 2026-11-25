@@ -123,8 +123,8 @@ table { width: 100%; border-collapse: collapse; } th { text-align: left; font-si
 .step { position: relative; display: flex; flex-direction: column; align-items: center; text-align: center; gap: 6px; padding: 2px 8px 4px; color: var(--text); font-weight: 400; border-radius: 12px; }
 .step:hover { text-decoration: none; }
 a.step:hover .step-dot { border-color: var(--brand); }
-.step + .step::before { content: ""; position: absolute; top: 21px; left: calc(-50% + 26px); right: calc(50% + 26px); height: 3px; border-radius: 2px; background: var(--line); }
-.step.done + .step::before { background: var(--brand); }
+.stepper li + li .step::before { content: ""; position: absolute; top: 21px; left: calc(-50% + 26px); right: calc(50% + 26px); height: 3px; border-radius: 2px; background: var(--line); }
+.stepper li:has(.step.done) + li .step::before { background: var(--brand); }
 .step-dot { position: relative; width: 42px; height: 42px; border-radius: 50%; display: grid; place-items: center; font-weight: 800; font-size: 15px; border: 2px solid var(--line-strong); background: var(--panel); color: var(--muted); z-index: 1; transition: box-shadow .2s, border-color .2s; }
 .step.done .step-dot { background: var(--brand); border-color: var(--brand); color: var(--brand-ink); }
 .step.current .step-dot { border-color: var(--brand); color: var(--brand); background: var(--brand-soft); box-shadow: 0 0 0 5px var(--brand-tint); }
@@ -194,13 +194,7 @@ a.step:hover .step-dot { border-color: var(--brand); }
   .hero { flex-direction: column; align-items: stretch; } .hero .btn { width: 100%; }
 }
 
-/* ---------- Video Production pipeline ---------- */
-.pipeline { display: flex; flex-direction: column; gap: 18px; }
-.stage { background: var(--panel3); border: 1px solid var(--line); border-radius: 18px; padding: 18px 20px 20px; }
-.stage-h { display: flex; align-items: center; gap: 14px; margin-bottom: 14px; }
-.stage-h h2 { font-size: 18px; }
-.stage-n { width: 38px; height: 38px; border-radius: 50%; background: var(--brand); color: var(--brand-ink); display: grid; place-items: center; font-weight: 800; flex: none; }
-.stage-empty { padding: 18px; text-align: center; color: var(--muted); border: 1.5px dashed var(--line-strong); border-radius: var(--radius); }
+/* ---------- research workspace ---------- */
 .ws { display: grid; grid-template-columns: minmax(0, 1fr) minmax(300px, 400px); gap: 18px; align-items: start; }
 .ws-topics { grid-column: 1; grid-row: 1; } .ws-form { grid-column: 2; grid-row: 1; position: sticky; top: 68px; }
 details summary { cursor: pointer; padding: 6px 0; font-weight: 600; }
