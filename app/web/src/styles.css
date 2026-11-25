@@ -414,13 +414,13 @@ textarea.vis { min-height: 0; field-sizing: content; }
 /* ---------- topic cards: state and the next action across the top ---------- */
 .topic { --tone: var(--brand); display: flex; flex-direction: column; gap: 10px; }
 .topic-approved, .topic-used { position: relative; overflow: hidden; border-color: color-mix(in srgb, var(--tone) 35%, var(--line)); }
-.topic-used { --tone: var(--accent); }
+.topic-used { --tone: #2563EB; }
 .topic-top { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; margin: -18px -20px 2px; padding: 12px 16px 12px 20px; background: linear-gradient(105deg, var(--panel) 20%, color-mix(in srgb, var(--tone) 16%, var(--panel))); border-bottom: 1px solid color-mix(in srgb, var(--tone) 22%, var(--line)); }
 .topic-state { display: flex; align-items: center; gap: 10px; } .topic-state i { width: 32px; height: 32px; border-radius: 50%; display: grid; place-items: center; background: var(--tone); color: var(--panel); box-shadow: 0 4px 12px color-mix(in srgb, var(--tone) 35%, transparent); }
 .topic-state b { display: block; font-size: 13.5px; line-height: 1.2; } .topic-state span span { display: block; font-size: 11.5px; color: var(--muted); }
 .topic-go { margin-left: auto; font: inherit; font-weight: 700; display: inline-flex; align-items: center; gap: 8px; min-height: 40px; padding: 9px 18px; border: 0; border-radius: 999px; background: linear-gradient(135deg, #0F766E, #0E7490); color: #fff; box-shadow: 0 8px 18px rgba(15, 118, 110, .32); transition: transform .15s, box-shadow .15s; white-space: nowrap; }
 .topic-go:hover { transform: translateY(-2px); box-shadow: 0 12px 24px rgba(15, 118, 110, .4); color: #fff; text-decoration: none; }
 .topic-go .icon { transition: transform .15s; } .topic-go:hover .icon:last-child { transform: translateX(3px); }
-.topic-go.open { background: linear-gradient(135deg, #C2410C, #EA580C); box-shadow: 0 8px 18px rgba(194, 65, 12, .3); }
-.topic-go.open:hover { box-shadow: 0 12px 24px rgba(194, 65, 12, .4); }
+.topic-go.open { background: linear-gradient(135deg, #1D4ED8, #2563EB); box-shadow: 0 8px 18px rgba(37, 99, 235, .32); }
+.topic-go.open:hover { box-shadow: 0 12px 24px rgba(37, 99, 235, .42); }
 @media (max-width: 760px) { .topic-top { margin: -15px -15px 2px; } .topic-go { width: 100%; justify-content: center; margin-left: 0; } }
