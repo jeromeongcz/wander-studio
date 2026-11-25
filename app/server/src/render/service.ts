@@ -17,6 +17,7 @@ import type { ScriptContent } from '../studios/script.ts';
 import type { StoryboardContent } from '../studios/storyboard.ts';
 import { ulid } from '../../../shared/src/index.ts';
 import { parseFormat, safeZoneFor } from './formats.ts';
+import { videoGraph } from './compose.ts';
 import type { SceneClipSpec } from './motion.ts';
 import { sceneClipArgs, sceneClipKey } from './motion.ts';
 import { EFFECT_STYLES, applyEffects, impactTimes } from './effects.ts';
@@ -42,7 +43,6 @@ export interface RenderRow {
   created_at: string;
 }
 
-const XFADE: Record<string, string> = { cut: 'fade', fade: 'fade', dissolve: 'dissolve', slide: 'slideleft', wipe: 'wipeleft', zoom: 'zoomin' };
 const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, '');
 const q = filterPath; // quote a path inside an ffmpeg filter option
 
@@ -180,7 +180,7 @@ export class RenderService {
     return applyEffects(buildTimeline({
       lang: comp.lang_code,
       format: parseFormat(comp.format),
-      scenes: sbc.scenes.map((s) => ({ scene_id: s.scene_id!, script_segment_id: s.script_segment_id, segment_text: s.segment_text, target_duration: s.target_duration, title: s.title, camera: s.camera, transition_in: s.transition_in, origin: s.origin, draft: s.draft })),
+      scenes: sbc.scenes.map((s) => ({ scene_id: s.scene_id!, script_segment_id: s.script_segment_id, segment_text: s.segment_text, target_duration: s.target_duration, title: s.title, camera: s.camera, transition_in: s.transition_in, transition_settings: s.transition_settings, origin: s.origin, draft: s.draft })),
       assets,
       timelineWords: track?.words.length ? track.words.map((w) => ({ section_id: w.section_id, start: w.start, end: w.end })) : this.estimatedWords(layout, script),
       narration: {
@@ -235,7 +235,7 @@ export class RenderService {
     const abs = (rel: string) => join(this.config.root, rel);
     const byId = (list: { clip_id: string; rel_path: string }[], id: string) => abs(list.find((x) => x.clip_id === id)!.rel_path);
     // generated here, so the project's own audio and licences are untouched
-    const fx = tl.effects ? await this.effectSounds(tl, signal) : [];
+    const fx = tl.effects || tl.scenes.some((s) => s.transition_in.sound) ? await this.effectSounds(tl, signal) : [];
     const graph = buildMixGraph({
       narration: tl.audio.chunks.map((c) => ({ path: abs(c.rel_path), start: c.start })),
       music: (tl.audio.mix.music ?? []).map((m) => ({ path: byId(tl.audio.music, m.clip_id), spec: m })),
@@ -276,8 +276,19 @@ export class RenderService {
       return out;
     };
     const hit = await make('hit_v1.wav', ['-f', 'lavfi', '-i', 'sine=frequency=52:duration=0.6', '-f', 'lavfi', '-i', 'anoisesrc=color=brown:amplitude=0.9:duration=0.18:seed=7', '-filter_complex', '[0:a]volume=3,afade=t=out:st=0.03:d=0.57:curve=exp[a];[1:a]afade=t=out:st=0.01:d=0.17[b];[a][b]amix=inputs=2:normalize=0:duration=longest']);
-    const sounds = impactTimes(tl).map((at) => ({ path: hit, spec: { clip_id: 'effect-hit', at, gain_db: -7 } }));
-    if (!(tl.audio.mix.music ?? []).length) {
+    const sounds = (tl.effects ? impactTimes(tl) : []).map((at) => ({ path: hit, spec: { clip_id: 'effect-hit', at, gain_db: -7 } }));
+    // sounds the person (or the script direction) attached to single transitions
+    for (const s of tl.scenes) {
+      const { sound, duration } = s.transition_in;
+      if (!sound || s.index === 0) continue;
+      const at = Math.max(0, Math.round((s.start - Math.max(duration, 0.2)) * 1000) / 1000);
+      if (sound === 'impact') sounds.push({ path: hit, spec: { clip_id: 'effect-hit', at: s.start, gain_db: -8 } });
+      else {
+        const whoosh = await make('whoosh_v1.wav', ['-f', 'lavfi', '-i', 'anoisesrc=color=pink:amplitude=0.8:duration=0.55:seed=5', '-af', 'highpass=f=300,lowpass=f=3500,afade=t=in:d=0.3:curve=qsin,afade=t=out:st=0.3:d=0.25']);
+        sounds.push({ path: whoosh, spec: { clip_id: 'effect-whoosh', at, gain_db: -12 } });
+      }
+    }
+    if (tl.effects && !(tl.audio.mix.music ?? []).length) {
       const seconds = Math.ceil(tl.duration);
       const drone = await make(`drone_v1_${seconds}.wav`, ['-f', 'lavfi', '-i', `sine=frequency=55:duration=${seconds}`, '-f', 'lavfi', '-i', `anoisesrc=color=brown:amplitude=0.6:duration=${seconds}:seed=11`, '-filter_complex', `[0:a]volume=0.6,tremolo=f=0.2:d=0.6[a];[1:a]lowpass=f=160[b];[a][b]amix=inputs=2:normalize=0:duration=longest,afade=t=in:d=1.5,afade=t=out:st=${Math.max(0, seconds - 1.5)}:d=1.5`]);
       sounds.push({ path: drone, spec: { clip_id: 'effect-drone', at: 0, gain_db: -20 } });
@@ -296,15 +307,9 @@ export class RenderService {
 
   private async compose(tl: Timeline, clips: string[], mix: string, variant: 'captioned' | 'clean', out: string, signal?: AbortSignal) {
     const { fps } = tl.format;
-    const filters: string[] = clips.map((_, i) => `[${i}:v]settb=AVTB,fps=${fps},setpts=PTS-STARTPTS,setsar=1[s${i}]`);
-    let last = 's0';
-    for (let i = 1; i < clips.length; i++) {
-      const s = tl.scenes[i];
-      const t = s.transition_in.duration > 0 ? s.transition_in.duration : 1 / fps;
-      const offset = Math.max(0, s.start - t);
-      filters.push(`[${last}][s${i}]xfade=transition=${XFADE[s.transition_in.type] ?? 'fade'}:duration=${t.toFixed(4)}:offset=${offset.toFixed(4)}[x${i}]`);
-      last = `x${i}`;
-    }
+    const graph = videoGraph(tl);
+    const filters = graph.filters;
+    let last = graph.out;
     if (variant === 'captioned' && tl.captions.enabled) {
       const ass = await this.assFile(tl);
       filters.push(`[${last}]ass=filename=${q(ass.path)}:fontsdir=${q(ass.fontsDir)}[cap]`);

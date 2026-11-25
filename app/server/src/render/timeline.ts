@@ -7,6 +7,8 @@ import type { Camera, Rect } from './motion.ts';
 import type { FormatSpec } from './formats.ts';
 import { checkDirectionOverride, resolveLayers, storyboardSource } from './resolve.ts';
 import type { DirectionOverride, Source, TransitionChoice } from './resolve.ts';
+import { DEFAULT_SECONDS } from './transitions.ts';
+import type { TransitionSpec } from './transitions.ts';
 import type { Scene, Transition } from '../studios/storyboard.ts';
 import { computeSceneTimes } from './timing.ts';
 import type { SceneIn } from './timing.ts';
@@ -21,7 +23,7 @@ export interface TimelineScene {
   asset: { id: string; sha256: string; rel_path: string; kind: 'image' | 'video'; width: number; height: number } | null;
   focal: { x: number; y: number };
   camera: Camera;
-  transition_in: { type: string; duration: number };
+  transition_in: { type: string; duration: number } & Partial<Omit<TransitionSpec, 'type' | 'duration'>>;
   /** Present only for values that come from a Compose & Render override. */
   sources?: { camera?: Source; transition?: Source };
 }
@@ -42,12 +44,11 @@ export interface Timeline {
 }
 
 export const TAIL_SECONDS = 0.4;
-const TRANSITION_SECONDS = 0.4;
 
 export interface BuildInput {
   lang: string;
   format: FormatSpec;
-  scenes: (SceneIn & { scene_id: string; title: string; camera: Camera; transition_in?: string; origin?: Scene['origin']; draft?: boolean })[];
+  scenes: (SceneIn & { scene_id: string; title: string; camera: Camera; transition_in?: string; transition_settings?: Scene['transition_settings']; origin?: Scene['origin']; draft?: boolean })[];
   assets: Map<string, TimelineScene['asset'] & { focal: { x: number; y: number } }>;
   timelineWords: { section_id: string; start: number; end: number }[];
   narration: Timeline['audio'];
@@ -65,7 +66,7 @@ function direct(i: BuildInput, s: BuildInput['scenes'][number]) {
   const own = i.overrides[s.scene_id];
   const all = i.overrides_all;
   const camera = resolveLayers<Camera>({ scene_override: own?.camera, [storyboardSource(s, 'camera')]: s.camera, composition_override: all?.camera, default: s.camera });
-  const stored: TransitionChoice | undefined = s.transition_in ? { type: s.transition_in as Transition } : undefined;
+  const stored: TransitionChoice | undefined = s.transition_in ? { ...s.transition_settings, type: s.transition_in as Transition } : undefined;
   const transition = resolveLayers<TransitionChoice>({ scene_override: own?.transition, [storyboardSource(s, 'transition')]: stored, composition_override: all?.transition, default: { type: 'cut' } });
   return { camera, transition };
 }
@@ -79,7 +80,8 @@ export function buildTimeline(i: BuildInput): Timeline {
     const { camera, transition } = direct(i, s);
     const type = k === 0 ? 'cut' : transition.value.type;
     const prev = times[k - 1];
-    const dur = type === 'cut' ? 0 : Math.min(transition.value.duration ?? TRANSITION_SECONDS, 0.4 * Math.min(t.duration, prev ? prev.duration : t.duration));
+    const { type: _t, duration: wanted, ...settings } = k === 0 ? { type: 'cut' as const, duration: undefined } : transition.value;
+    const dur = type === 'cut' ? 0 : Math.min(wanted ?? DEFAULT_SECONDS[type], 0.4 * Math.min(t.duration, prev ? prev.duration : t.duration));
     const sources = {
       ...(OVERRIDES.includes(camera.source) ? { camera: camera.source } : {}),
       ...(k > 0 && OVERRIDES.includes(transition.source) ? { transition: transition.source } : {}),
@@ -94,7 +96,7 @@ export function buildTimeline(i: BuildInput): Timeline {
       asset: a ? { id: a.id, sha256: a.sha256, rel_path: a.rel_path, kind: a.kind, width: a.width, height: a.height } : null,
       focal: a?.focal ?? { x: 0.5, y: 0.5 },
       camera: camera.value,
-      transition_in: { type, duration: Math.round(dur * 1000) / 1000 },
+      transition_in: { type, duration: Math.round(dur * 1000) / 1000, ...settings },
       ...(Object.keys(sources).length ? { sources } : {}),
     };
   });

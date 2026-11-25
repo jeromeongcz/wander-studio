@@ -66,8 +66,9 @@ function recordOrigins(before: StoryboardContent | null, after: StoryboardConten
     const was = old.get(scene.scene_id);
     if (!was) continue;
     const origin: NonNullable<Scene['origin']> = {};
-    for (const [field, key] of [['camera', 'camera'], ['transition', 'transition_in']] as const) {
-      const from = canonical(scene[key] ?? null) === canonical(was[key] ?? null) ? was.origin?.[field] : by;
+    for (const [field, keys] of [['camera', ['camera']], ['transition', ['transition_in', 'transition_settings']]] as const) {
+      const same = keys.every((k) => canonical(scene[k] ?? null) === canonical(was[k] ?? null));
+      const from = same ? was.origin?.[field] : by;
       if (from) origin[field] = from;
     }
     if (Object.keys(origin).length) scene.origin = origin;

@@ -3,6 +3,8 @@ import { estimate, PRESETS } from './estimator.ts';
 import { MOVEMENTS, validateCamera } from '../render/camera.ts';
 import type { Movement } from '../render/camera.ts';
 import type { Camera } from '../render/motion.ts';
+import { TRANSITIONS, validateTransition } from '../render/transitions.ts';
+import type { Transition, TransitionSpec } from '../render/transitions.ts';
 import type { CalibrationSample } from './estimator.ts';
 import type { ScriptContent, SceneVisual, ScriptCharacter } from './script.ts';
 
@@ -24,8 +26,8 @@ export type AssetType = (typeof ASSET_TYPES)[number];
 
 export { MOVEMENTS };
 export type { Movement };
-export const TRANSITIONS = ['cut', 'fade', 'dissolve', 'slide', 'zoom', 'wipe'] as const;
-export type Transition = (typeof TRANSITIONS)[number];
+export { TRANSITIONS };
+export type { Transition };
 export const ORIGINS = ['ai', 'draft', 'user'] as const;
 export type Origin = (typeof ORIGINS)[number];
 
@@ -41,7 +43,8 @@ export interface Scene {
   asset_type: AssetType;
   camera: Camera;
   transition_in?: Transition;
-  transition_out?: Transition;
+  transition_settings?: Omit<TransitionSpec, 'type'>; // how transition_in plays
+  transition_out?: Transition; // kept for older storyboards; the renderer uses transition_in only
   sfx_cues?: string[];
   notes?: string;
   draft?: boolean; // true for auto-generated skeletons that still need a creative pass
@@ -111,6 +114,10 @@ export function validateStoryboardShape(content: unknown): StoryboardContent {
     validateCamera(camera, `${at}: camera`);
     for (const k of ['transition_in', 'transition_out'] as const) {
       if (s[k] !== undefined && !TRANSITIONS.includes(s[k] as Transition)) throw bad(`${at} has invalid ${k}`);
+    }
+    if (s.transition_settings !== undefined) {
+      if (!isObj(s.transition_settings)) throw bad(`${at} has invalid transition_settings`);
+      validateTransition({ ...s.transition_settings, type: s.transition_in ?? 'cut' }, `${at}: transition`);
     }
     if (s.origin !== undefined && !(isObj(s.origin) && Object.entries(s.origin).every(([k, v]) => ['camera', 'transition'].includes(k) && ORIGINS.includes(v as Origin)))) throw bad(`${at} has invalid origin`);
     if (s.sfx_cues !== undefined && !(Array.isArray(s.sfx_cues) && s.sfx_cues.every((x) => typeof x === 'string'))) throw bad(`${at} sfx_cues must be strings`);

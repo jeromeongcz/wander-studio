@@ -36,10 +36,10 @@ test('only values the renderer can execute are accepted', () => {
   assert.throws(() => validateCameraOverride({ movement: 'static', direction: 'in' }), /no direction/);
   assert.throws(() => validateCameraOverride({ movement: 'pan', warp: 1 }), /does not support: warp/);
   assert.deepEqual(validateTransitionOverride({ type: 'slide', duration: 0.8 }), { type: 'slide', duration: 0.8 });
-  assert.throws(() => validateTransitionOverride({ type: 'glitch' }), /type must be one of/);
+  assert.throws(() => validateTransitionOverride({ type: 'teleport' }), /type must be one of/);
   assert.throws(() => validateTransitionOverride({ type: 'cut', duration: 0.5 }), /no duration/);
   assert.throws(() => validateTransitionOverride({ type: 'fade', duration: 9 }), /duration must be/);
-  assert.throws(() => validateTransitionOverride({ type: 'fade', direction: 'left' }), /does not support: direction/);
+  assert.throws(() => validateTransitionOverride({ type: 'fade', direction: 'left' }), /no direction/);
 });
 
 const input = (extra: Partial<BuildInput> = {}, scene: Partial<BuildInput['scenes'][number]> = {}): BuildInput => ({

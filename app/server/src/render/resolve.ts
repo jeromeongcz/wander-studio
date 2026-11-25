@@ -1,9 +1,11 @@
 // Who wins when several places say how a scene should look. Pure functions: no database, no FFmpeg.
 // Only values the renderer can really execute are accepted here; new kinds are added together with their rendering.
 import { EngineError } from '../engine.ts';
-import { TRANSITIONS } from '../studios/storyboard.ts';
 import { validateCamera } from './camera.ts';
-import type { Scene, Transition } from '../studios/storyboard.ts';
+import { validateTransition } from './transitions.ts';
+import type { TransitionSpec } from './transitions.ts';
+export { MAX_TRANSITION, MIN_TRANSITION } from './transitions.ts';
+import type { Scene } from '../studios/storyboard.ts';
 import type { Camera } from './motion.ts';
 
 /** Strongest first. */
@@ -37,36 +39,18 @@ export function storyboardSource(scene: Pick<Scene, 'origin' | 'draft'>, field: 
   return origin === 'user' ? 'storyboard_user' : origin;
 }
 
-export interface TransitionChoice {
-  type: Transition;
-  duration?: number; // requested seconds; the timeline shortens it when the scenes are too short
-}
+export type TransitionChoice = TransitionSpec;
 export interface DirectionOverride {
   camera?: Camera;
   transition?: TransitionChoice;
 }
 
-export const MIN_TRANSITION = 0.1;
-export const MAX_TRANSITION = 2;
 const bad = (m: string) => new EngineError('VALIDATION', m);
 const isObj = (x: unknown): x is Record<string, unknown> => !!x && typeof x === 'object' && !Array.isArray(x);
-const onlyKeys = (x: Record<string, unknown>, allowed: string[], what: string) => {
-  const extra = Object.keys(x).filter((k) => !allowed.includes(k));
-  if (extra.length) throw bad(`${what} does not support: ${extra.join(', ')}`);
-};
 
 export const validateCameraOverride = (x: unknown): Camera => validateCamera(x);
 
-export function validateTransitionOverride(x: unknown): TransitionChoice {
-  if (!isObj(x) || !(TRANSITIONS as readonly string[]).includes(x.type as string)) throw bad(`transition.type must be one of: ${TRANSITIONS.join(', ')}`);
-  onlyKeys(x, ['type', 'duration'], 'transition');
-  const type = x.type as Transition;
-  const d = x.duration;
-  if (d === undefined) return { type };
-  if (type === 'cut') throw bad('A cut has no duration');
-  if (typeof d !== 'number' || !(d >= MIN_TRANSITION && d <= MAX_TRANSITION)) throw bad(`transition.duration must be ${MIN_TRANSITION} to ${MAX_TRANSITION} seconds`);
-  return { type, duration: d };
-}
+export const validateTransitionOverride = (x: unknown): TransitionChoice => validateTransition(x);
 
 /** Check the camera and transition parts of a stored override, leaving crop and caption position alone. */
 export function checkDirectionOverride(x: unknown): void {
