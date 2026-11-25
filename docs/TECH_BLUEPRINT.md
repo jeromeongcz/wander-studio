@@ -42,7 +42,7 @@ Phases 0-10 are built and tested (`npm test`, includes a real 10-second, 3-forma
 
 Known gaps, stated plainly:
 - The web UI covers every stage (checked by hand in a browser against a seeded demo project, not by automated UI tests). The UI has no accounts: it binds to loopback only and refuses non-localhost Host headers and cross-origin writes.
-- Tagalog TTS needs Edge TTS (online), Piper with your own model, or your own recording. Edge/Piper adapters are tested only against stub programs.
+- Tagalog TTS needs Edge TTS (online), Piper with your own model, or your own recording. The Edge TTS adapter was run for real (English and Filipino voices make audio; pronunciation quality is unjudged); the Piper adapter is tested only against stub programs.
 - Whisper alignment is implemented but unrun: no model file is installed. Default alignment is silence-anchored and always reported as approximate.
 - AI image-to-video and cloud GPU adapters are not bundled; the provider interface and a built-in still-image-motion fallback exist.
 - True parallax layers are approximated (slow zoom plus drift). Stock video clips play as-is.

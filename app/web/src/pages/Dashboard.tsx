@@ -3,6 +3,7 @@ import { api } from '../api';
 import { useAsync, useInterval } from '../hooks';
 import { Btn, Card, Empty, ErrorBox, Field, Loading, Pill, useToast } from '../ui';
 import { LANG_LABEL, formatName, langName } from '../types';
+import { CategoryPicker } from '../stages/shared';
 import type { Project } from '../types';
 
 export function Dashboard() {
@@ -74,7 +75,6 @@ export function Dashboard() {
 
 function NewProject({ onDone, onCancel }: { onDone: (id: string) => void; onCancel: () => void }) {
   const { fail } = useToast();
-  const cats = useAsync(() => api.get<{ name: string }[]>('/categories'), []);
   const locales = useAsync(() => api.get<{ code: string; name: string }[]>('/locales'), []);
   const [name, setName] = useState('');
   const [category, setCategory] = useState('Interesting Facts');
@@ -86,10 +86,7 @@ function NewProject({ onDone, onCancel }: { onDone: (id: string) => void; onCanc
     <Card title="New project" actions={<Btn small kind="ghost" onClick={onCancel}>Cancel</Btn>}>
       <div className="form">
         <Field label="Name"><input autoFocus value={name} onChange={(e) => setName(e.target.value)} placeholder="Why octopuses have three hearts" /></Field>
-        <Field label="Category" hint="Drives the visual recommendations in the storyboard">
-          <input list="cats" value={category} onChange={(e) => setCategory(e.target.value)} />
-          <datalist id="cats">{(cats.data ?? []).map((c) => <option key={c.name} value={c.name} />)}</datalist>
-        </Field>
+        <CategoryPicker value={category} onChange={setCategory} />
         <Field label="Languages" hint="Each language gets its own script, voice, captions, approvals and renders">
           <div className="row gap wrap">
             {(locales.data ?? []).map((l) => <label key={l.code} className="row gap"><input type="checkbox" checked={langs.includes(l.code)} onChange={() => toggle(langs, l.code, setLangs)} />{LANG_LABEL[l.code] ?? l.name}</label>)}

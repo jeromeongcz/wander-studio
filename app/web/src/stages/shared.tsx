@@ -84,10 +84,7 @@ export function ProjectDetailsEditor({ project, onSaved, compact }: { project: {
     <div className="stack">
       <div className="form">
         {!compact && <Field label="Project name"><input value={name} onChange={(e) => setName(e.target.value)} maxLength={120} /></Field>}
-        <Field label="Category" hint={category.trim() ? (known ? 'Uses this category’s visual recommendations' : 'Custom category: general recommendations') : 'No category: general recommendations'}>
-          <input list="proj-cats" value={category} onChange={(e) => setCategory(e.target.value)} maxLength={60} placeholder="Pick one or type your own" />
-          <datalist id="proj-cats">{cats.map((c) => <option key={c.name} value={c.name} />)}</datalist>
-        </Field>
+        <CategoryPicker value={category} onChange={setCategory} />
       </div>
       <div className="row gap">
         <Btn kind="primary" disabled={!dirty || !name.trim()} onClick={async () => { await api.patch(`/projects/${project.id}`, { name: name.trim(), category: category.trim() }); push('ok', 'Project updated'); onSaved(); }}>Save</Btn>
@@ -95,5 +92,31 @@ export function ProjectDetailsEditor({ project, onSaved, compact }: { project: {
         <span className="muted small">Changing the category does not change anything already approved.</span>
       </div>
     </div>
+  );
+}
+
+
+interface CategoryInfo { name: string; group: string }
+
+/** Grouped dropdown of categories, plus "Other" to type your own (custom categories get general recommendations). */
+export function CategoryPicker({ value, onChange, label = 'Category' }: { value: string; onChange: (v: string) => void; label?: string }) {
+  const [cats, setCats] = useState<CategoryInfo[]>([]);
+  const [custom, setCustom] = useState(false);
+  useEffect(() => { api.get<CategoryInfo[]>('/categories').then(setCats).catch(() => {}); }, []);
+  const known = cats.some((c) => c.name.toLowerCase() === value.trim().toLowerCase());
+  const isCustom = custom || (!!value.trim() && cats.length > 0 && !known);
+  const groups = [...new Set(cats.map((c) => c.group))];
+  const hint = !value.trim() ? 'No category: general recommendations' : isCustom ? 'Custom category: general recommendations' : 'Uses this category’s visual recommendations';
+  return (
+    <Field label={label} hint={hint}>
+      <select aria-label={label} value={isCustom ? '__other' : known ? cats.find((c) => c.name.toLowerCase() === value.trim().toLowerCase())!.name : ''} onChange={(e) => {
+        if (e.target.value === '__other') { setCustom(true); onChange(known ? '' : value); } else { setCustom(false); onChange(e.target.value); }
+      }}>
+        <option value="">None (general)</option>
+        {groups.map((g) => <optgroup key={g} label={g}>{cats.filter((c) => c.group === g).map((c) => <option key={c.name} value={c.name}>{c.name}</option>)}</optgroup>)}
+        <option value="__other">Other: type your own…</option>
+      </select>
+      {isCustom && <input aria-label="Custom category" style={{ marginTop: 6 }} autoFocus value={value} onChange={(e) => onChange(e.target.value)} maxLength={60} placeholder="e.g. Cooking for beginners" />}
+    </Field>
   );
 }

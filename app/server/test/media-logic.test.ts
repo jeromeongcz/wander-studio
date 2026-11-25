@@ -13,7 +13,7 @@ import { parseFormat, safeZoneFor } from '../src/render/formats.ts';
 import { coverCrop, motionPlan, sceneClipArgs, sceneClipKey, zoompanFilter } from '../src/render/motion.ts';
 import { computeSceneTimes } from '../src/render/timing.ts';
 import { buildMixGraph, validateMixShape } from '../src/audio/mix.ts';
-import { TtsRegistry } from '../src/audio/tts.ts';
+import { TtsRegistry, parseEdgeVoices, resolveBin } from '../src/audio/tts.ts';
 
 const SCRIPT = [
   { id: 'h', text: 'Did you know octopuses have three hearts?' },
@@ -322,3 +322,40 @@ test('TTS providers: availability, voices and synthesis plumbing through stub bi
 });
 
 import { existsSync as existsSync2 } from 'node:fs';
+
+test('Edge voice list parsing keeps neural voices with gender and locale; unparseable output yields nothing', () => {
+  const table = [
+    'Name                              Gender    ContentCategories      VoicePersonalities',
+    '--------------------------------  --------  ---------------------  --------------------------------------',
+    'en-PH-JamesNeural                 Male      General                Friendly, Positive',
+    'fil-PH-BlessicaNeural             Female    General                Friendly, Positive',
+    'zh-CN-liaoning-XiaobeiNeural      Female    General                Friendly, Positive',
+    'not a voice line',
+  ].join('\n');
+  const v = parseEdgeVoices(table);
+  assert.deepEqual(v.map((x) => x.id), ['en-PH-JamesNeural', 'fil-PH-BlessicaNeural']);
+  assert.deepEqual(v[1], { id: 'fil-PH-BlessicaNeural', name: 'Blessica (female)', locale: 'fil-PH' });
+  assert.deepEqual(parseEdgeVoices('garbage\nmore garbage'), []);
+  // an explicit override always wins; otherwise a bare name is returned when nothing is installed
+  assert.equal(resolveBin('edge-tts', '/custom/edge-tts'), '/custom/edge-tts');
+  assert.match(resolveBin('definitely-not-installed-xyz'), /definitely-not-installed-xyz$/);
+});
+
+test('Edge TTS lists voices from the CLI, caches them, and falls back to known voices when the CLI fails', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'wander-edge-'));
+  const counter = join(dir, 'calls');
+  const list = join(dir, 'edge-ok');
+  writeFileSync(list, `#!/bin/sh\necho x >> "${counter}"\nprintf 'Name  Gender  X  Y\\nfil-PH-AngeloNeural   Male   General   Friendly\\n'\n`);
+  chmodSync(list, 0o755);
+  const ok = new TtsRegistry({ edge: { bin: list } }).get('edge-tts');
+  assert.deepEqual((await ok.voices()).map((v) => v.id), ['fil-PH-AngeloNeural']);
+  await ok.voices();
+  assert.equal(readFileSync(counter, 'utf8').trim().split('\n').length, 1, 'second call served from the 10-minute cache');
+  const broken = join(dir, 'edge-bad');
+  writeFileSync(broken, '#!/bin/sh\nexit 1\n');
+  chmodSync(broken, 0o755);
+  const fallback = await new TtsRegistry({ edge: { bin: broken } }).get('edge-tts').voices();
+  assert.ok(fallback.some((v) => v.id === 'fil-PH-BlessicaNeural'), 'falls back to the known Filipino voices');
+  // a failing synthesis is reported as a provider problem, not a crash
+  await assert.rejects(() => new TtsRegistry({ edge: { bin: broken } }).get('edge-tts').synthesize({ text: 'hi', voice: 'fil-PH-AngeloNeural', outWav: join(dir, 'o.wav') }), (e: any) => e.code === 'PROVIDER_ERROR' && /internet/.test(e.message));
+});

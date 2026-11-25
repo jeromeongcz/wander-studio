@@ -24,4 +24,4 @@ Local-first studio for faceless multilingual videos. Backend: `app/server` (Node
 - New tables go in a new migration in `db.ts` (never edit an old one). New errors use `EngineError(code, message, details)`; map codes to HTTP in `api.ts`.
 - Add tests with the change. Heavy behavior is covered by `test/e2e-acceptance.test.ts`; keep it green.
 - Do not commit `data/`, `projects/`, `cache/`, `exports/`, `node_modules/` (all git-ignored).
-- State what was not verified. Do not claim Tagalog quality, Whisper, Piper or Edge TTS work: they are untested against real engines.
+- State what was not verified. Edge TTS synthesis was verified live (English and Filipino voices produce real audio) but Tagalog pronunciation quality has not been judged by a native speaker; Whisper and Piper are untested against real engines.

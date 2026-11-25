@@ -60,7 +60,15 @@ function LangAudio({ lang }: { lang: string }) {
   const [musicFile, setMusicFile] = useState<{ path: string; name: string } | null>(null);
   const [musicLic, setMusicLic] = useState<any>({ type: 'own', commercial_use: 'yes' });
   useEffect(() => { if (doc.data?.content) { setMix(doc.data.content.mix ?? {}); if (doc.data.content.voice) { setProv(doc.data.content.voice.provider); setVoice(doc.data.content.voice.voice); if (doc.data.content.voice.rate) setRate(doc.data.content.voice.rate); } } }, [doc.data]);
-  useEffect(() => { if (voices.data?.length && !voices.data.some((v) => v.id === voice)) setVoice((voices.data.find((v) => /^en/i.test(v.locale ?? '') && lang === 'en')?.id) ?? voices.data[0].id); }, [voices.data]); // eslint-disable-line
+  useEffect(() => {
+    if (!voices.data?.length || voices.data.some((v) => v.id === voice)) return;
+    const prefer = lang === 'en' ? ['en-PH-RosaNeural'] : ['fil-PH-BlessicaNeural'];
+    setVoice(voices.data.find((v) => prefer.includes(v.id))?.id ?? voices.data.find((v) => lang === 'en' && /^en/i.test(v.locale ?? ''))?.id ?? voices.data[0].id);
+  }, [voices.data]); // eslint-disable-line
+  // Filipino voices exist only in the online provider: suggest it (still visible and changeable) once we know it is installed.
+  useEffect(() => {
+    if (lang !== 'en' && !doc.data?.content?.voice && tts.data?.find((p) => p.id === 'edge-tts')?.status.ok) setProv('edge-tts');
+  }, [tts.data, doc.data]); // eslint-disable-line
   const done = () => { reload(); doc.reload(); clips.reload(); };
   const sections: any[] = (scriptDoc.data?.content?.sections ?? []).filter((s: any) => s.text.trim());
   const content = doc.data?.content;
@@ -71,6 +79,10 @@ function LangAudio({ lang }: { lang: string }) {
   if (!scriptDoc.data?.content) return <><ArtifactBar artifact={art} onChanged={done} /><Empty>Write the {langName(lang)} script first (Localization). Narration is generated from it.</Empty></>;
 
   const synth = async (ids?: string[]) => {
+    if (provInfo?.terms.online && !sessionStorage.getItem('wander-online-tts-ok')) {
+      if (!confirm(`${provInfo.name} is an online service.\n\nThe text of your script is sent to the provider's servers to make the audio. Continue?`)) return;
+      sessionStorage.setItem('wander-online-tts-ok', '1');
+    }
     const call = (reopen: boolean) => api.post(`/artifacts/${art.id}/narration/synthesize`, { voice: { provider: prov, voice, rate }, section_ids: ids, reopen });
     try { await call(false); } catch (e: any) { if (e.code === 'PROTECTED' && confirm('Narration is approved. Regenerate it anyway?\n\nCaptions and renders for this language will need revision.')) await call(true); else throw e; }
     push('ok', 'Narration generated');

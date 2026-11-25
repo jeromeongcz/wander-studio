@@ -1,6 +1,6 @@
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { EngineError } from '../engine.ts';
 import { ffmpegBinary, run } from '../media.ts';
@@ -51,6 +51,13 @@ async function withTmp<T>(fn: (dir: string) => Promise<T>): Promise<T> {
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
+}
+
+/** Tools installed with uv/pipx/Homebrew are often not on the server's PATH, so look in the usual places first. */
+export function resolveBin(name: string, override?: string): string {
+  if (override) return override;
+  for (const dir of [join(homedir(), '.local', 'bin'), '/opt/homebrew/bin', '/usr/local/bin']) if (existsSync(join(dir, name))) return join(dir, name);
+  return name;
 }
 
 const which = async (bin: string) => {
@@ -130,13 +137,24 @@ const EDGE_SUGGESTED: TtsVoice[] = [
   { id: 'en-US-AriaNeural', name: 'Aria (US English, female)', locale: 'en-US' },
 ];
 
+/** Parse `edge-tts --list-voices` (a text table) into voices. Exported for tests. */
+export function parseEdgeVoices(table: string): TtsVoice[] {
+  const out: TtsVoice[] = [];
+  for (const line of table.split('\n')) {
+    const m = line.match(/^(([a-z]{2,3}-[A-Za-z]{2,4})-(\w+?)Neural)\s+(Male|Female)\b/);
+    if (m) out.push({ id: m[1], name: `${m[3]} (${m[4].toLowerCase()})`, locale: m[2] });
+  }
+  return out;
+}
+
 export function edgeTts(cfg: TtsConfig): TtsProvider {
-  const bin = cfg.edge?.bin ?? 'edge-tts';
+  const bin = resolveBin('edge-tts', cfg.edge?.bin);
   const ffmpeg = ffmpegBinary(cfg.ffmpeg);
+  let cache: { at: number; voices: TtsVoice[] } | null = null;
   return {
     id: 'edge-tts',
     name: 'Microsoft Edge TTS (online, via edge-tts CLI)',
-    languages: 'Strong Filipino (fil-PH) and Philippine English (en-PH) voices. Needs internet.',
+    languages: 'Strong Filipino (fil-PH) and Philippine English (en-PH) voices, plus 300+ others. Needs internet.',
     terms: {
       online: true,
       freeTier: 'Free, no key, but an unofficial endpoint that can change or be rate-limited without notice',
@@ -145,9 +163,20 @@ export function edgeTts(cfg: TtsConfig): TtsProvider {
       privacy: 'The text you synthesize is sent to Microsoft servers.',
     },
     async available() {
-      return existsSync(bin) || (await which(bin)) ? { ok: true, detail: 'edge-tts CLI found (network still required)' } : { ok: false, detail: 'edge-tts CLI not installed (pip/uv tool install edge-tts)' };
+      return existsSync(bin) || (await which(bin)) ? { ok: true, detail: `edge-tts CLI found (${bin}); network still required` } : { ok: false, detail: 'edge-tts CLI not installed (uv tool install edge-tts)' };
     },
     async voices() {
+      if (cache && Date.now() - cache.at < 10 * 60_000) return cache.voices;
+      try {
+        // Only fetches Microsoft's public voice catalogue; none of your text is sent.
+        const v = parseEdgeVoices((await run(bin, ['--list-voices'], { timeout: 30_000 })).stdout);
+        if (v.length) {
+          cache = { at: Date.now(), voices: v };
+          return v;
+        }
+      } catch {
+        /* offline or not installed: fall back to the voices we know exist */
+      }
       return EDGE_SUGGESTED;
     },
     async synthesize({ text, voice, rate, outWav }) {
@@ -156,8 +185,12 @@ export function edgeTts(cfg: TtsConfig): TtsProvider {
         const textFile = join(dir, 'in.txt');
         const mp3 = join(dir, 'out.mp3');
         await writeFile(textFile, text, 'utf8');
-        const pct = rate ? Math.round((rate / 175 - 1) * 100) : 0; // rate given as words/min, 175 ~ neutral
-        await run(bin, ['--voice', voice, `--rate=${pct >= 0 ? '+' : ''}${pct}%`, '--file', textFile, '--write-media', mp3], { timeout: 180_000 });
+        const pct = rate ? Math.max(-50, Math.min(100, Math.round((rate / 175 - 1) * 100))) : 0; // rate given as words/min, 175 ~ neutral
+        try {
+          await run(bin, ['--voice', voice, `--rate=${pct >= 0 ? '+' : ''}${pct}%`, '--file', textFile, '--write-media', mp3, '--no-progress'], { timeout: 180_000 });
+        } catch (e) {
+          throw new EngineError('PROVIDER_ERROR', `Edge TTS could not produce audio (check your internet connection): ${(e as Error).message}`);
+        }
         await toWav(ffmpeg, mp3, outWav);
       });
     },

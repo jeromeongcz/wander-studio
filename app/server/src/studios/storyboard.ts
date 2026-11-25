@@ -92,14 +92,50 @@ const CATEGORIES: Record<string, CategoryProfile> = {
   'News & Current Events': { assets: ['stock_photo', 'map', 'infographic', 'text_overlay'], styles: ['neutral, factual'], cameras: ['static', 'ken_burns', 'zoom'], transition: 'cut', hint: 'Neutral documentary image of', notes: 'Attribute sources and keep opinion separate from fact.' },
   'Comedy & Skits': { assets: ['character', 'illustration', 'text_overlay', 'background'], styles: ['bright, exaggerated, expressive characters'], cameras: ['zoom', 'static', 'pan'], transition: 'cut', hint: 'Exaggerated cartoon scene of', notes: 'Keep character sheets so characters stay consistent.' },
   'Philippine History': { assets: ['stock_photo', 'map', 'illustration', 'text_overlay'], styles: ['archival sepia', 'period illustration'], cameras: ['ken_burns', 'pan', 'zoom'], transition: 'dissolve', hint: 'Archival photo, historical map or period illustration of', notes: 'Label reconstructions as such; check licences on archival images.' },
+  'Ghost Stories & Paranormal': { assets: ['ai_image', 'illustration', 'background', 'text_overlay'], styles: ['moonlit and foggy', 'single lantern or window light'], cameras: ['zoom', 'ken_burns', 'pan'], transition: 'cut', hint: 'Atmospheric night scene with a pale figure in' },
+  'Oceans & Marine Life': { assets: ['stock_video', 'stock_photo', 'illustration', 'infographic'], styles: ['deep blue light rays', 'macro marine detail'], cameras: ['ken_burns', 'pan', 'parallax'], transition: 'dissolve', hint: 'Underwater footage or illustration of' },
+  'Dinosaurs & Prehistory': { assets: ['illustration', 'ai_image', 'infographic', 'background'], styles: ['painterly prehistoric landscapes', 'museum-style diagrams'], cameras: ['ken_burns', 'zoom', 'pan'], transition: 'dissolve', hint: 'Prehistoric scene or fossil diagram of', notes: 'Mark reconstructions as artistic interpretations.' },
+  'Weather & Disasters': { assets: ['stock_video', 'infographic', 'map', 'stock_photo'], styles: ['stormy, high contrast', 'clean weather maps'], cameras: ['pan', 'zoom', 'static'], transition: 'cut', hint: 'Dramatic weather footage or map of', notes: 'Use verified sources for casualty and safety information.' },
+  'Parenting & Family': { assets: ['illustration', 'stock_photo', 'icon', 'text_overlay'], styles: ['warm, soft, friendly'], cameras: ['zoom', 'static', 'ken_burns'], transition: 'dissolve', hint: 'Warm family scene showing', notes: 'Avoid medical claims without sources and do not show identifiable children.' },
+  'Fashion & Beauty': { assets: ['stock_photo', 'stock_video', 'illustration', 'text_overlay'], styles: ['clean studio light', 'bold colour blocking'], cameras: ['zoom', 'pan', 'parallax'], transition: 'slide', hint: 'Stylish close-up of' },
+  'Home & DIY': { assets: ['stock_video', 'infographic', 'icon', 'stock_photo'], styles: ['bright, practical, step-by-step'], cameras: ['static', 'zoom', 'pan'], transition: 'cut', hint: 'Clear workshop or home shot of', notes: 'Include safety warnings for tools and electrical work.' },
+  'Relationships & Dating': { assets: ['illustration', 'stock_photo', 'text_overlay', 'background'], styles: ['soft, emotive, warm tones'], cameras: ['zoom', 'ken_burns', 'static'], transition: 'dissolve', hint: 'Emotive illustration of' },
+  'Productivity & Self-Improvement': { assets: ['infographic', 'icon', 'motion_graphic', 'text_overlay'], styles: ['clean, minimal, bold type'], cameras: ['static', 'zoom', 'pan'], transition: 'cut', hint: 'Minimal graphic showing' },
+  'Cars & Vehicles': { assets: ['stock_video', 'stock_photo', 'infographic', 'motion_graphic'], styles: ['glossy, high contrast', 'cutaway diagrams'], cameras: ['pan', 'zoom', 'parallax'], transition: 'cut', hint: 'Dynamic shot of' },
+  'Celebrity & Pop Culture': { assets: ['text_overlay', 'illustration', 'motion_graphic', 'stock_photo'], styles: ['bold, glossy, magazine feel'], cameras: ['zoom', 'static', 'pan'], transition: 'cut', hint: 'Stylised magazine-style graphic of', notes: 'Do not use copyrighted photos of real people without a licence; avoid unverified claims about real individuals.' },
+  'Anime & Comics': { assets: ['illustration', 'character', 'background', 'text_overlay'], styles: ['anime cel shading', 'speed lines and panels'], cameras: ['parallax', 'zoom', 'pan'], transition: 'cut', hint: 'Anime-style illustration of', notes: 'Create original characters; do not reproduce existing franchises.' },
+  'Reviews & Unboxings': { assets: ['stock_photo', 'stock_video', 'icon', 'text_overlay'], styles: ['clean product lighting'], cameras: ['zoom', 'pan', 'static'], transition: 'cut', hint: 'Clean product shot of', notes: 'Disclose sponsorships and only show products you may legally depict.' },
+  'Entrepreneurship & Side Hustles': { assets: ['infographic', 'motion_graphic', 'stock_photo', 'icon'], styles: ['clean, optimistic, bold numbers'], cameras: ['zoom', 'static', 'pan'], transition: 'slide', hint: 'Clean business graphic of', notes: 'Avoid income guarantees and cite figures.' },
+  'Social Media & Marketing Tips': { assets: ['motion_graphic', 'infographic', 'text_overlay', 'icon'], styles: ['punchy kinetic type', 'bright accents'], cameras: ['zoom', 'parallax', 'static'], transition: 'cut', hint: 'Kinetic graphic showing' },
+  'Real Estate': { assets: ['stock_photo', 'stock_video', 'map', 'infographic'], styles: ['bright, wide-angle interiors'], cameras: ['pan', 'zoom', 'ken_burns'], transition: 'dissolve', hint: 'Bright property shot or map of' },
+  'Careers & Jobs': { assets: ['illustration', 'infographic', 'stock_photo', 'text_overlay'], styles: ['clean, professional, friendly'], cameras: ['static', 'zoom', 'pan'], transition: 'cut', hint: 'Professional scene or graphic of' },
+  'Language Learning': { assets: ['text_overlay', 'illustration', 'icon', 'infographic'], styles: ['big readable words', 'friendly flashcards'], cameras: ['static', 'zoom', 'pan'], transition: 'cut', hint: 'Flashcard-style graphic of', notes: 'Show the word, its meaning and an example sentence; have a native speaker check non-English text.' },
+  'Kids & Bedtime Stories': { assets: ['illustration', 'character', 'background', 'prop'], styles: ['soft pastel storybook', 'rounded friendly characters'], cameras: ['ken_burns', 'parallax', 'pan'], transition: 'dissolve', hint: 'Soft storybook illustration of', notes: 'Keep content age-appropriate and keep characters consistent.' },
+  'Quotes & Poetry': { assets: ['background', 'text_overlay', 'ai_image', 'illustration'], styles: ['atmospheric backgrounds', 'elegant typography'], cameras: ['ken_burns', 'zoom', 'static'], transition: 'fade', hint: 'Atmospheric background for' },
+  'Religion & Spirituality': { assets: ['illustration', 'stock_photo', 'background', 'text_overlay'], styles: ['calm, respectful, soft light'], cameras: ['ken_burns', 'static', 'zoom'], transition: 'fade', hint: 'Calm, respectful image of', notes: 'Be respectful and accurate; present beliefs as beliefs.' },
+  'Conspiracies & Debunking': { assets: ['infographic', 'text_overlay', 'stock_photo', 'map'], styles: ['evidence-board graphics', 'clear true/false labels'], cameras: ['zoom', 'static', 'pan'], transition: 'cut', hint: 'Evidence-style graphic of', notes: 'Label speculation clearly and show the evidence for and against.' },
 };
 const FALLBACK: CategoryProfile = { assets: ['stock_photo', 'ai_image', 'illustration', 'text_overlay'], styles: ['clean and readable'], cameras: ['ken_burns', 'zoom', 'pan'], transition: 'cut', hint: 'Relevant visual of' };
+
+/** Groups for the new-project picker. A category not listed here shows under "More". */
+const GROUPS: Record<string, string[]> = {
+  'Stories & spooky': ['Horror & Folklore', 'Ghost Stories & Paranormal', 'Urban Legends', 'Filipino Folklore', 'Mythology', 'Mysteries', 'True Crime', 'Fictional Storytelling', 'Kids & Bedtime Stories', 'Biographies'],
+  'Knowledge & learning': ['Interesting Facts', 'Science', 'Technology', 'Education', 'History', 'Philippine History', 'Space & Astronomy', 'Dinosaurs & Prehistory', 'Psychology', 'Philosophy', 'Documentary', 'Language Learning', 'Conspiracies & Debunking', 'Health & Wellness'],
+  'Nature & travel': ['Nature', 'Animals & Pets', 'Oceans & Marine Life', 'Weather & Disasters', 'Travel', 'Adventure'],
+  'Lifestyle': ['Motivational Stories', 'Productivity & Self-Improvement', 'Relationships & Dating', 'Parenting & Family', 'Food & Cooking', 'Fashion & Beauty', 'Home & DIY', 'How-To & Life Hacks', 'Religion & Spirituality', 'Quotes & Poetry'],
+  'Entertainment & culture': ['Gaming', 'Movies & TV', 'Anime & Comics', 'Music & Arts', 'Comedy & Skits', 'Celebrity & Pop Culture', 'Sports', 'Cars & Vehicles', 'Reviews & Unboxings'],
+  'Business & news': ['Finance & Business', 'Entrepreneurship & Side Hustles', 'Social Media & Marketing Tips', 'Real Estate', 'Careers & Jobs', 'News & Current Events'],
+};
+const GROUP_OF = new Map(Object.entries(GROUPS).flatMap(([g, names]) => names.map((n) => [n.toLowerCase(), g] as const)));
+export const groupOf = (name: string) => GROUP_OF.get(name.toLowerCase()) ?? 'More';
 
 const norm = (s: string) => s.trim().toLowerCase().replace(/[\s_-]+/g, ' ');
 const INDEX = new Map(Object.entries(CATEGORIES).map(([k, v]) => [norm(k), { name: k, profile: v }]));
 
-export function listCategories(): { name: string; profile: CategoryProfile }[] {
-  return [...INDEX.values()];
+export function listCategories(): { name: string; group: string; profile: CategoryProfile }[] {
+  // Follow the order of GROUPS (stories first), then the order of names inside each group.
+  const order = new Map(Object.values(GROUPS).flatMap((names, gi) => names.map((n, i) => [n.toLowerCase(), gi * 1000 + i] as const)));
+  return [...INDEX.values()].map((c) => ({ ...c, group: groupOf(c.name) })).sort((a, b) => (order.get(a.name.toLowerCase()) ?? 99999) - (order.get(b.name.toLowerCase()) ?? 99999));
 }
 
 export function profileFor(category?: string | null): { name: string; custom: boolean; profile: CategoryProfile } {

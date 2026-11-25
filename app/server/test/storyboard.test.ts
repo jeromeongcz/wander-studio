@@ -62,6 +62,11 @@ test('categories: all plan categories present, recommendations differ, unknown f
     assert.ok(c.profile.styles.length >= 1 && c.profile.hint.length > 5, `${c.name} text`);
   }
   assert.equal(new Set(names.map((n) => n.toLowerCase())).size, names.length, 'no duplicate names');
+  assert.ok(names.length >= 50, `${names.length} categories`);
+  // every category sits in a named group (none falls into the catch-all), and group names are stable
+  for (const c of listCategories()) assert.notEqual(c.group, 'More', `${c.name} has no group`);
+  assert.deepEqual([...new Set(listCategories().map((c) => c.group))].sort(), ['Business & news', 'Entertainment & culture', 'Knowledge & learning', 'Lifestyle', 'Nature & travel', 'Stories & spooky']);
+  for (const n of ['Ghost Stories & Paranormal', 'Language Learning', 'Kids & Bedtime Stories', 'Conspiracies & Debunking', 'Anime & Comics']) assert.ok(names.includes(n), n);
   assert.ok(profileFor('history').profile.assets.includes('map'));
   assert.ok(profileFor('Science').profile.assets.includes('infographic'));
   assert.ok(profileFor('Fictional_Storytelling').profile.assets.includes('character'));
