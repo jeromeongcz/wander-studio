@@ -24,6 +24,8 @@ async function request<T>(method: string, path: string, body?: unknown, init: Re
   } catch {
     /* not JSON */
   }
+  // the page is newer than the running server: say what to do instead of a bare 404
+  if (res.status === 404 && typeof json?.message === 'string' && json.message.startsWith('Route ')) throw new ApiError(404, 'OUTDATED_SERVER', 'The server is out of date. Stop it (Ctrl+C in its terminal), run npm start again, then refresh this page.');
   if (!res.ok) throw new ApiError(res.status, json?.error?.code ?? 'ERROR', json?.error?.message ?? `HTTP ${res.status}`, json?.error?.details);
   return json as T;
 }
