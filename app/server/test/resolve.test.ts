@@ -31,10 +31,10 @@ test('storyboard origin: untouched drafts are drafts; anything else is the perso
 
 test('only values the renderer can execute are accepted', () => {
   assert.deepEqual(validateCameraOverride({ movement: 'zoom', direction: 'out' }), { movement: 'zoom', direction: 'out' });
-  assert.throws(() => validateCameraOverride({ movement: 'dolly_in' }), /movement must be one of/);
+  assert.throws(() => validateCameraOverride({ movement: 'teleport' }), /movement must be one of/);
   assert.throws(() => validateCameraOverride({ movement: 'zoom', direction: 'up' }), /direction/);
   assert.throws(() => validateCameraOverride({ movement: 'static', direction: 'in' }), /no direction/);
-  assert.throws(() => validateCameraOverride({ movement: 'pan', easing: 'linear' }), /does not support: easing/);
+  assert.throws(() => validateCameraOverride({ movement: 'pan', warp: 1 }), /does not support: warp/);
   assert.deepEqual(validateTransitionOverride({ type: 'slide', duration: 0.8 }), { type: 'slide', duration: 0.8 });
   assert.throws(() => validateTransitionOverride({ type: 'glitch' }), /type must be one of/);
   assert.throws(() => validateTransitionOverride({ type: 'cut', duration: 0.5 }), /no duration/);

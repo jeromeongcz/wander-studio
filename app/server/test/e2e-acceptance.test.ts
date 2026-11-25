@@ -430,7 +430,7 @@ test('10-second multi-format captioned video: research -> script -> storyboard -
   await approve(one('final_render', 'en', 'vertical_9x16').id, 'final render before the override');
   assert.equal((await call('PUT', sceneUrl(1), change)).status, 409, 'an approved composition is not changed without reopening it');
   assert.equal((await call('PUT', sceneUrl(0), { transition: { type: 'fade' }, reopen: true })).status, 422, 'the first scene has no incoming transition');
-  assert.equal((await call('PUT', sceneUrl(1), { camera: { movement: 'orbit' }, reopen: true })).status, 422, 'a camera the renderer cannot do is refused');
+  assert.equal((await call('PUT', sceneUrl(1), { camera: { movement: 'teleport' }, reopen: true })).status, 422, 'a camera the renderer cannot do is refused');
   await ok(call('PUT', sceneUrl(1), { ...change, caption_y_pct: 0.4, reopen: true }), 'scene override');
   const after = (await call('GET', `/artifacts/${ocomp.id}`)).json.content;
   assert.deepEqual(after.scenes[1].camera, change.camera);

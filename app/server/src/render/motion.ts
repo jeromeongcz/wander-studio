@@ -1,5 +1,7 @@
 import { createHash } from 'node:crypto';
 import { LOOK_FILTERS, SHOT_SECONDS, glitchFilters } from './effects.ts';
+import { cinematicFilters, isClassicCamera, strength } from './camera.ts';
+import type { Easing, Intensity, Movement } from './camera.ts';
 
 export interface Rect {
   x: number;
@@ -8,9 +10,23 @@ export interface Rect {
   h: number;
 }
 export interface Camera {
-  movement: 'static' | 'pan' | 'zoom' | 'ken_burns' | 'parallax';
+  movement: Movement;
   direction?: string;
-  intensity?: 'subtle' | 'medium' | 'strong';
+  intensity?: Intensity;
+  // everything below belongs to the cinematic camera (camera.ts)
+  easing?: Easing;
+  amount?: number;
+  curve?: number;
+  start_zoom?: number;
+  end_zoom?: number;
+  start?: { x: number; y: number };
+  end?: { x: number; y: number };
+  focal?: { x: number; y: number };
+  move_seconds?: number;
+  rotation?: number;
+  shake?: number;
+  smoothness?: number;
+  motion_blur?: number;
 }
 
 const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v));
@@ -46,11 +62,9 @@ export interface MotionPlan {
   cy1: number;
 }
 
-const K = { subtle: 0.6, medium: 1, strong: 1.6 } as const;
-
 /** Camera movement as zoom and centre keyframes (centre is relative to the cropped window). */
 export function motionPlan(cam: Camera, focalRel: { x: number; y: number }): MotionPlan {
-  const k = K[cam.intensity ?? 'subtle'];
+  const k = strength(cam);
   const amt = 0.1 * k;
   const still: MotionPlan = { z0: 1, z1: 1, cx0: 0.5, cy0: 0.5, cx1: 0.5, cy1: 0.5 };
   const rev = (p: MotionPlan): MotionPlan => ({ z0: p.z1, z1: p.z0, cx0: p.cx1, cy0: p.cy1, cx1: p.cx0, cy1: p.cy0 });
@@ -78,6 +92,8 @@ export function motionPlan(cam: Camera, focalRel: { x: number; y: number }): Mot
       const pm = 0.45 * ((1 - 1 / z) / 2);
       return { z0: 1, z1: z, cx0: 0.5 - pm, cy0: 0.5, cx1: 0.5 + pm, cy1: 0.5 };
     }
+    default:
+      throw new Error(`"${cam.movement}" is not one of the classic camera movements`);
   }
 }
 
@@ -147,12 +163,15 @@ export function sceneClipArgs(s: SceneClipSpec, out: string): string[] {
     return ['-stream_loop', '-1', '-i', s.asset.path, '-t', s.duration.toFixed(3), '-vf', `${cropF},scale=${s.width}:${s.height}:flags=lanczos,fps=${s.fps},setsar=1,format=yuv420p`, ...enc];
   }
   const focalRel = { x: clamp((s.focal.x * s.asset.width - crop.x) / crop.w, 0, 1), y: clamp((s.focal.y * s.asset.height - crop.y) / crop.h, 0, 1) };
-  const plan = motionPlan(s.camera, focalRel);
+  const classic = isClassicCamera(s.camera);
   const over = 2; // oversample before zoompan to avoid integer-pixel jitter
   const size = { w: s.width, h: s.height };
   const shots = s.effects && !s.hold ? Math.max(1, Math.ceil(s.duration / SHOT_SECONDS - 0.25)) : 1;
-  const camera = shots > 1 ? shotsFilter(plan, shots, frames, size, s.fps, focalRel) : zoompanFilter(plan, frames, size, s.fps);
+  // a style that cuts between framings starts from a classic move; otherwise the camera plays as chosen
+  const camera = shots > 1
+    ? [shotsFilter(motionPlan(classic ? s.camera : { movement: 'static' }, focalRel), shots, frames, size, s.fps, focalRel)]
+    : classic ? [zoompanFilter(motionPlan(s.camera, focalRel), frames, size, s.fps)] : cinematicFilters(s.camera, frames, size, s.fps, focalRel, motionPlan);
   const look = s.effects ? [...LOOK_FILTERS, ...(s.glitch ? glitchFilters(frames / s.fps) : [])] : [];
-  const chain = [cropF, `scale=${s.width * over}:${s.height * over}:flags=lanczos`, camera, 'setsar=1', ...look, 'format=yuv420p'];
+  const chain = [cropF, `scale=${s.width * over}:${s.height * over}:flags=lanczos`, ...camera, 'setsar=1', ...look, 'format=yuv420p'];
   return ['-i', s.asset.path, '-vf', chain.join(','), '-frames:v', String(frames), ...enc];
 }

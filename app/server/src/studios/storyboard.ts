@@ -1,5 +1,8 @@
 import { EngineError } from '../engine.ts';
 import { estimate, PRESETS } from './estimator.ts';
+import { MOVEMENTS, validateCamera } from '../render/camera.ts';
+import type { Movement } from '../render/camera.ts';
+import type { Camera } from '../render/motion.ts';
 import type { CalibrationSample } from './estimator.ts';
 import type { ScriptContent, SceneVisual, ScriptCharacter } from './script.ts';
 
@@ -19,11 +22,10 @@ export const ASSET_TYPES = [
 ] as const;
 export type AssetType = (typeof ASSET_TYPES)[number];
 
-export const MOVEMENTS = ['static', 'pan', 'zoom', 'ken_burns', 'parallax'] as const;
-export type Movement = (typeof MOVEMENTS)[number];
+export { MOVEMENTS };
+export type { Movement };
 export const TRANSITIONS = ['cut', 'fade', 'dissolve', 'slide', 'zoom', 'wipe'] as const;
 export type Transition = (typeof TRANSITIONS)[number];
-export const INTENSITIES = ['subtle', 'medium', 'strong'] as const;
 export const ORIGINS = ['ai', 'draft', 'user'] as const;
 export type Origin = (typeof ORIGINS)[number];
 
@@ -37,7 +39,7 @@ export interface Scene {
   visual_description: string;
   visual_style?: string;
   asset_type: AssetType;
-  camera: { movement: Movement; direction?: string; intensity?: (typeof INTENSITIES)[number] };
+  camera: Camera;
   transition_in?: Transition;
   transition_out?: Transition;
   sfx_cues?: string[];
@@ -104,7 +106,9 @@ export function validateStoryboardShape(content: unknown): StoryboardContent {
     if (typeof s.visual_description !== 'string') throw bad(`${at} needs visual_description`);
     if (!ASSET_TYPES.includes(s.asset_type as AssetType)) throw bad(`${at} has invalid asset_type`);
     if (!isObj(s.camera) || !MOVEMENTS.includes(s.camera.movement as Movement)) throw bad(`${at} has invalid camera.movement`);
-    if (s.camera.intensity !== undefined && !INTENSITIES.includes(s.camera.intensity as never)) throw bad(`${at} has invalid camera.intensity`);
+    // direction is checked loosely here so storyboards saved before stricter checks keep loading
+    const { direction: _d, ...camera } = s.camera as Record<string, unknown>;
+    validateCamera(camera, `${at}: camera`);
     for (const k of ['transition_in', 'transition_out'] as const) {
       if (s[k] !== undefined && !TRANSITIONS.includes(s[k] as Transition)) throw bad(`${at} has invalid ${k}`);
     }
