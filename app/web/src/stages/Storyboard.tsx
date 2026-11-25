@@ -84,7 +84,30 @@ export function StoryboardStage() {
     return <Btn small kind={has ? 'default' : 'primary'} disabled={!ready || !!drawing} onClick={() => generate([i])}><Icon name={has ? 'refresh' : 'spark'} small /> {has ? 'Regenerate' : 'Generate'}</Btn>;
   };
 
-  const picture = (i: number) => <div className="frame-col">{frame(i)}{drawButton(i)}{sketches.data?.[i]?.asset_id && <a className="btn btn-sm" href={`#/p/${project.id}/visuals`}>Approve in Visuals <Icon name="arrow" small /></a>}</div>;
+  /** The person's approval of one scene's picture: the picture itself, then the scene it belongs to. */
+  const approveScene = async (i: number) => {
+    const row = sketches.data?.[i];
+    if (!row?.asset_id || !row.artifact_id) return;
+    if (art.state !== 'approved') { push('warn', 'Approve the storyboard first (the card at the top), then approve each picture.'); window.scrollTo({ top: 0, behavior: 'smooth' }); return; }
+    await api.post(`/assets/${row.asset_id}/approve`);
+    if (row.state !== 'awaiting_review') await api.post(`/artifacts/${row.artifact_id}/submit`);
+    await api.post(`/artifacts/${row.artifact_id}/approve`);
+    push('ok', `Scene ${i + 1} approved`);
+    sketches.reload();
+    done();
+  };
+  const picture = (i: number) => {
+    const row = sketches.data?.[i];
+    return (
+      <div className="frame-col">
+        {frame(i)}
+        {drawButton(i)}
+        {row?.asset_id && (row.state === 'approved'
+          ? <span className="approved-mark"><Icon name="check" small /> Approved</span>
+          : <Btn small kind="primary" disabled={!!drawing} onClick={() => approveScene(i)}><Icon name="check" small /> Approve</Btn>)}
+      </div>
+    );
+  };
 
   return (
     <>
@@ -104,7 +127,7 @@ export function StoryboardStage() {
       <section className="board-head">
         <div className="grow">
           <h3>{total} scene{total === 1 ? '' : 's'}</h3>
-          <p className="muted small">{have} of {total} have a picture{c ? ` · about ${fmtSec(c.scenes.reduce((n: number, s: any) => n + s.target_duration, 0))}` : ''}. Pictures are sketches drawn by Claude; approve each one under Visuals.</p>
+          <p className="muted small">{have} of {total} have a picture{c ? ` · about ${fmtSec(c.scenes.reduce((n: number, s: any) => n + s.target_duration, 0))}` : ''}. Pictures are sketches drawn by Claude; approve the storyboard, then each picture.</p>
           <div className="bar-prog"><i style={{ width: `${total ? (have / total) * 100 : 0}%` }} /></div>
         </div>
         <div className="seg" role="group" aria-label="Scene layout">
