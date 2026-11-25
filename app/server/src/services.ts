@@ -36,6 +36,7 @@ import { TemplateService } from './templates.ts';
 import { JobRunner } from './jobs.ts';
 import { ResearchService } from './research/service.ts';
 import { ScriptWriter } from './research/scriptwriter.ts';
+import { SketchArtist } from './research/sketch.ts';
 import type { JobHandler } from './jobs.ts';
 import { requireHealthy, runPreflight } from './preflight.ts';
 import { scriptEstimate } from './studios/script.ts';
@@ -61,6 +62,7 @@ export class Studio {
   jobs: JobRunner;
   research: ResearchService;
   writer: ScriptWriter;
+  sketches: SketchArtist;
   constructor(engine: Engine, config: Partial<AppConfig> = {}) {
     this.engine = engine;
     this.config = resolveConfig(config);
@@ -74,6 +76,7 @@ export class Studio {
     this.jobs = new JobRunner(engine, this.jobHandlers());
     this.research = new ResearchService(this);
     this.writer = new ScriptWriter(this);
+    this.sketches = new SketchArtist(this);
   }
 
   estimateScript(sc: ScriptContent): number {
@@ -125,6 +128,7 @@ export class Studio {
         return { items, note: comps.length ? undefined : 'No approved compositions to render' };
       },
       research_topics: async (ctx) => this.research.run(ctx.params.batchId, ctx),
+      sketch_scenes: async (ctx) => this.sketches.run(ctx),
       align_captions: async (ctx) => {
         guard(ctx);
         return this.alignCaptions(ctx.params.captionId, { method: ctx.params.method, reopen: ctx.params.reopen === true });

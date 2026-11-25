@@ -59,7 +59,7 @@ function LiveFooter({ projectId, scriptId, reload, children }: { projectId: stri
   const wasActive = useRef(0);
   useEffect(() => { if (wasActive.current > active.length) reload(); wasActive.current = active.length; }, [active.length, reload]);
   if (writing) return <ProgressFooter label={writing.label} detail={writing.detail} startedAt={writing.startedAt} />;
-  if (job) return <ProgressFooter label={`${job.kind.replace(/_/g, ' ')}${job.state === 'queued' ? ' (waiting)' : ''}${active.length > 1 ? ` · ${active.length - 1} more` : ''}`} detail={job.message ?? undefined} progress={job.progress} onCancel={async () => { await api.post(`/jobs/${job.id}/cancel`); jobs.reload(); }} />;
+  if (job) return <ProgressFooter label={`${job.kind === 'sketch_scenes' ? 'Drawing storyboard pictures' : job.kind.replace(/_/g, ' ')}${job.state === 'queued' ? ' (waiting)' : ''}${active.length > 1 ? ` · ${active.length - 1} more` : ''}`} detail={job.message ?? undefined} progress={job.progress} onCancel={async () => { await api.post(`/jobs/${job.id}/cancel`); jobs.reload(); }} />;
   return <>{children}</>;
 }
 

@@ -9,6 +9,7 @@ import { buildApi } from '../src/api.ts';
 import { buildResearchPrompt, parseModelJson, validateTopics } from '../src/research/topics.ts';
 import { checkLinks } from '../src/research/links.ts';
 import { researchFromTopic } from '../src/research/service.ts';
+import { checkSvg } from '../src/research/sketch.ts';
 
 // ---- a stand-in for the `claude` command ----
 function stubDir() {
@@ -636,4 +637,67 @@ test('video dimensions can be added and removed without touching existing work',
   const comp = t.engine.list(t.pid, { kind: 'composition' }).find((a) => a.format === 'square_1x1')!;
   t.engine.saveVersion(comp.id, { some: 'work' }, { actor: 'user' });
   assert.equal((await t.call('DELETE', `/projects/${t.pid}/formats/square_1x1`)).status, 409, 'saved work is never deleted');
+});
+
+// ---------------- storyboard sketches ----------------
+const drawing = (color = '#fa0') => `Here it is:\n<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1080 1920"><defs><linearGradient id="g"><stop offset="0" stop-color="#012"/><stop offset="1" stop-color="${color}"/></linearGradient></defs><rect width="1080" height="1920" fill="url(#g)"/><circle cx="540" cy="900" r="200" fill="${color}"/></svg>`;
+
+test('model drawings are checked: anything that could run code or reach outside is refused', () => {
+  const size = { w: 1080, h: 1920 };
+  const ok = checkSvg(drawing(), size);
+  assert.match(ok, /^<svg xmlns="http:\/\/www.w3.org\/2000\/svg" width="1080" height="1920"/);
+  assert.match(ok, /url\(#g\)/);
+  const wrap = (inner: string, attrs = '') => `<svg ${attrs}>${inner}</svg>`;
+  for (const evil of [
+    wrap('<script>alert(1)</script>'),
+    wrap('<rect onload="alert(1)"/>'),
+    wrap('<rect/>', 'onload=alert(1)'),
+    wrap('<image href="https://example.org/x.png"/>'),
+    wrap('<use href="https://example.org/x.svg#a"/>'),
+    wrap('<use xlink:href="file:///etc/passwd"/>'),
+    wrap('<rect fill="url(https://example.org/x)"/>'),
+    wrap('<rect style="fill:url( \'//example.org/x\' )"/>'),
+    wrap('<foreignObject><div/></foreignObject>'),
+    wrap('<style>@import url(x.css);</style>'),
+    wrap('<a href="#x"><rect/></a>'),
+    '<!DOCTYPE svg [<!ENTITY x SYSTEM "file:///etc/passwd">]>' + wrap('<![CDATA[x]]>'),
+    wrap('<rect fill="&xxe;"/>'),
+    'no drawing here',
+    '<svg><rect/>',
+  ]) assert.throws(() => checkSvg(evil, size), Error, evil);
+});
+
+test('sketches: build the storyboard from the approved script, draw one or all scenes as a job, and leave approval to the person', async () => {
+  const t = await approvedResearch();
+  await approveResearch(t);
+  await t.call('POST', `/artifacts/${t.script.id}/script/import`, { text: scriptAnswer(), seconds: 30 });
+  const storyboard = t.engine.list(t.pid, { kind: 'storyboard' })[0];
+  assert.equal((await t.call('POST', `/artifacts/${storyboard.id}/sketches`, {})).status, 409, 'the script must be approved first');
+  await t.call('POST', `/artifacts/${t.script.id}/submit`);
+  await t.call('POST', `/artifacts/${t.script.id}/approve`);
+
+  t.stub.answer(1, drawing('#f00'));
+  const one = await t.call('POST', `/artifacts/${storyboard.id}/sketches`, { indexes: [1] });
+  assert.equal(one.status, 202, JSON.stringify(one.json));
+  assert.equal((await t.waitJob(one.json.job.id)).state, 'succeeded');
+  let rows = (await t.call('GET', `/artifacts/${storyboard.id}/sketches`)).json;
+  assert.deepEqual(rows.map((r: any) => !!r.asset_id), [false, true, false]);
+  assert.equal(rows[1].state, 'in_progress', 'never approved automatically');
+  const asset = (await t.call('GET', `/assets/${rows[1].asset_id}`)).json;
+  assert.deepEqual([asset.width, asset.height, asset.approval_status, asset.provider, asset.license.type], [1080, 1920, 'pending', 'claude-sketch', 'ai-generated']);
+  assert.match(t.stub.read('prompt_1'), /Character looks: Lolo Andres/);
+  assert.doesNotMatch(t.stub.read('args_1'), /WebSearch/);
+
+  // "all" draws only the scenes without a picture; one bad answer does not lose the good one
+  t.stub.answer(2, drawing('#0f0'));
+  t.stub.answer(3, '<svg><script>1</script></svg>');
+  const all = await t.call('POST', `/artifacts/${storyboard.id}/sketches`, {});
+  assert.equal(all.json.scenes, 2);
+  const job = await t.waitJob(all.json.job.id);
+  assert.equal(job.state, 'failed');
+  assert.match(job.error.message, /Drew 1 of 2/);
+  rows = (await t.call('GET', `/artifacts/${storyboard.id}/sketches`)).json;
+  assert.deepEqual(rows.map((r: any) => !!r.asset_id), [true, true, false]);
+  assert.equal((await t.call('POST', `/artifacts/${storyboard.id}/sketches`, { indexes: [9] })).status, 422);
+  assert.deepEqual(readdirSync(join(t.root, 'cache')).filter((f) => f.startsWith('sketch_')), [], 'no temporary files left');
 });

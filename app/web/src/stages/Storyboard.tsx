@@ -1,9 +1,10 @@
-import { useEffect, useState } from 'react';
+import { Fragment, useEffect, useState } from 'react';
 import { api } from '../api';
 import { ArtifactBar, saveArtifact } from '../actions';
 import { useProject } from '../pages/Project';
-import { useAsync } from '../hooks';
-import { Btn, Card, CopyBtn, Empty, Field, Loading, Modal, Pill, fmtSec, useToast } from '../ui';
+import { useAsync, useInterval } from '../hooks';
+import { Btn, Card, CopyBtn, Empty, Field, Icon, Loading, Modal, Pill, StateBadge, fmtSec, useToast } from '../ui';
+import { url } from '../api';
 import { ASSET_TYPES } from '../types';
 import { ProjectDetailsEditor } from './shared';
 
@@ -24,6 +25,12 @@ export function StoryboardStage() {
   const [prompt, setPrompt] = useState<string | null>(null);
   const [secs, setSecs] = useState(4);
   const [pickCat, setPickCat] = useState(false);
+  const sketches = useAsync(() => api.get<any[]>(`/artifacts/${art.id}/sketches`), [art.id, art.current_version_id, project.artifacts.map((a) => a.current_version_id).join()]);
+  const jobs = useAsync(() => api.get<any[]>(`/jobs?project_id=${project.id}`), [project.id]);
+  const drawing = (jobs.data ?? []).find((j) => j.kind === 'sketch_scenes' && (j.state === 'queued' || j.state === 'running'));
+  const lastDraw = (jobs.data ?? []).filter((j) => j.kind === 'sketch_scenes').sort((x, y) => (x.id < y.id ? 1 : -1))[0];
+  useInterval(() => { jobs.reload(); if (drawing) sketches.reload(); }, 2000);
+  const status = useAsync(() => api.get<any>('/research/status'), []);
   useEffect(() => { if (loaded.data) { setC(loaded.data.content); setDirty(false); } }, [loaded.data]);
   const done = () => { reload(); loaded.reload(); };
   if (loaded.loading && !loaded.data) return <Loading />;
@@ -36,6 +43,41 @@ export function StoryboardStage() {
     const next = [...c.scenes];
     [next[i], next[j]] = [next[j], next[i]];
     edit({ scenes: next });
+  };
+
+  /** Draw all scenes without a picture, or the given ones. Builds the storyboard from the approved script first if needed. */
+  const generate = async (indexes?: number[]) => {
+    if (dirty) { push('warn', 'Save the storyboard first, then generate.'); return; }
+    const approved = (indexes ?? []).some((i) => sketches.data?.[i]?.state === 'approved');
+    const replacing = (indexes ?? []).some((i) => sketches.data?.[i]?.asset_id);
+    if (replacing && !confirm(approved ? 'This scene is approved. Draw a new picture anyway? It will need your approval again.' : 'Draw a new picture for this scene? The old one stays in the Asset Library.')) return;
+    if (!sessionStorage.getItem('wander-cc-sketch-ok')) {
+      if (!confirm('Claude Code on this computer draws each sketch, using your Claude plan.\n\nIt gets no tools. Only the scene description is sent. Each picture can take a minute or more.\n\nContinue?')) return;
+      sessionStorage.setItem('wander-cc-sketch-ok', '1');
+    }
+    const r = await api.post(`/artifacts/${art.id}/sketches`, { indexes, reopen: approved });
+    push('ok', `Drawing ${r.scenes} scene${r.scenes === 1 ? '' : 's'}…`);
+    jobs.reload();
+    done();
+  };
+  const ready = base.state === 'approved' && !!status.data?.loggedIn;
+  const preview: any[] = baseDoc.data?.content?.sections ?? [];
+  const have = (sketches.data ?? []).filter((r) => r.asset_id).length;
+  const total = c ? c.scenes.length : preview.length;
+  const portrait = (project.settings.formats ?? ['vertical_9x16'])[0];
+  const ratio = portrait === 'horizontal_16x9' ? '16 / 9' : portrait === 'square_1x1' ? '1 / 1' : '9 / 16';
+
+  const frame = (i: number) => {
+    const row = sketches.data?.[i];
+    return (
+      <div className="frame-slot" style={{ aspectRatio: ratio }}>
+        {row?.asset_id ? <img src={url(`/assets/${row.asset_id}/file`)} alt={`Scene ${i + 1} picture`} /> : <span className="muted small">{drawing && (!row || drawing.params?.sceneIds?.includes(row.scene_id)) ? <><span className="spin" /> in the queue</> : 'No picture yet'}</span>}
+      </div>
+    );
+  };
+  const drawButton = (i: number) => {
+    const has = !!sketches.data?.[i]?.asset_id;
+    return <Btn small kind={has ? 'default' : 'primary'} disabled={!ready || !!drawing} onClick={() => generate([i])}><Icon name="spark" small /> {has ? 'Redraw' : 'Generate'}</Btn>;
   };
 
   return (
@@ -53,28 +95,54 @@ export function StoryboardStage() {
           {recs.data.profile.notes && <p className="small" style={{ marginBottom: 0 }}>{recs.data.profile.notes}</p>}
         </Card>
       )}
+      <section className="board-head">
+        <div className="grow">
+          <h3>{total} scene{total === 1 ? '' : 's'}</h3>
+          <p className="muted small">{have} of {total} have a picture{c ? ` · about ${fmtSec(c.scenes.reduce((n: number, s: any) => n + s.target_duration, 0))}` : ''}. Pictures are sketches drawn by Claude; approve each one under Visuals.</p>
+          <div className="bar-prog"><i style={{ width: `${total ? (have / total) * 100 : 0}%` }} /></div>
+        </div>
+        <Btn kind="primary" disabled={!ready || !!drawing || !total || have === total} onClick={() => generate()}><Icon name="spark" small /> {drawing ? 'Drawing…' : have === total && total ? 'All drawn' : have ? `Generate ${total - have} remaining` : `Generate all ${total}`}</Btn>
+      </section>
+      {base.state !== 'approved' && <div className="notice warn">Approve the base script first: the scenes come from it.</div>}
+      {status.data && !status.data.loggedIn && <div className="notice warn"><strong>{status.data.detail}.</strong> {status.data.fix}</div>}
+      {!drawing && lastDraw?.state === 'failed' && have < total && <div className="notice bad"><strong>Last drawing run had problems.</strong> {lastDraw.error?.message}</div>}
       {!c ? (
-        <Card title="Create the storyboard">
-          <p style={{ marginTop: 0 }}>Turn the approved script into scenes. The draft splits the script into short shots and picks a starting visual type and camera move for your category. The visual descriptions are plain skeletons: refine them yourself, or paste the prompt into an assistant you use.</p>
-          {base.state !== 'approved' && <div className="notice warn" style={{ marginBottom: 10 }}>Approve the base script first.</div>}
-          <div className="row gap wrap">
-            <Field label="Aim for scenes of about (seconds)"><input type="number" min={2} max={20} style={{ width: 100 }} value={secs} onChange={(e) => setSecs(Number(e.target.value))} /></Field>
-            <Btn kind="primary" disabled={base.state !== 'approved'} onClick={async () => { await api.post(`/artifacts/${art.id}/seed-storyboard`, { scene_seconds: secs }); push('ok', 'Draft storyboard created'); done(); }}>Generate draft from script</Btn>
-            <Btn disabled={!base.current_version_id} onClick={async () => setPrompt((await api.get(`/artifacts/${art.id}/storyboard-prompt`)).prompt)}>Prompt for my own AI</Btn>
+        <>
+          <div className="board">
+            {preview.map((s, i) => (
+              <article key={s.id} className="scene-card">
+                {frame(i)}
+                <div className="scene-body">
+                  <div className="row gap"><span className="scene-n">{i + 1}</span><strong className="grow">{s.kind}</strong></div>
+                  <p className="quote">“{s.text}”</p>
+                  <dl className="kv small">{Object.entries(s.visual ?? {}).map(([k, v]) => <Fragment key={k}><dt>{k}</dt><dd>{String(v)}</dd></Fragment>)}</dl>
+                  <div className="row gap">{drawButton(i)}</div>
+                </div>
+              </article>
+            ))}
           </div>
-        </Card>
+          <details>
+            <summary className="muted">Create the storyboard without pictures</summary>
+            <div className="row gap wrap" style={{ marginTop: 8 }}>
+              <Field label="Aim for scenes of about (seconds)" hint="Only for scripts without visual descriptions"><input type="number" min={2} max={20} style={{ width: 100 }} value={secs} onChange={(e) => setSecs(Number(e.target.value))} /></Field>
+              <Btn disabled={base.state !== 'approved'} onClick={async () => { await api.post(`/artifacts/${art.id}/seed-storyboard`, { scene_seconds: secs }); push('ok', 'Draft storyboard created'); done(); }}>Create scenes</Btn>
+              <Btn disabled={!base.current_version_id} onClick={async () => setPrompt((await api.get(`/artifacts/${art.id}/storyboard-prompt`)).prompt)}>Prompt for my own AI</Btn>
+            </div>
+          </details>
+        </>
       ) : (
         <>
           <div className="row gap wrap">
-            <strong>{c.scenes.length} scenes</strong><span className="muted">≈ {fmtSec(c.scenes.reduce((n: number, s: any) => n + s.target_duration, 0))} planned</span>
             <span className="grow" />
             <Btn small onClick={async () => setPrompt((await api.get(`/artifacts/${art.id}/storyboard-prompt`)).prompt)}>Prompt for my own AI</Btn>
             <Btn small onClick={() => edit({ scenes: [...c.scenes, { title: 'New scene', script_segment_id: sections[0]?.id ?? '', target_duration: 3, visual_description: '', asset_type: 'stock_photo', camera: { movement: 'ken_burns', direction: 'in', intensity: 'subtle' }, transition_in: 'dissolve', sfx_cues: [] }] })}>Add scene</Btn>
           </div>
           <div className="stack">
             {c.scenes.map((s: any, i: number) => (
-              <div key={s.scene_id ?? i} className="scene">
-                <div className="row gap">
+              <div key={s.scene_id ?? i} className="scene-card wide">
+                {frame(i)}
+                <div className="scene-body">
+                <div className="row gap wrap">
                   <span className="scene-n">{i + 1}</span>
                   <input aria-label="Scene title" value={s.title} onChange={(e) => setScene(i, { title: e.target.value })} />
                   {s.draft && <Pill tone="warn">draft</Pill>}
@@ -82,7 +150,17 @@ export function StoryboardStage() {
                   <Btn small kind="ghost" onClick={() => move(i, 1)} disabled={i === c.scenes.length - 1}>↓</Btn>
                   <Btn small kind="ghost" onClick={() => edit({ scenes: c.scenes.filter((_: any, k: number) => k !== i) })}>Remove</Btn>
                 </div>
-                {s.segment_text && <p className="muted small" style={{ margin: '8px 0 0' }}>“{s.segment_text}”</p>}
+                {s.segment_text && <p className="quote">“{s.segment_text}”</p>}
+                <p className="visual-text">{s.visual_description}</p>
+                <div className="row gap wrap">
+                  <Pill>{fmtSec(s.target_duration)}</Pill><Pill>{s.camera.movement.replace('_', ' ')}</Pill><Pill>{(s.transition_in ?? 'cut')} in</Pill>
+                  {sketches.data?.[i] && <StateBadge state={sketches.data[i].state} />}
+                  <span className="grow" />
+                  {drawButton(i)}
+                  {sketches.data?.[i]?.asset_id && <a className="btn btn-sm" href={`#/p/${project.id}/visuals`}>Approve in Visuals <Icon name="arrow" small /></a>}
+                </div>
+                <details>
+                <summary className="muted small">Edit details</summary>
                 <Field label="What the viewer sees" wide><textarea style={{ marginTop: 6 }} value={s.visual_description} onChange={(e) => setScene(i, { visual_description: e.target.value, draft: false })} /></Field>
                 <div className="form" style={{ marginTop: 8 }}>
                   <Field label="Script section"><select value={s.script_segment_id} onChange={(e) => setScene(i, { script_segment_id: e.target.value })}>{sections.map((x) => <option key={x.id} value={x.id}>{x.kind}: {x.text.slice(0, 28)}</option>)}</select></Field>
@@ -94,6 +172,8 @@ export function StoryboardStage() {
                   <Field label="Intensity"><select value={s.camera.intensity ?? 'subtle'} onChange={(e) => setScene(i, { camera: { ...s.camera, intensity: e.target.value } })}>{['subtle', 'medium', 'strong'].map((d) => <option key={d}>{d}</option>)}</select></Field>
                   <Field label="Transition in"><select value={s.transition_in ?? 'cut'} onChange={(e) => setScene(i, { transition_in: e.target.value })}>{TRANS.map((t) => <option key={t}>{t}</option>)}</select></Field>
                   <Field label="Sound effects (comma separated)"><input value={(s.sfx_cues ?? []).join(', ')} onChange={(e) => setScene(i, { sfx_cues: e.target.value.split(',').map((x) => x.trim()).filter(Boolean) })} /></Field>
+                </div>
+                </details>
                 </div>
               </div>
             ))}
