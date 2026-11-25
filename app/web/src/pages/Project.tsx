@@ -157,7 +157,6 @@ export function ProjectPage({ id, stage }: { id: string; stage: string }) {
           <h1><span className="crumb">{details ? 'Details' : info.step.label}</span> <span aria-hidden="true">&gt;</span> {proj.name}</h1>
           <div className="row gap wrap">
             {proj.category && <Pill tone="info">{proj.category}</Pill>}
-            {!details && <span className="step-num">STEP {viewing + 1} OF {STEPS.length}</span>}
           </div>
         </header>
         <Stepper items={stepItems(flow.steps, id)} current={viewing} />
