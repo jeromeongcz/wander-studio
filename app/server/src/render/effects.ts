@@ -25,13 +25,15 @@ export function folkloreCamera(index: number, total: number): Camera {
 
 export function applyEffects(tl: Timeline, style: EffectStyle | undefined): Timeline {
   if (!style) return tl;
-  // the style sets camera and cuts, except where the person overrode them in Compose & Render
-  const scenes: TimelineScene[] = tl.scenes.map((s, i) => ({
+  // the style sets camera, cuts and grade, except where the person overrode them in Compose & Render
+  const scenes: TimelineScene[] = tl.scenes.map(({ look, ...s }, i) => ({
     ...s,
+    ...(look && s.sources?.look === 'scene_override' ? { look } : {}),
     camera: s.sources?.camera ? s.camera : folkloreCamera(i, tl.scenes.length),
     transition_in: s.sources?.transition ? s.transition_in : { type: 'cut', duration: 0 },
   }));
-  return { ...tl, effects: style, scenes, captions: { ...tl.captions, mode: 'word' } };
+  const { look: _wide, ...rest } = tl;
+  return { ...rest, effects: style, scenes, captions: { ...tl.captions, mode: 'word' } };
 }
 
 /** Picture grade for one clip: darker, desaturated, vignette, living grain and a faint candle-like flicker. */

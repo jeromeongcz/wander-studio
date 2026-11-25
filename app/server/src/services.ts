@@ -13,6 +13,7 @@ import type { LexiconEntry, Locale } from './studios/locales.ts';
 import { validateStoryboardShape, storyboardReadiness, draftScenes, buildStoryboardPrompt, profileFor } from './studios/storyboard.ts';
 import type { Scene, StoryboardContent } from './studios/storyboard.ts';
 import { validateCameraOverride, validateTransitionOverride } from './render/resolve.ts';
+import { validateLook } from './render/styles.ts';
 import { addScene } from './pipeline.ts';
 import { AssetService } from './assets.ts';
 import { resolveConfig } from './config.ts';
@@ -50,8 +51,8 @@ import type { AssetType } from './studios/storyboard.ts';
 const LOCALE_CODE = /^[a-z][a-z0-9_-]{1,15}$/;
 
 /** A change to an override: a value sets it, null removes it, leaving it out keeps it. */
-function applyDirection(target: Record<string, unknown>, change: { camera?: unknown; transition?: unknown }) {
-  for (const [key, check] of [['camera', validateCameraOverride], ['transition', validateTransitionOverride]] as const) {
+function applyDirection(target: Record<string, unknown>, change: { camera?: unknown; transition?: unknown; look?: unknown }) {
+  for (const [key, check] of [['camera', validateCameraOverride], ['transition', validateTransitionOverride], ['look', validateLook]] as const) {
     const value = change[key];
     if (value === null) delete target[key];
     else if (value !== undefined) target[key] = check(value);
@@ -66,7 +67,7 @@ function recordOrigins(before: StoryboardContent | null, after: StoryboardConten
     const was = old.get(scene.scene_id);
     if (!was) continue;
     const origin: NonNullable<Scene['origin']> = {};
-    for (const [field, keys] of [['camera', ['camera']], ['transition', ['transition_in', 'transition_settings']]] as const) {
+    for (const [field, keys] of [['camera', ['camera']], ['transition', ['transition_in', 'transition_settings']], ['look', ['look']]] as const) {
       const same = keys.every((k) => canonical(scene[k] ?? null) === canonical(was[k] ?? null));
       const from = same ? was.origin?.[field] : by;
       if (from) origin[field] = from;
@@ -739,7 +740,7 @@ export class Studio {
     return { ...this.save(compId, this.render.build(compId, opts.effects), { actor: 'user', reopen: opts.reopen }) };
   }
 
-  setSceneOverride(compId: string, sceneId: string, override: { crop?: { x: number; y: number; w: number; h: number }; caption_y_pct?: number | null; camera?: unknown; transition?: unknown }, opts: { reopen?: boolean } = {}) {
+  setSceneOverride(compId: string, sceneId: string, override: { crop?: { x: number; y: number; w: number; h: number }; caption_y_pct?: number | null; camera?: unknown; transition?: unknown; look?: unknown }, opts: { reopen?: boolean } = {}) {
     const tl = validateTimelineShape(this.engine.getContent(compId));
     const cur = { ...(tl.overrides[sceneId] ?? {}) } as Record<string, unknown>;
     if (override.crop !== undefined) {
@@ -762,8 +763,8 @@ export class Studio {
     return this.save(compId, this.render.build(compId, undefined, { overrides }), { actor: 'user', reopen: opts.reopen });
   }
 
-  /** Camera and transition for every scene of one video. Scene overrides and the person's storyboard edits still win. */
-  setCompositionOverride(compId: string, override: { camera?: unknown; transition?: unknown }, opts: { reopen?: boolean } = {}) {
+  /** Camera, transition and style for every scene of one video. Scene overrides and the person's storyboard edits still win. */
+  setCompositionOverride(compId: string, override: { camera?: unknown; transition?: unknown; look?: unknown }, opts: { reopen?: boolean } = {}) {
     if (this.engine.get(compId).kind !== 'composition') throw new EngineError('VALIDATION', 'Not a composition artifact');
     const tl = validateTimelineShape(this.engine.getContent(compId));
     const all = { ...tl.overrides_all } as Record<string, unknown>;

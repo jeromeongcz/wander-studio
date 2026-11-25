@@ -22,6 +22,7 @@ import type { SceneClipSpec } from './motion.ts';
 import { sceneClipArgs, sceneClipKey } from './motion.ts';
 import { EFFECT_STYLES, applyEffects, impactTimes } from './effects.ts';
 import type { EffectStyle } from './effects.ts';
+import { isStyle } from './styles.ts';
 import { buildTimeline, timelineHash, validateTimelineShape } from './timeline.ts';
 import type { Timeline, TimelineScene } from './timeline.ts';
 
@@ -176,11 +177,16 @@ export class RenderService {
     }
     const clipRel = (id: string) => ({ clip_id: id, rel_path: this.audio.get(id).rel_path });
     if (effects !== undefined && effects !== 'none' && !(EFFECT_STYLES as readonly string[]).includes(effects)) throw new EngineError('VALIDATION', `Unknown effect style "${effects}"`);
-    const style = effects === undefined ? prev?.effects : effects === 'none' ? undefined : (effects as EffectStyle);
+    // the classic effect and a video-wide cinematic style replace each other: whichever was chosen last stays
+    let all = change.overrides_all ?? prev?.overrides_all;
+    if (effects === 'folklore' && all?.look) { const { look: _l, ...rest } = all; all = rest; }
+    const choseLook = effects === undefined && !!change.overrides_all?.look;
+    const style = choseLook ? undefined : effects === undefined ? prev?.effects : effects === 'none' ? undefined : (effects as EffectStyle);
+    const direction = (this.engine.getProject(comp.project_id).settings.cinematic as { style?: string } | undefined)?.style;
     return applyEffects(buildTimeline({
       lang: comp.lang_code,
       format: parseFormat(comp.format),
-      scenes: sbc.scenes.map((s) => ({ scene_id: s.scene_id!, script_segment_id: s.script_segment_id, segment_text: s.segment_text, target_duration: s.target_duration, title: s.title, camera: s.camera, transition_in: s.transition_in, transition_settings: s.transition_settings, origin: s.origin, draft: s.draft })),
+      scenes: sbc.scenes.map((s) => ({ scene_id: s.scene_id!, script_segment_id: s.script_segment_id, segment_text: s.segment_text, target_duration: s.target_duration, title: s.title, camera: s.camera, transition_in: s.transition_in, transition_settings: s.transition_settings, look: s.look, origin: s.origin, draft: s.draft })),
       assets,
       timelineWords: track?.words.length ? track.words.map((w) => ({ section_id: w.section_id, start: w.start, end: w.end })) : this.estimatedWords(layout, script),
       narration: {
@@ -193,7 +199,8 @@ export class RenderService {
       captionWords: track?.words ?? [],
       style: track?.style ?? DEFAULT_STYLE,
       overrides: change.overrides ?? prev?.overrides ?? {},
-      overrides_all: change.overrides_all ?? prev?.overrides_all,
+      overrides_all: all,
+      direction_look: direction && isStyle(direction) ? { style: direction } : undefined,
       source,
     }), style);
   }
@@ -216,6 +223,7 @@ export class RenderService {
       ...(tl.effects ? { effects: tl.effects, ...(s.index === tl.scenes.length - 1 ? { glitch: true } : {}) } : {}),
       // a camera the person chose is played as chosen: the style adds no extra framings to it
       ...(tl.effects && s.sources?.camera ? { hold: true } : {}),
+      ...(s.look ? { look: s.look } : {}),
     };
     const out = this.cache('scene_clips', `${sceneClipKey(spec)}.mp4`);
     if (existsSync(out) && (await stat(out)).size > 0) return { path: out, cached: true };
@@ -235,7 +243,7 @@ export class RenderService {
     const abs = (rel: string) => join(this.config.root, rel);
     const byId = (list: { clip_id: string; rel_path: string }[], id: string) => abs(list.find((x) => x.clip_id === id)!.rel_path);
     // generated here, so the project's own audio and licences are untouched
-    const fx = tl.effects || tl.scenes.some((s) => s.transition_in.sound) ? await this.effectSounds(tl, signal) : [];
+    const fx = tl.effects || tl.look?.ambience || tl.scenes.some((s) => s.transition_in.sound) ? await this.effectSounds(tl, signal) : [];
     const graph = buildMixGraph({
       narration: tl.audio.chunks.map((c) => ({ path: abs(c.rel_path), start: c.start })),
       music: (tl.audio.mix.music ?? []).map((m) => ({ path: byId(tl.audio.music, m.clip_id), spec: m })),
@@ -288,8 +296,14 @@ export class RenderService {
         sounds.push({ path: whoosh, spec: { clip_id: 'effect-whoosh', at, gain_db: -12 } });
       }
     }
-    if (tl.effects && !(tl.audio.mix.music ?? []).length) {
-      const seconds = Math.ceil(tl.duration);
+    // generated beds only where the person has not chosen music
+    const bed = (tl.audio.mix.music ?? []).length ? '' : tl.effects ? 'drone' : tl.look?.ambience ?? '';
+    const seconds = Math.ceil(tl.duration);
+    if (bed.includes('wind')) {
+      const wind = await make(`wind_v1_${seconds}.wav`, ['-f', 'lavfi', '-i', `anoisesrc=color=pink:amplitude=0.7:duration=${seconds}:seed=23`, '-af', `highpass=f=120,lowpass=f=620,tremolo=f=0.13:d=0.75,afade=t=in:d=1.5,afade=t=out:st=${Math.max(0, seconds - 1.5)}:d=1.5`]);
+      sounds.push({ path: wind, spec: { clip_id: 'effect-wind', at: 0, gain_db: -22 } });
+    }
+    if (bed.includes('drone')) {
       const drone = await make(`drone_v1_${seconds}.wav`, ['-f', 'lavfi', '-i', `sine=frequency=55:duration=${seconds}`, '-f', 'lavfi', '-i', `anoisesrc=color=brown:amplitude=0.6:duration=${seconds}:seed=11`, '-filter_complex', `[0:a]volume=0.6,tremolo=f=0.2:d=0.6[a];[1:a]lowpass=f=160[b];[a][b]amix=inputs=2:normalize=0:duration=longest,afade=t=in:d=1.5,afade=t=out:st=${Math.max(0, seconds - 1.5)}:d=1.5`]);
       sounds.push({ path: drone, spec: { clip_id: 'effect-drone', at: 0, gain_db: -20 } });
     }

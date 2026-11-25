@@ -4,6 +4,8 @@ import { EngineError } from '../engine.ts';
 import { validateCamera } from './camera.ts';
 import { validateTransition } from './transitions.ts';
 import type { TransitionSpec } from './transitions.ts';
+import { validateLook } from './styles.ts';
+import type { LookChoice } from './styles.ts';
 export { MAX_TRANSITION, MIN_TRANSITION } from './transitions.ts';
 import type { Scene } from '../studios/storyboard.ts';
 import type { Camera } from './motion.ts';
@@ -28,7 +30,7 @@ export function resolveLayers<T>(layers: Partial<Record<Source, T | undefined>> 
   return { value: layers.default, source: 'default' };
 }
 
-export type DirectedField = 'camera' | 'transition';
+export type DirectedField = 'camera' | 'transition' | 'look';
 
 /**
  * Where a storyboard value came from. Without a recorded origin, an untouched automatic draft counts as a draft and
@@ -43,6 +45,7 @@ export type TransitionChoice = TransitionSpec;
 export interface DirectionOverride {
   camera?: Camera;
   transition?: TransitionChoice;
+  look?: LookChoice;
 }
 
 const bad = (m: string) => new EngineError('VALIDATION', m);
@@ -52,9 +55,10 @@ export const validateCameraOverride = (x: unknown): Camera => validateCamera(x);
 
 export const validateTransitionOverride = (x: unknown): TransitionChoice => validateTransition(x);
 
-/** Check the camera and transition parts of a stored override, leaving crop and caption position alone. */
+/** Check the camera, transition and look parts of a stored override, leaving crop and caption position alone. */
 export function checkDirectionOverride(x: unknown): void {
   if (!isObj(x)) throw bad('An override must be an object');
   if (x.camera !== undefined) validateCameraOverride(x.camera);
   if (x.transition !== undefined) validateTransitionOverride(x.transition);
+  if (x.look !== undefined) validateLook(x.look);
 }

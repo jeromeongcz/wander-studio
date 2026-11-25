@@ -2,6 +2,8 @@ import { createHash } from 'node:crypto';
 import { LOOK_FILTERS, SHOT_SECONDS, glitchFilters } from './effects.ts';
 import { cinematicFilters, isClassicCamera, strength } from './camera.ts';
 import type { Easing, Intensity, Movement } from './camera.ts';
+import { withLook } from './styles.ts';
+import type { ResolvedLook } from './styles.ts';
 
 export interface Rect {
   x: number;
@@ -145,12 +147,13 @@ export interface SceneClipSpec {
   effects?: 'folklore';
   glitch?: boolean; // the final shot of a folklore video
   hold?: boolean; // one continuous camera move, even in a style that cuts between framings
+  look?: ResolvedLook; // cinematic visual style; replaces the classic folklore grade
 }
 
 /** Cache key: any input that changes the pixels changes the key; anything else (captions, audio, other scenes) does not. */
 export function sceneClipKey(s: SceneClipSpec): string {
   const { path: _p, ...asset } = s.asset;
-  return createHash('sha256').update(JSON.stringify({ v: 1, asset, focal: s.focal, camera: s.camera, crop: s.crop ?? null, d: Math.round(s.duration * 1000), w: s.width, h: s.height, fps: s.fps, effects: s.effects, glitch: s.glitch, hold: s.hold })).digest('hex').slice(0, 32);
+  return createHash('sha256').update(JSON.stringify({ v: 1, asset, focal: s.focal, camera: s.camera, crop: s.crop ?? null, d: Math.round(s.duration * 1000), w: s.width, h: s.height, fps: s.fps, effects: s.effects, glitch: s.glitch, hold: s.hold, look: s.look })).digest('hex').slice(0, 32);
 }
 
 export function sceneClipArgs(s: SceneClipSpec, out: string): string[] {
@@ -160,7 +163,9 @@ export function sceneClipArgs(s: SceneClipSpec, out: string): string[] {
   const enc = ['-an', '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '18', '-pix_fmt', 'yuv420p', '-r', String(s.fps), out];
   if (s.asset.kind === 'video') {
     // v1: stock video plays as-is (looped or trimmed); camera moves apply to stills only.
-    return ['-stream_loop', '-1', '-i', s.asset.path, '-t', s.duration.toFixed(3), '-vf', `${cropF},scale=${s.width}:${s.height}:flags=lanczos,fps=${s.fps},setsar=1,format=yuv420p`, ...enc];
+    const plain = [cropF, `scale=${s.width}:${s.height}:flags=lanczos`, `fps=${s.fps}`, 'setsar=1'];
+    const vf = s.look ? withLook(plain, s.look, { w: s.width, h: s.height }, s.fps, s.duration) : [...plain, 'format=yuv420p'].join(',');
+    return ['-stream_loop', '-1', '-i', s.asset.path, '-t', s.duration.toFixed(3), '-vf', vf, ...enc];
   }
   const focalRel = { x: clamp((s.focal.x * s.asset.width - crop.x) / crop.w, 0, 1), y: clamp((s.focal.y * s.asset.height - crop.y) / crop.h, 0, 1) };
   const classic = isClassicCamera(s.camera);
@@ -171,7 +176,10 @@ export function sceneClipArgs(s: SceneClipSpec, out: string): string[] {
   const camera = shots > 1
     ? [shotsFilter(motionPlan(classic ? s.camera : { movement: 'static' }, focalRel), shots, frames, size, s.fps, focalRel)]
     : classic ? [zoompanFilter(motionPlan(s.camera, focalRel), frames, size, s.fps)] : cinematicFilters(s.camera, frames, size, s.fps, focalRel, motionPlan);
-  const look = s.effects ? [...LOOK_FILTERS, ...(s.glitch ? glitchFilters(frames / s.fps) : [])] : [];
-  const chain = [cropF, `scale=${s.width * over}:${s.height * over}:flags=lanczos`, ...camera, 'setsar=1', ...look, 'format=yuv420p'];
-  return ['-i', s.asset.path, '-vf', chain.join(','), '-frames:v', String(frames), ...enc];
+  const glitch = s.effects && s.glitch ? glitchFilters(frames / s.fps) : [];
+  const moved = [cropF, `scale=${s.width * over}:${s.height * over}:flags=lanczos`, ...camera, 'setsar=1'];
+  const vf = s.look
+    ? withLook(moved, s.look, size, s.fps, frames / s.fps, glitch)
+    : [...moved, ...(s.effects ? LOOK_FILTERS : []), ...glitch, 'format=yuv420p'].join(',');
+  return ['-i', s.asset.path, '-vf', vf, '-frames:v', String(frames), ...enc];
 }

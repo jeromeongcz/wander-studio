@@ -404,11 +404,11 @@ export function buildApi(engine: Engine, config: Partial<AppConfig> = {}): Fasti
   app.put('/artifacts/:id/scenes/:sceneId/override', async (req) => {
     const { id, sceneId } = req.params as { id: string; sceneId: string };
     const b = body(req);
-    return studio.setSceneOverride(id, sceneId, { crop: b.crop, caption_y_pct: b.caption_y_pct, camera: b.camera, transition: b.transition }, { reopen: b.reopen === true });
+    return studio.setSceneOverride(id, sceneId, { crop: b.crop, caption_y_pct: b.caption_y_pct, camera: b.camera, transition: b.transition, look: b.look }, { reopen: b.reopen === true });
   });
   app.put('/artifacts/:id/override-all', async (req) => {
     const b = body(req);
-    return studio.setCompositionOverride((req.params as { id: string }).id, { camera: b.camera, transition: b.transition }, { reopen: b.reopen === true });
+    return studio.setCompositionOverride((req.params as { id: string }).id, { camera: b.camera, transition: b.transition, look: b.look }, { reopen: b.reopen === true });
   });
   app.get('/artifacts/:id/preview-frame', async (req, reply) => {
     const q = req.query as { t?: string; captions?: string };

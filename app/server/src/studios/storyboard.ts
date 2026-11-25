@@ -5,6 +5,8 @@ import type { Movement } from '../render/camera.ts';
 import type { Camera } from '../render/motion.ts';
 import { TRANSITIONS, validateTransition } from '../render/transitions.ts';
 import type { Transition, TransitionSpec } from '../render/transitions.ts';
+import { isStyle, validateLookParams } from '../render/styles.ts';
+import type { LookParams, StyleId } from '../render/styles.ts';
 import type { CalibrationSample } from './estimator.ts';
 import type { ScriptContent, SceneVisual, ScriptCharacter } from './script.ts';
 
@@ -31,6 +33,10 @@ export type { Transition };
 export const ORIGINS = ['ai', 'draft', 'user'] as const;
 export type Origin = (typeof ORIGINS)[number];
 
+/** A scene's visual direction: what the renderer applies (style, params) and notes for whoever makes the picture. */
+export const LOOK_NOTES = ['lighting', 'color', 'atmosphere', 'composition', 'shot'] as const;
+export type SceneLook = { style?: StyleId | 'none'; params?: LookParams } & Partial<Record<(typeof LOOK_NOTES)[number], string>>;
+
 export interface Scene {
   scene_id?: string; // assigned by the server on first save; immutable afterwards
   order_index?: number; // derived from array position on save
@@ -48,7 +54,8 @@ export interface Scene {
   sfx_cues?: string[];
   notes?: string;
   draft?: boolean; // true for auto-generated skeletons that still need a creative pass
-  origin?: { camera?: Origin; transition?: Origin }; // who last set these; kept by the server
+  look?: SceneLook;
+  origin?: { camera?: Origin; transition?: Origin; look?: Origin }; // who last set these; kept by the server
 }
 export interface StoryboardContent {
   category?: string;
@@ -119,7 +126,14 @@ export function validateStoryboardShape(content: unknown): StoryboardContent {
       if (!isObj(s.transition_settings)) throw bad(`${at} has invalid transition_settings`);
       validateTransition({ ...s.transition_settings, type: s.transition_in ?? 'cut' }, `${at}: transition`);
     }
-    if (s.origin !== undefined && !(isObj(s.origin) && Object.entries(s.origin).every(([k, v]) => ['camera', 'transition'].includes(k) && ORIGINS.includes(v as Origin)))) throw bad(`${at} has invalid origin`);
+    if (s.look !== undefined) {
+      const l = s.look;
+      if (!isObj(l) || !Object.keys(l).every((k) => ['style', 'params', ...LOOK_NOTES].includes(k))) throw bad(`${at} has an invalid look`);
+      if (l.style !== undefined && !isStyle(l.style)) throw bad(`${at} has an unknown visual style`);
+      if (l.params !== undefined) validateLookParams(l.params, `${at}: look.params`);
+      if (!LOOK_NOTES.every((k) => l[k] === undefined || typeof l[k] === 'string')) throw bad(`${at} look notes must be text`);
+    }
+    if (s.origin !== undefined && !(isObj(s.origin) && Object.entries(s.origin).every(([k, v]) => ['camera', 'transition', 'look'].includes(k) && ORIGINS.includes(v as Origin)))) throw bad(`${at} has invalid origin`);
     if (s.sfx_cues !== undefined && !(Array.isArray(s.sfx_cues) && s.sfx_cues.every((x) => typeof x === 'string'))) throw bad(`${at} sfx_cues must be strings`);
     if (s.scene_id !== undefined) {
       if (typeof s.scene_id !== 'string' || !s.scene_id) throw bad(`${at} has invalid scene_id`);
