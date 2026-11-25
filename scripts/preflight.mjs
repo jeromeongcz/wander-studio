@@ -1,40 +1,48 @@
 #!/usr/bin/env node
-// Wander AI Director preflight: read-only environment check. Installs and downloads nothing.
-import { execSync } from 'node:child_process';
+// Wander AI Director preflight: read-only environment check for macOS, Windows and Linux. Installs and downloads nothing.
+import { execFileSync } from 'node:child_process';
 import os from 'node:os';
 import fs from 'node:fs';
+import { join } from 'node:path';
+import { ffmpegBinary, ffprobeBinary } from '../app/server/src/media.ts';
+import { findTool, pathLookup, systemFontDirs } from '../app/server/src/platform.ts';
 
-const run = (c) => { try { return execSync(c, { stdio: ['ignore', 'pipe', 'ignore'] }).toString().trim(); } catch { return null; } };
+const run = (bin, args) => { try { return execFileSync(bin, args, { stdio: ['ignore', 'pipe', 'ignore'], timeout: 30_000 }).toString().trim(); } catch { return null; } };
+const where = (name) => { const found = findTool(name); return found !== name ? found : (run(pathLookup(), [name])?.split(/\r?\n/)[0] ?? null); };
 const results = [];
-// Prefer an ffmpeg with libass: FFMPEG_DIR env, then Homebrew ffmpeg-full (keg-only), then PATH.
-const candidates = [process.env.FFMPEG_DIR, '/opt/homebrew/opt/ffmpeg-full/bin', '/usr/local/opt/ffmpeg-full/bin'].filter((d) => d && fs.existsSync(d + '/ffmpeg'));
-const FF = candidates[0] ? candidates[0] + '/ffmpeg' : 'ffmpeg';
-const FP = candidates[0] ? candidates[0] + '/ffprobe' : 'ffprobe';
 const check = (name, level, ok, detail, fix) => results.push({ name, level, ok, detail, fix });
+const win = process.platform === 'win32';
+const mac = process.platform === 'darwin';
+const installFfmpeg = win ? 'winget install Gyan.FFmpeg' : mac ? 'brew install ffmpeg-full' : 'install ffmpeg with libass and librsvg';
 
-const nodeMajor = Number(process.versions.node.split('.')[0]);
-check('Node >= 22', 'required', nodeMajor >= 22, process.version, 'brew install node');
-check('FFmpeg', 'required', !!run(`command -v ${FF}`), run(`${FF} -version | head -1`) ?? 'not found', 'brew install ffmpeg');
-check('ffprobe', 'required', !!run(`command -v ${FP}`), run(`${FP} -version | head -1`) ?? 'not found', 'installed with ffmpeg');
-const ffFilters = run(`${FF} -hide_banner -filters 2>/dev/null`);
-check('FFmpeg subtitles/libass', 'required', !!ffFilters && /^\s*\S+\s+(subtitles|ass)\s/m.test(ffFilters), ffFilters ? `subtitles/ass present (${FF})` : 'ffmpeg missing', 'use a ffmpeg build with libass');
+check('Node >= 22', 'required', Number(process.versions.node.split('.')[0]) >= 22, process.version, win ? 'winget install OpenJS.NodeJS.LTS' : 'brew install node');
+const FF = ffmpegBinary();
+const version = run(FF, ['-version'])?.split(/\r?\n/)[0];
+check('FFmpeg', 'required', !!version, version ?? 'not found', installFfmpeg);
+check('ffprobe', 'required', !!run(ffprobeBinary(), ['-version']), run(ffprobeBinary(), ['-version']) ? 'found' : 'not found', 'installed with FFmpeg');
+const filters = run(FF, ['-hide_banner', '-filters']) ?? '';
+const ass = /^\s*\S+\s+(subtitles|ass)\s/m.test(filters);
+check('FFmpeg subtitles/libass', 'required', ass, ass ? 'present' : 'missing', installFfmpeg);
+if (!mac) {
+  const svg = /\b(lib)?rsvg\b/.test(run(FF, ['-hide_banner', '-decoders']) ?? '') || !!run('rsvg-convert', ['--version']);
+  check('SVG support (pictures)', 'optional', svg, svg ? 'available' : 'not found', 'storyboard pictures need FFmpeg with librsvg, or rsvg-convert');
+}
 
 const ramGB = os.totalmem() / 2 ** 30;
-check('RAM >= 8GB', 'required', ramGB >= 8, `${ramGB.toFixed(1)} GB`, '');
-const df = run(`df -k "${process.cwd()}" | tail -1`);
-const freeGB = df ? Number(df.split(/\s+/)[3]) / 1048576 : 0;
+check('RAM >= 8GB', 'required', ramGB >= 7.5, `${ramGB.toFixed(1)} GB`, '');
+const disk = fs.statfsSync(process.cwd());
+const freeGB = (disk.bavail * disk.bsize) / 2 ** 30;
 check('Free disk >= 20GB', 'required', freeGB >= 20, `${freeGB.toFixed(0)} GB free`, '');
 
-const fonts = [os.homedir() + '/Library/Fonts', '/Library/Fonts', '/System/Library/Fonts', './templates/fonts']
-  .flatMap((d) => { try { return fs.readdirSync(d); } catch { return []; } })
+const fonts = [...systemFontDirs(), ...(mac ? ['/System/Library/Fonts'] : []), join('templates', 'fonts')]
+  .flatMap((d) => { try { return fs.readdirSync(d, { recursive: !mac && !win }); } catch { return []; } })
   .filter((f) => /\.(ttf|otf|ttc)$/i.test(f));
-check('Caption-capable fonts', 'required', fonts.length > 0, `${fonts.length} font files visible`, 'bundle OFL fonts in templates/fonts');
+check('Caption-capable fonts', 'required', fonts.length > 0, `${fonts.length} font files visible`, 'add .ttf files to templates/fonts');
 
-check('Piper TTS', 'optional', !!run('command -v piper'), run('command -v piper') ?? 'not found', 'optional offline TTS');
-check('whisper.cpp', 'optional', !!(run('command -v whisper-cli') || run('command -v whisper-cpp')), (run('command -v whisper-cli') ?? run('command -v whisper-cpp') ?? 'not found'), 'optional alignment; model download needs confirmation');
-check('Ollama', 'optional', !!run('command -v ollama'), run('command -v ollama') ?? 'not found', 'optional local LLM; manual copy-paste mode otherwise');
-const gpu = run('system_profiler SPDisplaysDataType 2>/dev/null | grep "Chipset Model"');
-check('GPU (informational)', 'optional', true, gpu ?? 'unknown', 'local image/video generation stays optional');
+check('Claude Code', 'optional', !!where('claude'), where('claude') ?? 'not found', 'needed for research, scripts and pictures');
+check('Edge TTS', 'optional', !!where('edge-tts'), where('edge-tts') ?? 'not found', 'pipx install edge-tts');
+check('Piper TTS', 'optional', !!where('piper'), where('piper') ?? 'not found', 'optional offline TTS');
+check('whisper.cpp', 'optional', !!where('whisper-cli'), where('whisper-cli') ?? 'not found', 'optional alignment; model download needs confirmation');
 
 let failed = 0;
 for (const r of results) {

@@ -1,5 +1,6 @@
 import Fastify from 'fastify';
 import { createReadStream } from 'node:fs';
+import { isInside } from './platform.ts';
 import { join, basename, extname } from 'node:path';
 import { mkdir, unlink, writeFile } from 'node:fs/promises';
 import { ulid } from '../../shared/src/index.ts';
@@ -83,7 +84,7 @@ export function buildApi(engine: Engine, config: Partial<AppConfig> = {}): Fasti
 
   // ---- uploads (the browser cannot give the server a local path) ----
   const uploadsDir = () => join(studio.config.root, 'cache', 'uploads');
-  const isUpload = (p: unknown) => typeof p === 'string' && p.startsWith(uploadsDir() + '/');
+  const isUpload = (p: unknown) => typeof p === 'string' && isInside(uploadsDir(), p);
   /** Imports accept an uploaded temp file; it is always removed afterwards, success or failure. */
   const withUpload = async <T>(path: unknown, fn: () => Promise<T>): Promise<T> => {
     try {

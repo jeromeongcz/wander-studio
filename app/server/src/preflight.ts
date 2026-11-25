@@ -39,7 +39,7 @@ export async function runPreflight(config: AppConfig, opts: { needBytes?: number
     version = (await run(ff, ['-version'], { timeout: 10_000 })).stdout.split('\n')[0];
     add({ name: 'FFmpeg', level: 'required', ok: true, detail: version });
   } catch {
-    add({ name: 'FFmpeg', level: 'required', ok: false, detail: 'not found', fix: 'brew install ffmpeg-full' });
+    add({ name: 'FFmpeg', level: 'required', ok: false, detail: 'not found', fix: process.platform === 'win32' ? 'winget install Gyan.FFmpeg' : 'brew install ffmpeg-full' });
   }
   try {
     await run(fp, ['-version'], { timeout: 10_000 });
@@ -64,6 +64,11 @@ export async function runPreflight(config: AppConfig, opts: { needBytes?: number
     add({ name: 'Disk space', level: 'required', ok: free >= need, detail: `${(free / 1024 ** 3).toFixed(1)} GB free, ${(need / 1024 ** 3).toFixed(1)} GB needed`, fix: free < need ? 'free disk space or prune the cache (POST /cache/prune)' : undefined });
   } catch (e) {
     add({ name: 'Disk space', level: 'required', ok: false, detail: `could not read disk space: ${(e as Error).message}` });
+  }
+  if (version && process.platform !== 'darwin') {
+    const decoders = (await run(ff, ['-hide_banner', '-decoders'], { timeout: 15_000 }).catch(() => ({ stdout: '' }))).stdout;
+    const svg = /\b(lib)?rsvg\b/.test(decoders) || (await run('rsvg-convert', ['--version'], { timeout: 10_000 }).then(() => true).catch(() => false));
+    add({ name: 'SVG support (storyboard pictures)', level: 'optional', ok: svg, detail: svg ? 'available' : 'not found', fix: svg ? undefined : 'use an FFmpeg build with librsvg, or install rsvg-convert' });
   }
   const totalGB = totalmem() / 1024 ** 3;
   add({ name: 'Memory', level: 'required', ok: totalGB >= 4, detail: `${totalGB.toFixed(1)} GB total, ${(freemem() / 1024 ** 3).toFixed(1)} GB currently free`, fix: totalGB < 4 ? 'rendering needs at least 4 GB of RAM' : undefined });

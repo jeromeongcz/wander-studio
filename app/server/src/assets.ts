@@ -1,5 +1,6 @@
 import { copyFile, constants, mkdir, stat, unlink } from 'node:fs/promises';
 import { createWriteStream } from 'node:fs';
+import { isInside } from './platform.ts';
 import { dirname, extname, join, resolve } from 'node:path';
 import { Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
@@ -91,7 +92,7 @@ export class AssetService {
 
   absPath(a: Asset): string {
     const p = resolve(this.config.root, a.rel_path);
-    if (!p.startsWith(resolve(this.config.root) + '/')) throw new EngineError('VALIDATION', 'Asset path escapes the application root');
+    if (!isInside(this.config.root, p)) throw new EngineError('VALIDATION', 'Asset path escapes the application root');
     return p;
   }
 

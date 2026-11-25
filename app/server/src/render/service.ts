@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { existsSync, readdirSync } from 'node:fs';
-import { mkdir, readFile, rename, stat, symlink, unlink, writeFile, rm } from 'node:fs/promises';
-import { homedir } from 'node:os';
+import { copyFile, mkdir, readFile, rename, stat, symlink, unlink, writeFile, rm } from 'node:fs/promises';
+import { filterPath, fontFullName, systemFontDirs } from '../platform.ts';
 import { basename, dirname, extname, join } from 'node:path';
 import { Engine, EngineError, canonical } from '../engine.ts';
 import type { AssetService } from '../assets.ts';
@@ -44,7 +44,7 @@ export interface RenderRow {
 
 const XFADE: Record<string, string> = { cut: 'fade', fade: 'fade', dissolve: 'dissolve', slide: 'slideleft', wipe: 'wipeleft', zoom: 'zoomin' };
 const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, '');
-const q = (p: string) => `'${p.replace(/'/g, "'\\''")}'`; // quote a value inside an ffmpeg filter option
+const q = filterPath; // quote a path inside an ffmpeg filter option
 
 export class RenderService {
   engine: Engine;
@@ -69,14 +69,20 @@ export class RenderService {
 
   // ---- fonts ----
   fontDirs(): string[] {
-    return [join(this.config.root, 'templates', 'fonts'), ...(this.config.fontDirs ?? ['/System/Library/Fonts/Supplemental', '/Library/Fonts', join(homedir(), 'Library', 'Fonts')])];
+    return [join(this.config.root, 'templates', 'fonts'), ...(this.config.fontDirs ?? systemFontDirs())];
   }
 
   listFonts(): { family: string; path: string }[] {
     const out: { family: string; path: string }[] = [];
     for (const d of this.fontDirs()) {
       if (!existsSync(d)) continue;
-      for (const f of readdirSync(d)) if (/\.(ttf|otf)$/i.test(f)) out.push({ family: basename(f, extname(f)), path: join(d, f) });
+      // macOS file names are the font names; elsewhere (ariblk.ttf) the name has to be read from the file
+      for (const f of readdirSync(d, { recursive: process.platform === 'linux' }) as string[]) {
+        if (!/\.(ttf|otf)$/i.test(f)) continue;
+        const path = join(d, f);
+        const file = basename(f, extname(f));
+        out.push({ family: (process.platform === 'darwin' ? null : fontFullName(path)) ?? file, path });
+      }
     }
     return out;
   }
@@ -93,7 +99,8 @@ export class RenderService {
     await mkdir(dir, { recursive: true });
     for (const h of hits) {
       const dest = join(dir, basename(h.path));
-      if (!existsSync(dest)) await symlink(h.path, dest).catch(() => {});
+      // Windows normally forbids links without special rights, so fall back to a copy; a failure here must be loud
+      if (!existsSync(dest)) await symlink(h.path, dest).catch(() => copyFile(h.path, dest));
     }
     return dir;
   }

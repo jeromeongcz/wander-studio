@@ -1,3 +1,4 @@
+import { findTool, pathLookup } from '../platform.ts';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
@@ -55,14 +56,12 @@ async function withTmp<T>(fn: (dir: string) => Promise<T>): Promise<T> {
 
 /** Tools installed with uv/pipx/Homebrew are often not on the server's PATH, so look in the usual places first. */
 export function resolveBin(name: string, override?: string): string {
-  if (override) return override;
-  for (const dir of [join(homedir(), '.local', 'bin'), '/opt/homebrew/bin', '/usr/local/bin']) if (existsSync(join(dir, name))) return join(dir, name);
-  return name;
+  return override ?? findTool(name);
 }
 
 const which = async (bin: string) => {
   try {
-    await run('/usr/bin/which', [bin], { timeout: 5000 });
+    await run(pathLookup(), [bin], { timeout: 5000 });
     return true;
   } catch {
     return false;

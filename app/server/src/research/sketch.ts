@@ -1,9 +1,11 @@
 // Storyboard sketch frames: Claude (with no tools) draws one vector illustration per scene. The vector file is untrusted
 // model output, so it is checked against an allow-list before it is turned into a PNG and recorded as an asset.
-import { execFile } from 'node:child_process';
+import { existsSync } from 'node:fs';
 import { mkdir, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { EngineError } from '../engine.ts';
+import { ffmpegBinary, run } from '../media.ts';
+import { rasterCommands } from '../platform.ts';
 import type { Studio } from '../services.ts';
 import type { JobCtx } from '../jobs.ts';
 import { ulid } from '../../../shared/src/index.ts';
@@ -60,10 +62,20 @@ export function buildSketchPrompt(scene: Scene, o: { size: { w: number; h: numbe
   ].join('\n');
 }
 
-const rasterize = (svgPath: string, pngPath: string) =>
-  new Promise<void>((resolve, reject) => {
-    execFile('/usr/bin/sips', ['-s', 'format', 'png', svgPath, '--out', pngPath], { timeout: 60_000 }, (err) => (err ? reject(bad(`Could not turn the drawing into a picture: ${err.message.slice(0, 200)}`)) : resolve()));
-  });
+/** Turn the checked drawing into a PNG with whatever this computer has (see rasterCommands). */
+async function rasterize(svgPath: string, pngPath: string, ffmpeg: string) {
+  const errors: string[] = [];
+  for (const c of rasterCommands(svgPath, pngPath, ffmpeg)) {
+    try {
+      await run(c.bin, c.args, { timeout: 60_000 });
+      if (existsSync(pngPath)) return;
+    } catch (e) {
+      errors.push((e as Error).message.slice(0, 160));
+    }
+  }
+  const fix = process.platform === 'darwin' ? '' : ' Install an FFmpeg build with librsvg (SVG support), or rsvg-convert.';
+  throw bad(`Could not turn the drawing into a picture.${fix} ${errors.join(' | ')}`);
+}
 
 export class SketchArtist {
   s: Studio;
@@ -152,7 +164,7 @@ export class SketchArtist {
       const src = join(dir, 'frame.svg');
       const png = join(dir, 'frame.png');
       await writeFile(src, svg);
-      await rasterize(src, png);
+      await rasterize(src, png, ffmpegBinary(this.s.config.ffprobePath));
       const asset = await this.s.assets.importLocal(projectId, png, {
         type: 'illustration',
         name: `Sketch: scene ${index + 1}`,

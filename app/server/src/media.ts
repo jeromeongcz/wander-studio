@@ -1,7 +1,8 @@
 import { execFile } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { createReadStream, existsSync } from 'node:fs';
-import { extname } from 'node:path';
+import { basename, extname } from 'node:path';
+import { ffmpegBeside } from './platform.ts';
 import { EngineError } from './engine.ts';
 
 export const IMAGE_EXT = new Set(['.png', '.jpg', '.jpeg', '.webp', '.gif', '.bmp']);
@@ -20,8 +21,7 @@ export function ffprobeBinary(override?: string): string {
 }
 
 export function ffmpegBinary(ffprobeOverride?: string): string {
-  const probe = ffprobeBinary(ffprobeOverride);
-  return probe.includes('/') ? probe.replace(/ffprobe$/, 'ffmpeg') : 'ffmpeg';
+  return ffmpegBeside(ffprobeBinary(ffprobeOverride));
 }
 
 /** Run a binary without a shell. Resolves with stdout/stderr; rejects with a short, human-readable message. */
@@ -31,7 +31,7 @@ export function run(bin: string, args: string[], opts: { timeout?: number; input
       if (err) {
         if (opts.signal?.aborted) return reject(new EngineError('CANCELLED', 'Cancelled'));
         const tail = String(stderr || err.message).trim().split('\n').slice(-4).join(' | ');
-        return reject(new EngineError('TOOL_FAILED', `${bin.split('/').pop()} failed: ${tail}`));
+        return reject(new EngineError('TOOL_FAILED', `${basename(bin)} failed: ${tail}`));
       }
       resolve({ stdout: String(stdout), stderr: String(stderr) });
     });

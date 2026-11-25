@@ -1,9 +1,9 @@
 import { execFile } from 'node:child_process';
-import { existsSync } from 'node:fs';
 import { mkdtemp, rm } from 'node:fs/promises';
-import { homedir, tmpdir } from 'node:os';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { EngineError } from '../engine.ts';
+import { findTool } from '../platform.ts';
 
 export interface ClaudeStatus {
   installed: boolean;
@@ -16,8 +16,8 @@ export interface ClaudeStatus {
 export function resolveClaudeBin(override?: string): string {
   if (override) return override;
   if (process.env.WANDER_CLAUDE_BIN) return process.env.WANDER_CLAUDE_BIN;
-  for (const p of [join(homedir(), '.local', 'bin', 'claude'), '/opt/homebrew/bin/claude', '/usr/local/bin/claude']) if (existsSync(p)) return p;
-  return 'claude';
+  // on Windows this finds claude.exe; a .cmd shim cannot be started without a shell, which is never used here
+  return findTool('claude');
 }
 
 const SIGN_IN = 'Open a terminal and run: claude auth login   (then come back and check again)';

@@ -1,3 +1,4 @@
+import { findTool } from '../platform.ts';
 import { existsSync } from 'node:fs';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -14,7 +15,7 @@ export const WHISPER_MODELS = [
 ].map((m) => ({ ...m, license: 'MIT (OpenAI Whisper weights, converted for whisper.cpp)', source: 'https://huggingface.co/ggerganov/whisper.cpp' }));
 
 export function whisperStatus(cfg?: { bin?: string; model?: string }) {
-  const bin = cfg?.bin ?? '/opt/homebrew/bin/whisper-cli';
+  const bin = cfg?.bin ?? findTool('whisper-cli');
   return {
     binary: existsSync(bin) ? bin : null,
     model: cfg?.model && existsSync(cfg.model) ? cfg.model : null,

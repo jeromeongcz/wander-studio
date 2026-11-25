@@ -6,16 +6,16 @@ A local-first studio for faceless, multilingual (English, Tagalog, Taglish) vide
 
 | Tool | Needed for | Required? |
 |---|---|---|
-| macOS | Storyboard pictures (`sips`) and the built-in voices (`say`) | Yes, for those features |
+| macOS, or Windows 10/11 | macOS is tested. **Windows support is new and has not been run on a Windows computer yet** | One of them |
 | Node.js 22 or newer | Running the app | Yes |
-| FFmpeg with libass (`ffmpeg-full`) | Captions and rendering | Yes |
+| FFmpeg with libass | Captions and rendering (on Windows it also needs librsvg, for storyboard pictures) | Yes |
 | [Claude Code](https://claude.com/claude-code), signed in | Topic research, script writing, storyboard pictures | For those features |
 | `edge-tts` | Filipino and English (Philippines) narration voices | Recommended for Tagalog and Taglish |
 | 8 GB RAM and 20 GB free disk | What `npm run preflight` checks for | Yes |
 
-Windows and Linux are not supported or tested.
+The built-in `say` voices exist only on a Mac; on Windows use Edge TTS or import your own recording. Linux is not supported or tested.
 
-## Install
+## Install on a Mac
 
 These steps assume [Homebrew](https://brew.sh) is installed.
 
@@ -59,6 +59,70 @@ npm run preflight
 
 Fix anything it marks as required.
 
+## Install on Windows
+
+Run these in **PowerShell**. Close and reopen PowerShell after step 1 so the new tools are found.
+
+**1. Install the tools**
+
+```powershell
+winget install OpenJS.NodeJS.LTS
+```
+
+```powershell
+winget install Git.Git
+```
+
+```powershell
+winget install Gyan.FFmpeg
+```
+
+```powershell
+winget install Python.Python.3.12
+```
+
+**2. Install Edge TTS** (for narration voices)
+
+```powershell
+py -m pip install --user pipx
+```
+
+```powershell
+py -m pipx ensurepath
+```
+
+Reopen PowerShell, then:
+
+```powershell
+pipx install edge-tts
+```
+
+**3. Install Claude Code** using the Windows **native installer** from [claude.com/claude-code](https://claude.com/claude-code) (the app needs `claude.exe`, not the npm version), then sign in:
+
+```powershell
+claude auth login
+```
+
+**4. Get the code and check the computer**
+
+```powershell
+git clone https://github.com/jeromeongcz/wander-studio.git
+```
+
+```powershell
+cd wander-studio
+```
+
+```powershell
+npm install
+```
+
+```powershell
+npm run preflight
+```
+
+Every required line should say `OK`, and so should **SVG support**. Then start with `npm start`.
+
 ## Run
 
 ```bash
@@ -71,6 +135,12 @@ To use another port:
 
 ```bash
 WANDER_PORT=4320 npm start
+```
+
+On Windows (PowerShell):
+
+```powershell
+$env:WANDER_PORT=4320; npm start
 ```
 
 The app only accepts connections from your own computer.
@@ -141,13 +211,22 @@ Your work in these folders is **not** stored in Git.
 | "The server is out of date" | Restart the server, then refresh the page |
 | Research or script buttons are disabled | Run `claude auth login`, then press **Check again** |
 | No Filipino voice | Install `edge-tts`, restart, and choose Edge TTS (standard macOS voices have none) |
-| Captions or rendering fail | Run `npm run preflight`; install `ffmpeg-full` |
+| Windows: pictures cannot be drawn | `npm run preflight` must show SVG support; install `Gyan.FFmpeg` (the full build) |
+| Windows: Claude Code not found | Use the native installer so `claude.exe` exists, then reopen PowerShell |
+| Caption font not found | Copy the font's `.ttf` file into `templates/fonts` |
+| Captions or rendering fail | Run `npm run preflight`; Mac: install `ffmpeg-full`; Windows: `Gyan.FFmpeg` |
 | A server error with no detail | Start with `WANDER_DEBUG=1 npm start` to see the full message |
 
 Stop whatever is using port 4317, then start again:
 
 ```bash
 lsof -ti tcp:4317 -sTCP:LISTEN | xargs kill && sleep 1 && npm start
+```
+
+On Windows (PowerShell):
+
+```powershell
+Get-NetTCPConnection -LocalPort 4317 -State Listen | ForEach-Object { Stop-Process -Id $_.OwningProcess }
 ```
 
 ## Development
@@ -160,7 +239,7 @@ npm run typecheck
 npm test
 ```
 
-The tests include a real FFmpeg render and take about a minute.
+The tests include a real FFmpeg render and take about a minute. They are written for macOS: some use Unix shell scripts and Mac voices, so expect failures on Windows.
 
 - **UI with hot reload:** run `npm run dev:server` and `npm run dev:web` in two terminals, then open <http://localhost:5173>.
 - **Sample content, kept out of your data:**
@@ -186,6 +265,7 @@ Architecture and known gaps are in `docs/TECH_BLUEPRINT.md`. Project rules for c
 
 ## Not yet verified
 
-- A setup on a fresh computer.
+- A setup on a fresh computer, and anything at all on a real Windows computer.
+- Moving your data between Windows and a Mac (stored file paths use the system's separator).
 - How natural the Tagalog and Taglish voices and scripts sound to a native speaker.
 - Whisper alignment and the Piper voice against real engines.

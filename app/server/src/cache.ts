@@ -1,5 +1,6 @@
 import { existsSync } from 'node:fs';
 import { readdir, rm, stat } from 'node:fs/promises';
+import { isInside } from './platform.ts';
 import { join, resolve } from 'node:path';
 import type { AppConfig } from './config.ts';
 
@@ -66,7 +67,7 @@ export class CacheService {
     }
     let freed = 0;
     for (const f of doomed) {
-      if (!resolve(f.path).startsWith(this.dir + '/')) continue; // defence in depth
+      if (!isInside(this.dir, f.path)) continue; // defence in depth
       await rm(f.path, { force: true });
       freed += f.bytes;
     }

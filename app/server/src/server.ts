@@ -1,5 +1,6 @@
 import { fileURLToPath } from 'node:url';
 import { createReadStream, existsSync } from 'node:fs';
+import { isInside } from './platform.ts';
 import { join, dirname, extname, normalize, resolve } from 'node:path';
 import { openDb } from './db.ts';
 import { Engine } from './engine.ts';
@@ -21,7 +22,7 @@ if (existsSync(join(dist, 'index.html'))) {
   app.get('/ui/*', async (req, reply) => {
     const rel = normalize((req.params as { '*': string })['*']);
     const file = resolve(dist, rel);
-    if (rel.startsWith('..') || !file.startsWith(resolve(dist) + '/') || !existsSync(file)) return reply.status(404).send({ error: { code: 'NOT_FOUND', message: 'Not found' } });
+    if (rel.startsWith('..') || !isInside(dist, file) || !existsSync(file)) return reply.status(404).send({ error: { code: 'NOT_FOUND', message: 'Not found' } });
     return reply.type(MIME[extname(file)] ?? 'application/octet-stream').send(createReadStream(file));
   });
 }
