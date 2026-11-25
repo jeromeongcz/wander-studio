@@ -200,16 +200,19 @@ function TimelineBuilder({ lang, format, timeline, built, stale, onBuild, onPick
   // 'folklore' is the classic effect; other values name a cinematic style
   const asValue = (style?: string) => (!style || style === 'none' ? 'none' : `style:${style}`);
   const current: string = !timeline ? 'none' : timeline.effects ? 'folklore' : asValue(timeline.look?.style);
-  // before the first build: the project's chosen style, otherwise the classic folklore style for folklore-type videos
-  const suggested = direction ? asValue(direction) : /folklore|horror|superstition|myth/i.test(project.category ?? '') ? 'folklore' : 'none';
+  // before the first build: the project's chosen style. A video that uses Cinematic Direction starts clean, because the
+  // classic effect would replace its directed camera moves; otherwise folklore-type videos suggest the classic style.
+  const suggested = project.settings.cinematic ? asValue(direction) : /folklore|horror|superstition|myth/i.test(project.category ?? '') ? 'folklore' : 'none';
+  const sceneStyles = !!timeline?.scenes.some((s: any) => s.look);
   const [picked, setPicked] = useState<string | null>(null);
   const effects = picked ?? (timeline ? current : suggested);
-  const changed = !!timeline && effects !== current;
+  const changed = !!timeline && (effects !== current || (picked === 'none' && sceneStyles));
   const apply = () => {
     if (effects === 'folklore') return onBuild('folklore');
     // nothing picked: keep whatever the timeline already has
     if (picked === null) return onBuild(timeline ? (timeline.effects ?? 'none') : 'none');
-    if (effects === 'none') return onBuild('none', direction ? { style: 'none' } : null);
+    // "Clean" must also silence a style that comes from the project direction or from the storyboard
+    if (effects === 'none') return onBuild('none', direction || sceneStyles ? { style: 'none' } : null);
     // a style that is simply the project's direction needs no override of its own
     return onBuild('none', effects === asValue(direction) ? null : { style: effects.slice(6) });
   };
@@ -243,7 +246,7 @@ function TimelineBuilder({ lang, format, timeline, built, stale, onBuild, onPick
           <option value="">Cinematic styles…</option>
           {(options.data?.styles ?? []).map((s) => <option key={s.id} value={`style:${s.id}`}>{s.label}</option>)}
         </select>
-        <span className="muted small">{styleInfo ? `${styleInfo.summary} Your camera moves and transitions stay as set.` : effects === 'folklore' ? 'Like your reference videos: hard cuts, a new framing about every 3 seconds, dark grade with grain and flicker, one big word at a time (names and numbers in red), impact hits, a low drone when there is no music, and a glitch ending.' : 'Your storyboard camera moves and transitions, with normal captions.'}</span>
+        <span className="muted small">{styleInfo ? `${styleInfo.summary} Your camera moves and transitions stay as set.` : effects === 'folklore' ? 'Like your reference videos: hard cuts, a new framing about every 3 seconds, dark grade with grain and flicker, one big word at a time (names and numbers in red), impact hits, a low drone when there is no music, and a glitch ending.' : current === 'none' && sceneStyles ? 'Your storyboard camera moves and transitions, with normal captions. Some scenes carry their own style: choose Clean and rebuild to remove it.' : 'Your storyboard camera moves and transitions, with normal captions.'}</span>
       </div>
       <ul className="tlb-parts">
         {parts.map((p) => (

@@ -5,7 +5,9 @@ import type { Movement } from '../render/camera.ts';
 import type { Camera } from '../render/motion.ts';
 import { TRANSITIONS, validateTransition } from '../render/transitions.ts';
 import type { Transition, TransitionSpec } from '../render/transitions.ts';
-import { isStyle, validateLookParams } from '../render/styles.ts';
+import { STYLES, isStyle, validateLookParams } from '../render/styles.ts';
+import { CAMERA_CHOICES, TRANSITION_CHOICES } from './direction.ts';
+import type { CinematicSettings } from './direction.ts';
 import type { LookParams, StyleId } from '../render/styles.ts';
 import type { CalibrationSample } from './estimator.ts';
 import type { ScriptContent, SceneVisual, ScriptCharacter } from './script.ts';
@@ -185,8 +187,13 @@ export function describeVisual(v: SceneVisual | undefined, cast: ScriptCharacter
   return [...parts, ...(looks.length ? [`Character looks: ${looks.join(' | ')}`] : [])].join('\n');
 }
 
-export function draftScenes(base: ScriptContent, category: string | undefined, opts: { samples: CalibrationSample[]; defaultWpm?: number; sceneSeconds?: number }): StoryboardContent {
+export function draftScenes(base: ScriptContent, category: string | undefined, opts: { samples: CalibrationSample[]; defaultWpm?: number; sceneSeconds?: number; direction?: CinematicSettings }): StoryboardContent {
   const { profile } = profileFor(category);
+  // a chosen Cinematic Direction fills in scenes the writer gave no instructions for; without one nothing changes
+  const chosen = opts.direction ?? base.cinematic_direction;
+  const style = chosen && chosen.style !== 'automatic' ? STYLES[chosen.style] : undefined;
+  const moves = chosen && CAMERA_CHOICES[chosen.camera].prefer.length ? CAMERA_CHOICES[chosen.camera].prefer : chosen?.camera === 'automatic' ? style?.cameras : undefined;
+  const changes = chosen && TRANSITION_CHOICES[chosen.transition].prefer.length ? TRANSITION_CHOICES[chosen.transition].prefer : chosen?.transition === 'automatic' ? style?.transitions : undefined;
   const goal = opts.sceneSeconds ?? 4;
   const scenes: Scene[] = [];
   let lastMove: Movement | null = null;
@@ -209,12 +216,17 @@ export function draftScenes(base: ScriptContent, category: string | undefined, o
     if (cur) chunks.push(cur);
     if (brief) chunks.splice(0, chunks.length, ...(sec.text.trim() ? [sec.text.trim()] : []));
 
-    for (const text of chunks) {
+    for (const [part, text] of chunks.entries()) {
       const idx = scenes.length;
       const asset: AssetType = sec.kind === 'cta' ? 'text_overlay' : sec.kind === 'hook' ? profile.assets[0] : profile.assets[idx % profile.assets.length];
-      const options = profile.cameras.filter((m) => m !== lastMove);
-      const movement: Movement = asset === 'text_overlay' ? 'static' : options[idx % options.length] ?? profile.cameras[0];
+      const pool = moves ?? profile.cameras;
+      const options = pool.filter((m) => m !== lastMove);
+      const directed = sec.cinematic;
+      const movement: Movement = directed?.camera?.movement ?? (asset === 'text_overlay' ? 'static' : options[idx % options.length] ?? pool[0]);
       lastMove = movement;
+      const arrive = part === 0 ? directed?.transition : undefined;
+      const origin: NonNullable<Scene['origin']> = { ...(directed?.camera ? { camera: 'ai' } : {}), ...(arrive && idx ? { transition: 'ai' } : {}), ...(directed?.look ? { look: 'ai' } : {}) };
+      const { type: arriveType, ...arriveSettings } = arrive ?? { type: undefined };
       flip++;
       const dur = Math.max(1.5, estimate({ sections: [{ text }], lang: base.lang, samples: opts.samples, defaultWpm: opts.defaultWpm }).seconds);
       const words = text.split(/\s+/).slice(0, 5).join(' ');
@@ -226,12 +238,15 @@ export function draftScenes(base: ScriptContent, category: string | undefined, o
         visual_description: brief || `${profile.hint}: ${text}`,
         visual_style: profile.styles[idx % profile.styles.length],
         asset_type: asset,
-        camera: {
+        camera: directed?.camera ? { ...directed.camera } : {
           movement,
           direction: movement === 'pan' ? (flip % 2 ? 'left_to_right' : 'right_to_left') : movement === 'zoom' ? (sec.kind === 'hook' || flip % 2 ? 'in' : 'out') : movement === 'ken_burns' ? 'in' : undefined,
           intensity: sec.kind === 'hook' ? 'medium' : 'subtle',
         },
-        transition_in: idx === 0 ? 'cut' : profile.transition,
+        transition_in: idx === 0 ? 'cut' : arriveType ?? changes?.[(idx - 1) % changes.length] ?? profile.transition,
+        ...(idx && arriveType && Object.keys(arriveSettings).length ? { transition_settings: arriveSettings } : {}),
+        ...(directed?.look ? { look: { ...directed.look } } : {}),
+        ...(Object.keys(origin).length ? { origin } : {}),
         sfx_cues: [],
         draft: true,
       });

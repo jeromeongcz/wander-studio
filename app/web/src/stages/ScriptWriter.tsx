@@ -6,6 +6,8 @@ import { useAsync } from '../hooks';
 import { Btn, Card, CopyBtn, Field, Icon, Loading, Modal, Pill, useToast } from '../ui';
 import { FORMAT_LABEL, langName } from '../types';
 import { startTask, useTask } from '../progress';
+import { CinematicDirectionFields, NO_CHOICE, useCinematic } from './Direction';
+import type { CinematicChoice } from './Direction';
 
 const LENGTHS = [15, 30, 45, 60, 90, 180];
 const SHAPES: Record<string, { w: number; h: number; use: string }> = {
@@ -31,6 +33,9 @@ export function ScriptWriterCard({ artifactId, initialSeconds, initialScenes, ha
   const [picked, setPicked] = useState<number | null>(initialScenes ?? null);
   const scenes = picked ?? recommended(seconds);
   const [notes, setNotes] = useState('');
+  const options = useCinematic();
+  const [direction, setDirection] = useState<CinematicChoice>({ ...NO_CHOICE, ...project.settings.cinematic });
+  const saveDirection = async (v: CinematicChoice) => { await api.put(`/projects/${project.id}/cinematic`, v); reload(); };
   const writing = !!useTask(artifactId);
   const [manual, setManual] = useState(false);
   const formats = project.settings.formats ?? ['vertical_9x16'];
@@ -48,14 +53,16 @@ export function ScriptWriterCard({ artifactId, initialSeconds, initialScenes, ha
 
   const generate = async () => {
     if (hasText && !confirm('Replace the current script with a new one?\n\nThe current version stays in History.')) return;
-    if (!sessionStorage.getItem('wander-cc-script-ok')) {
-      if (!confirm('This asks Claude Code on this computer to write the script, using your Claude plan.\n\nIt gets no tools. Only the topic, its facts, the category, length, format, language and your notes are sent.\n\nContinue?')) return;
-      sessionStorage.setItem('wander-cc-script-ok', '1');
+    if (!sessionStorage.getItem('wander-cc-script-ok-2')) {
+      if (!confirm('This asks Claude Code on this computer to write the script, using your Claude plan.\n\nIt gets no tools. Only the topic, its facts, the category, length, format, language, your cinematic direction (including any custom text) and your notes are sent.\n\nContinue?')) return;
+      sessionStorage.setItem('wander-cc-script-ok-2', '1');
     }
+    await saveDirection(direction);
     const done = startTask(artifactId, 'Writing the script…', `${scenes} scenes for a ${lengthLabel(seconds)} video. This can take a few minutes.`);
     try {
       const r: any = await withReopen((reopen) => api.post(`/artifacts/${artifactId}/script/generate`, { seconds, scenes, notes, reopen }));
       push(r.sections === r.requested ? 'ok' : 'warn', r.sections === r.requested ? `Script written: ${r.sections} scenes. Read it, edit it, then submit it for review.` : `Script written with ${r.sections} scenes, not the ${r.requested} you asked for. Add or remove scenes, or rewrite.`);
+      reportDirections(push, r);
       onWritten();
     } finally {
       done();
@@ -115,20 +122,31 @@ export function ScriptWriterCard({ artifactId, initialSeconds, initialScenes, ha
           <p className="hint">Pick one or more. Each gets its own composition and render.</p>
         </fieldset>
 
-        <Field label="4. Anything else for the writer? (optional)"><input value={notes} onChange={(e) => setNotes(e.target.value)} maxLength={600} placeholder="e.g. mysterious tone, narrator speaks to the viewer, painterly illustration style" /></Field>
+        <fieldset className="choices">
+          <legend>4. Cinematic Direction</legend>
+          {options.data ? <CinematicDirectionFields opts={options.data} value={direction} onChange={setDirection} onDone={(v) => saveDirection(v).catch(fail)} /> : options.error ? <div className="notice bad">{options.error.message}</div> : <Loading />}
+        </fieldset>
+
+        <Field label="5. Anything else for the writer? (optional)"><input value={notes} onChange={(e) => setNotes(e.target.value)} maxLength={600} placeholder="e.g. mysterious tone, narrator speaks to the viewer, painterly illustration style" /></Field>
 
         {!approved && <div className="notice warn">Approve the topic first (step 1). The script is written only from the approved research.</div>}
         {status.data && !status.data.loggedIn && <div className="notice warn"><strong>{status.data.detail}.</strong> {status.data.fix}</div>}
         {status.error && <div className="notice bad">Could not check Claude Code. Restart the server (<code>npm start</code>) and refresh.</div>}
         <div className="row gap wrap">
           <Btn kind="primary" disabled={!approved || !valid || writing || !status.data?.loggedIn} busy={writing} onClick={generate}><Icon name="spark" small /> {writing ? 'Writing the script…' : hasText ? 'Rewrite script' : 'Generate script'}</Btn>
-          <Btn disabled={!approved || !valid || writing} onClick={() => setManual(true)}>Use a prompt instead…</Btn>
+          <Btn disabled={!approved || !valid || writing} onClick={async () => { await saveDirection(direction); setManual(true); }}>Use a prompt instead…</Btn>
           <span className="muted small">{writing ? 'This can take a few minutes. Keep this page open.' : 'You get narration plus setting, characters, action, shot, mood and props for every scene.'}</span>
         </div>
       </div>
       {manual && <ManualScript artifactId={artifactId} seconds={seconds} scenes={scenes} notes={notes} onClose={() => setManual(false)} onDone={() => { setManual(false); onWritten(); }} />}
     </Card>
   );
+}
+
+/** Say plainly which of the writer's instructions could not be used. */
+function reportDirections(push: (kind: 'ok' | 'warn', text: string, list?: string[]) => void, r: { sections: number; directed?: number; dropped?: string[] }) {
+  if ((r.directed ?? 0) < r.sections) push('warn', `${r.sections - (r.directed ?? 0)} scene(s) came without camera and style directions; automatic ones will be used.`);
+  if (r.dropped?.length) push('warn', 'Some directions were not understood and were left out', r.dropped);
 }
 
 function ManualScript({ artifactId, seconds, scenes, notes, onClose, onDone }: { artifactId: string; seconds: number; scenes: number; notes: string; onClose: () => void; onDone: () => void }) {
@@ -142,7 +160,7 @@ function ManualScript({ artifactId, seconds, scenes, notes, onClose, onDone }: {
         {prompt.error ? <div className="notice bad">{prompt.error.message}</div> : !prompt.data ? <Loading /> : <><div className="row gap"><CopyBtn text={prompt.data.prompt} label="Copy prompt" /></div><pre>{prompt.data.prompt}</pre></>}
         <Field label="Paste the answer here" wide><textarea style={{ minHeight: 160 }} value={text} onChange={(e) => setText(e.target.value)} placeholder='{"title":"","characters":[],"sections":[]}' /></Field>
         <div className="row gap">
-          <Btn kind="primary" disabled={!text.trim()} onClick={async () => { const r: any = await withReopen((reopen) => api.post(`/artifacts/${artifactId}/script/import`, { text, seconds, scenes, reopen })); push('ok', `Script imported: ${r.sections} scenes`); onDone(); }}>Import script</Btn>
+          <Btn kind="primary" disabled={!text.trim()} onClick={async () => { const r: any = await withReopen((reopen) => api.post(`/artifacts/${artifactId}/script/import`, { text, seconds, scenes, reopen })); push('ok', `Script imported: ${r.sections} scenes`); reportDirections(push, r); onDone(); }}>Import script</Btn>
           <Btn kind="ghost" onClick={onClose}>Cancel</Btn>
         </div>
       </div>

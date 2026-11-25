@@ -1,6 +1,6 @@
 # Cinematic expansion: implementation plan
 
-Status: **approved 2026-11-26 with the recommended answers A to D; building one phase at a time**. Phases 0 and 1 are done (section 8). Baseline on 2026-11-26: `npm test` 144 passed, 1 skipped, 0 failed.
+Status: **approved 2026-11-26 with the recommended answers A to D; building one phase at a time**. Phases 0 to 6 are done (section 8); phase 7 has not been run. Baseline on 2026-11-26: `npm test` 144 passed, 1 skipped, 0 failed.
 
 ## 1. How it works today
 
@@ -137,4 +137,23 @@ Notes for Phase 6:
 **Phase 1 (done).** `render/resolve.ts` holds precedence and validation. Compose overrides for camera and transition (type and duration) work through `PUT /artifacts/:id/scenes/:sceneId/override` and `PUT /artifacts/:id/override-all`; there are no screen controls until Phase 5. The server records who last set a storyboard camera or transition (`origin`). Only values today's renderer can execute are accepted: style, look, direction-of-transition, easing and the project selections are added with the phases that implement them. In the classic folklore style an overridden scene keeps the chosen camera and transition.
 
 Fixed on the way: a caption position change or reset reached the rendered video only after one more rebuild. A composition built before this fix can hold such a leftover position until it is rebuilt.
+
+**Phase 2 (done).** `render/camera.ts`: 16 new movements, easing and settings. The five original movements without new settings render through the old code.
+
+**Phase 3 (done).** `render/transitions.ts` and `render/compose.ts`: 15 new transitions. Cut is joined end to end; against the old renderer its frame timing and brightness are identical, while videos made only of cuts no longer pass through a 4:4:4 colour conversion, so their colour differs slightly.
+
+**Phase 4 (done).** `render/styles.ts`: nine styles plus Custom, generated effects and atmosphere. **Smoke is left out**: the generated version looked like a pattern. Style camera, transition, pacing and audio preferences guide the writer and the automatic draft; they do not change a storyboard at render time. Only drone and wind are synthesized.
+
+**Phase 5 (done).** Compose & Render: per-scene and video-wide camera, transition and style, source of each value, rendered scene preview, copy to other languages and formats. The in-browser player only roughly imitates the new moves and styles.
+
+**Phase 6 (done).** Cinematic Direction in the Script step (`studios/direction.ts`), saved in the project settings and in each generated script; per-section instructions beside the narration; copied to new storyboards, or applied to an existing one without touching the person's own settings. One real Claude run (a made-up topic, 7 scenes) returned instructions for every scene.
+
+Not done or not verified:
+
+- Phase 7: the requested set of test videos was not rendered as one run.
+- Generated drone, wind and whoosh sounds have not been listened to.
+- Atmosphere layers were judged from still frames of two pictures, not by watching full videos.
+- Render time was not measured on a full-length video. Atmosphere layers and grain made single scene clips several times slower.
+- Folklore cultural guidance is only in the writer's prompt; it needs human review.
+- Subject tracking does not exist; "focal point" is set by hand or by the writer.
 

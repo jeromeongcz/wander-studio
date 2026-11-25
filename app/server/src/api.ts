@@ -15,6 +15,7 @@ import { estimate, isPreset, PRESETS } from './studios/estimator.ts';
 import { newResearchContent } from './studios/research.ts';
 import { listCategories, profileFor } from './studios/storyboard.ts';
 import { cinematicOptions } from './render/options.ts';
+import { cinematicChoices } from './studios/direction.ts';
 import { I2V_PROVIDERS } from './providers/i2v.ts';
 
 const STATUS: Record<string, number> = {
@@ -407,7 +408,9 @@ export function buildApi(engine: Engine, config: Partial<AppConfig> = {}): Fasti
     const b = body(req);
     return studio.setSceneOverride(id, sceneId, { crop: b.crop, caption_y_pct: b.caption_y_pct, camera: b.camera, transition: b.transition, look: b.look }, { reopen: b.reopen === true });
   });
-  app.get('/cinematic/options', async () => cinematicOptions());
+  app.get('/cinematic/options', async () => ({ ...cinematicOptions(), direction: cinematicChoices() }));
+  app.put('/projects/:id/cinematic', async (req) => studio.setCinematic((req.params as { id: string }).id, body(req)));
+  app.post('/artifacts/:id/apply-directions', async (req) => studio.applyDirections((req.params as { id: string }).id, { reopen: body(req).reopen === true }));
   app.get('/artifacts/:id/directions', async (req) => studio.render.directions((req.params as { id: string }).id));
   app.get('/artifacts/:id/scenes/:sceneId/preview', async (req, reply) => {
     const { id, sceneId } = req.params as { id: string; sceneId: string };

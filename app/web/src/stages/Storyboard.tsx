@@ -1,7 +1,7 @@
-import { useCinematic } from './Direction';
+import { directionSummary, useCinematic, words } from './Direction';
 import { useEffect, useState } from 'react';
 import { api } from '../api';
-import { ArtifactBar, saveArtifact } from '../actions';
+import { ArtifactBar, saveArtifact, withReopen } from '../actions';
 import { useProject } from '../pages/Project';
 import { useAsync, useInterval } from '../hooks';
 import { Btn, Card, Empty, Field, Icon, Loading, Modal, Pill, StateBadge, fmtSec, useToast } from '../ui';
@@ -169,6 +169,12 @@ export function StoryboardStage() {
           </div>
           <Btn kind="primary" disabled={!ready || !!drawing || !total || have === total} onClick={() => generate()}><Icon name="spark" small /> {drawing ? 'Drawing…' : have === total && total ? 'All drawn' : have ? `Generate ${total - have} remaining` : `Generate all ${total}`}</Btn>
           {c && <>
+            {baseDoc.data?.content?.sections?.some((x: any) => x.cinematic) && <Btn disabled={dirty || !!drawing} title={dirty ? 'Save your changes first' : "Use the script's camera, transition and style directions on these scenes"} onClick={async () => {
+              if (!confirm("Use the script's camera, transition and style directions on this storyboard?\n\nScenes you set yourself are kept. Changing the storyboard means scene visuals and videos need your approval again. To change only one finished video, use Compose & render instead.")) return;
+              const r: any = await withReopen((reopen) => api.post(`/artifacts/${art.id}/apply-directions`, { reopen }));
+              push('ok', r.changed ? `Directions applied${r.kept ? `; ${r.kept} of your own settings kept` : ''}` : 'The storyboard already follows the script directions');
+              done();
+            }}>Apply script directions</Btn>}
             <span className="vsep" role="separator" aria-orientation="vertical" />
             <Btn kind="primary" disabled={!dirty} title={dirty ? 'Save your changes' : 'No changes to save'} onClick={async () => { const r = await saveArtifact(art.id, c); push('ok', r.changed ? 'Storyboard saved' : 'No changes'); done(); }}>Save storyboard</Btn>
           </>}
@@ -221,6 +227,7 @@ export function StoryboardStage() {
                 {s.segment_text && <p className="quote">“{s.segment_text}”</p>}
                 <div className="scene-text">
                 <p className="visual-text">{s.visual_description}</p>
+                {s.look && <p className="visual-text">{directionSummary({ look: s.look })}</p>}
                 <details>
                 <summary className="muted small">Edit details</summary>
                 <Field label="What the viewer sees" wide><textarea style={{ marginTop: 6 }} value={s.visual_description} onChange={(e) => setScene(i, { visual_description: e.target.value, draft: false })} /></Field>
@@ -239,7 +246,7 @@ export function StoryboardStage() {
                 </div>
                 {more(i)}
                 <div className="row gap wrap scene-actions">
-                  <Pill>{fmtSec(s.target_duration)}</Pill><Pill>{s.camera.movement.replace('_', ' ')}</Pill><Pill>{(s.transition_in ?? 'cut')} in</Pill>
+                  <Pill>{fmtSec(s.target_duration)}</Pill><Pill>{words(s.camera.movement)}</Pill><Pill>{words(s.transition_in ?? 'cut')} in</Pill>
                   {sketches.data?.[i] && <StateBadge state={sketches.data[i].state} />}
                   <span className="grow" />
                 </div>

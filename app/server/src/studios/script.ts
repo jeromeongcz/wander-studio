@@ -1,6 +1,8 @@
 import { EngineError } from '../engine.ts';
 import { estimate, isPreset, PRESETS } from './estimator.ts';
 import type { CalibrationSample, Estimate, PresetId } from './estimator.ts';
+import { validateCinematic, validateSceneCinematic } from './direction.ts';
+import type { CinematicSettings, SceneCinematic } from './direction.ts';
 
 export const SECTION_KINDS = ['hook', 'intro', 'main', 'payoff', 'cta', 'other'] as const;
 export type SectionKind = (typeof SECTION_KINDS)[number];
@@ -12,6 +14,7 @@ export interface ScriptSection {
   delivery_note?: string;
   tts_text?: string; // optional phonetic respelling for TTS, never shown in captions
   visual?: SceneVisual; // what the viewer sees while this narration plays; never narrated or captioned
+  cinematic?: SceneCinematic; // camera, transition and look instructions; never narrated or captioned
 }
 /** The visual brief for one beat. Storyboard scenes are built from it. */
 export const VISUAL_FIELDS = ['setting', 'characters', 'action', 'shot', 'mood', 'props'] as const;
@@ -31,6 +34,7 @@ export interface ScriptContent {
   source_version_id?: string; // base-script version this adaptation was made from
   adaptation_notes?: string;
   characters?: ScriptCharacter[];
+  cinematic_direction?: CinematicSettings; // the Cinematic Direction this script was written with
 }
 
 const bad = (message: string, details?: unknown) => new EngineError('VALIDATION', message, details);
@@ -51,7 +55,9 @@ export function validateScriptShape(content: unknown): ScriptContent {
     ids.add(s.id);
     for (const k of ['delivery_note', 'tts_text'] as const) if (s[k] !== undefined && typeof s[k] !== 'string') throw bad(`${k} must be a string`);
     if (s.visual !== undefined && !(isObj(s.visual) && Object.entries(s.visual).every(([k, v]) => (VISUAL_FIELDS as readonly string[]).includes(k) && typeof v === 'string'))) throw bad(`Section ${s.id} has an invalid visual description`);
+    if (s.cinematic !== undefined) validateSceneCinematic(s.cinematic, `Section ${s.id}`);
   }
+  if (content.cinematic_direction !== undefined) validateCinematic(content.cinematic_direction);
   if (content.characters !== undefined && !(Array.isArray(content.characters) && content.characters.every((c) => isObj(c) && typeof c.name === 'string' && typeof c.description === 'string'))) throw bad('Invalid characters');
   for (const k of ['source_version_id', 'adaptation_notes'] as const) if (content[k] !== undefined && typeof content[k] !== 'string') throw bad(`${k} must be a string`);
   if (content.hook_variants !== undefined) {

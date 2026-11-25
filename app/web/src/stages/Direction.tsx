@@ -18,6 +18,7 @@ export interface CinematicOptions {
   gradings: string[];
   captionLooks: string[];
   ambiences: string[];
+  direction: Record<'camera' | 'style' | 'transition', { id: string; label: string; guide: string }[]>;
 }
 export const useCinematic = () => useAsync(() => api.get<CinematicOptions>('/cinematic/options'), []);
 
@@ -298,4 +299,47 @@ export function DirectionCard({ compId, version, onChanged }: { compId: string; 
       </div>
     </Card>
   );
+}
+
+export interface CinematicChoice { camera: string; style: string; transition: string; custom_text: string }
+export const NO_CHOICE: CinematicChoice = { camera: 'automatic', style: 'automatic', transition: 'automatic', custom_text: '' };
+
+/** The Cinematic Direction fields of the Script step. */
+export function CinematicDirectionFields({ opts, value, onChange, onDone }: { opts: CinematicOptions; value: CinematicChoice; onChange: (v: CinematicChoice) => void; onDone: (v: CinematicChoice) => void }) {
+  const pick = (key: 'camera' | 'style' | 'transition', label: string) => (
+    <Field label={label} hint={opts.direction[key].find((o) => o.id === value[key])?.guide}>
+      <select value={value[key]} onChange={(e) => { const next = { ...value, [key]: e.target.value }; onChange(next); onDone(next); }}>
+        {opts.direction[key].map((o) => <option key={o.id} value={o.id}>{o.label}</option>)}
+      </select>
+    </Field>
+  );
+  const custom = [value.camera, value.style, value.transition].includes('custom');
+  return (
+    <>
+      <div className="form">
+        {pick('camera', 'Cinematic camera movement')}
+        {pick('style', 'Cinematic visual style')}
+        {pick('transition', 'Scene transition style')}
+      </div>
+      {(custom || value.custom_text) && (
+        <Field label="Custom direction (optional)" wide hint="For example: slow establishing shots, close-ups on emotional moments, subtle transitions except during reveals.">
+          <textarea rows={3} maxLength={600} value={value.custom_text} onChange={(e) => onChange({ ...value, custom_text: e.target.value })} onBlur={() => onDone(value)} />
+        </Field>
+      )}
+      <p className="hint">Saved with this video. It guides the next script and its scene directions; nothing already written or approved changes. You can override everything in Compose & render.</p>
+    </>
+  );
+}
+
+/** One line describing the instructions the writer gave a section or a storyboard scene. */
+export function directionSummary(c: { camera?: any; transition?: any; look?: any } | undefined): string {
+  if (!c) return '';
+  const look = c.look ?? {};
+  return [
+    c.camera && `Camera: ${words(c.camera.movement)}${c.camera.intensity ? ` (${c.camera.intensity})` : ''}`,
+    c.transition && `Transition: ${words(c.transition.type)}`,
+    look.style && look.style !== 'none' && `Style: ${words(look.style)}`,
+    ...['shot', 'composition', 'lighting', 'color', 'atmosphere'].map((k) => look[k] && `${k[0].toUpperCase()}${k.slice(1)}: ${look[k]}`),
+    look.params && `Effects: ${Object.keys(look.params).map(words).join(', ')}`,
+  ].filter(Boolean).join(' · ');
 }

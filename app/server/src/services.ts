@@ -14,6 +14,7 @@ import { validateStoryboardShape, storyboardReadiness, draftScenes, buildStorybo
 import type { Scene, StoryboardContent } from './studios/storyboard.ts';
 import { validateCameraOverride, validateTransitionOverride } from './render/resolve.ts';
 import { validateLook } from './render/styles.ts';
+import { validateCinematic } from './studios/direction.ts';
 import { addScene } from './pipeline.ts';
 import { AssetService } from './assets.ts';
 import { resolveConfig } from './config.ts';
@@ -460,8 +461,55 @@ export class Studio {
     if (a.current_version_id) throw new EngineError('VALIDATION', 'This storyboard already has content; edit it instead of reseeding');
     if (base.state !== 'approved' || !b) throw new EngineError('UNMET_DEPENDENCY', 'Approve the base script before generating a storyboard');
     const category = this.engine.getProject(a.project_id).category ?? undefined;
-    const draft = draftScenes(b, category, { samples: this.samples(b.lang), defaultWpm: this.defaultWpm(b.lang), sceneSeconds });
+    const saved = this.engine.getProject(a.project_id).settings.cinematic;
+    const draft = draftScenes(b, category, { samples: this.samples(b.lang), defaultWpm: this.defaultWpm(b.lang), sceneSeconds, direction: saved ? validateCinematic(saved) : undefined });
     return this.save(storyboardId, draft, { actor: 'system' });
+  }
+
+  /** The Cinematic Direction for future script and scene generation. Saving it changes no content and no approval. */
+  setCinematic(projectId: string, choice: unknown) {
+    const cinematic = validateCinematic(choice);
+    this.engine.tx(() => {
+      const p = this.engine.getProject(projectId);
+      this.engine.db.prepare('UPDATE projects SET settings_json = ? WHERE id = ?').run(JSON.stringify({ ...p.settings, cinematic }), projectId);
+    });
+    return cinematic;
+  }
+
+  /**
+   * Copy the script's camera, transition and look instructions onto an existing storyboard. Descriptions, pictures'
+   * links and anything the person set themselves stay as they are.
+   */
+  applyDirections(storyboardId: string, opts: { reopen?: boolean } = {}) {
+    const a = this.engine.get(storyboardId);
+    const { content: base } = this.storyboardBase(a);
+    const sb = this.engine.getContent(storyboardId) as StoryboardContent | null;
+    if (!sb) throw new EngineError('NO_VERSION', 'This storyboard has no content yet');
+    const sections = new Map((base?.sections ?? []).map((s) => [s.id, s]));
+    if (![...sections.values()].some((s) => s.cinematic)) throw new EngineError('VALIDATION', 'The base script has no cinematic instructions. Write the script again, or set directions in Compose & render.');
+    const next = structuredClone(sb);
+    const started = new Set<string>();
+    let kept = 0;
+    next.scenes.forEach((scene, i) => {
+      const from = sections.get(scene.script_segment_id)?.cinematic;
+      const first = !started.has(scene.script_segment_id);
+      started.add(scene.script_segment_id);
+      if (!from) return;
+      // theirs: marked as edited by the person, or an older value on a scene they have worked on
+      const theirs = (field: 'camera' | 'transition' | 'look', present: boolean) => (scene.origin?.[field] ? scene.origin[field] === 'user' : present && !scene.draft);
+      if (from.camera) { if (theirs('camera', true)) kept++; else scene.camera = { ...from.camera }; }
+      if (from.transition && first && i > 0) {
+        if (theirs('transition', !!scene.transition_in)) kept++;
+        else {
+          const { type, ...settings } = from.transition;
+          scene.transition_in = type;
+          if (Object.keys(settings).length) scene.transition_settings = settings;
+          else delete scene.transition_settings;
+        }
+      }
+      if (from.look) { if (theirs('look', !!scene.look)) kept++; else scene.look = { ...from.look }; }
+    });
+    return { ...this.save(storyboardId, next, { actor: 'ai', reopen: opts.reopen }), kept };
   }
 
   storyboardPrompt(storyboardId: string, notes?: string): string {
