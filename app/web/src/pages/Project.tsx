@@ -5,6 +5,7 @@ import { ProgressFooter, useTask } from '../progress';
 import { Btn, Card, ErrorBox, Icon, Loading, Modal, Pill, StateBadge, useToast } from '../ui';
 import type { Artifact, Project, State } from '../types';
 import { STEPS, aggregate, analyze, stepOfPart } from '../pipeline';
+import { langName } from '../types';
 import type { StepInfo } from '../pipeline';
 import { Stepper } from '../Stepper';
 import { ProjectDetailsEditor } from '../stages/shared';
@@ -63,8 +64,25 @@ function LiveFooter({ projectId, scriptId, reload, children }: { projectId: stri
 }
 
 /** The footer of every step: what is done, what unlocks the next step, and (for the topic) the explicit approval. */
-function StepFooter({ info, next, projectId, reload }: { info: StepInfo; next?: StepInfo; projectId: string; reload: () => void }) {
-  const { find } = useProject();
+/** The part of a step that comes next once the one on screen is approved (for example Languages after the base script). */
+function nextPartOf(info: StepInfo, partId: string) {
+  const approved = (p: StepInfo['step']['parts'][number]) => aggregate(info.artifacts.filter((a) => p.kinds.includes(a.kind))) === 'approved';
+  const here = info.step.parts.find((p) => p.id === partId);
+  if (!here || !approved(here)) return undefined;
+  const part = info.step.parts.find((p) => !approved(p));
+  return part && { part, from: here };
+}
+const PART_HINT: Record<string, (languages: string) => string> = {
+  script: () => 'write and approve the base script',
+  localize: (l) => `create and approve the ${l} version`,
+  storyboard: () => 'approve the storyboard',
+  visuals: () => 'give every scene an approved visual',
+  audio: (l) => `approve the ${l} narration`,
+  captions: (l) => `check and approve the ${l} captions`,
+};
+
+function StepFooter({ info, next, partId, projectId, reload }: { info: StepInfo; next?: StepInfo; partId: string; projectId: string; reload: () => void }) {
+  const { find, project } = useProject();
   const { push } = useToast();
   const [confirm, setConfirm] = useState(false);
   const research = find('research');
@@ -102,10 +120,25 @@ function StepFooter({ info, next, projectId, reload }: { info: StepInfo; next?: 
       </>
     );
   }
+  const onward = nextPartOf(info, partId);
+  if (onward) {
+    const langs = project.languages.map(langName).join(' and ');
+    return (
+      <div className="stepfoot ready">
+        <Icon name="check" />
+        <span className="grow"><strong>{onward.from.label} approved. Next: {onward.part.label}.</strong> {PART_HINT[onward.part.id] ? `To finish ${info.step.label}, ${PART_HINT[onward.part.id](langs)}.` : ''}</span>
+        <Btn kind="primary" onClick={() => { location.hash = `#/p/${projectId}/${onward.part.id}`; window.scrollTo({ top: 0 }); }}>Continue to {onward.part.label} <Icon name="arrow" small /></Btn>
+      </div>
+    );
+  }
   return (
     <div className="stepfoot">
       <Icon name="lock" />
-      <span className="grow">{info.attention ? <>Something here needs revision. </> : null}Approve everything in <strong>{info.step.label}</strong>{next ? <> to unlock <strong>{next.step.label}</strong></> : null}. Only you can approve.</span>
+      <span className="grow">{partId === 'localize' ? (
+        info.artifacts.some((x) => x.kind === 'script_lang' && !x.current_version_id)
+          ? <>Press <strong>Create draft from base script</strong> above, then submit and approve it to unlock <strong>{next?.step.label}</strong>.</>
+          : <>Submit and approve the <strong>{project.languages.map(langName).join(' and ')}</strong> script to unlock <strong>{next?.step.label}</strong>.</>
+      ) : <>{info.attention ? <>Something here needs revision. </> : null}Approve everything in <strong>{info.step.label}</strong>{next ? <> to unlock <strong>{next.step.label}</strong></> : null}. Only you can approve.</>}</span>
     </div>
   );
 }
@@ -183,7 +216,7 @@ export function ProjectPage({ id, stage }: { id: string; stage: string }) {
               <div className="tabs" role="tablist">
                 {info.step.parts.map((x) => {
                   const st = aggregate(info.artifacts.filter((a) => x.kinds.includes(a.kind)));
-                  return <button key={x.id} role="tab" aria-selected={x.id === part.id} className={x.id === part.id ? 'on' : ''} onClick={() => { location.hash = `#/p/${id}/${x.id}`; }}>{x.label}{st === 'approved' && <> <Icon name="check" small /></>}</button>;
+                  return <button key={x.id} role="tab" aria-selected={x.id === part.id} className={x.id === part.id ? 'on' : ''} onClick={() => { location.hash = `#/p/${id}/${x.id}`; }}>{x.label}{st === 'approved' && <> <Icon name="check" small /></>}{nextPartOf(info, part.id)?.part.id === x.id && <span className="tab-next">Next</span>}</button>;
                 })}
               </div>
             )}
@@ -208,7 +241,7 @@ export function ProjectPage({ id, stage }: { id: string; stage: string }) {
                 {part.id === 'compose' && <ComposeStage />}
                 {part.id === 'publish' && <PublishStage />}
                 <LiveFooter projectId={id} scriptId={ctx.find('script_base')?.id} reload={p.reload}>
-                  <StepFooter info={info} next={next} projectId={id} reload={p.reload} />
+                  <StepFooter info={info} next={next} partId={part.id} projectId={id} reload={p.reload} />
                 </LiveFooter>
               </>
             )}

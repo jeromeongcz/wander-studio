@@ -265,3 +265,4 @@ textarea.vis { min-height: 0; field-sizing: content; }
 .rv-actions { flex-direction: row-reverse; align-items: center; flex-wrap: wrap; gap: 6px; }
 .rv-actions > .btn-primary { min-width: 0; min-height: 36px; padding: 7px 18px; font-size: 13.5px; }
 @media (max-width: 760px) { .rv-actions { flex-direction: column; align-items: stretch; } .rv-actions > .btn-primary { min-height: 44px; } }
+.tab-next { margin-left: 8px; font-size: 10.5px; font-weight: 800; text-transform: uppercase; letter-spacing: .05em; padding: 2px 8px; border-radius: 99px; background: var(--accent); color: #fff; }
