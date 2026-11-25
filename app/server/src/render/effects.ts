@@ -25,7 +25,12 @@ export function folkloreCamera(index: number, total: number): Camera {
 
 export function applyEffects(tl: Timeline, style: EffectStyle | undefined): Timeline {
   if (!style) return tl;
-  const scenes: TimelineScene[] = tl.scenes.map((s, i) => ({ ...s, camera: folkloreCamera(i, tl.scenes.length), transition_in: { type: 'cut', duration: 0 } }));
+  // the style sets camera and cuts, except where the person overrode them in Compose & Render
+  const scenes: TimelineScene[] = tl.scenes.map((s, i) => ({
+    ...s,
+    camera: s.sources?.camera ? s.camera : folkloreCamera(i, tl.scenes.length),
+    transition_in: s.sources?.transition ? s.transition_in : { type: 'cut', duration: 0 },
+  }));
   return { ...tl, effects: style, scenes, captions: { ...tl.captions, mode: 'word' } };
 }
 

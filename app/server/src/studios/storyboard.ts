@@ -24,6 +24,8 @@ export type Movement = (typeof MOVEMENTS)[number];
 export const TRANSITIONS = ['cut', 'fade', 'dissolve', 'slide', 'zoom', 'wipe'] as const;
 export type Transition = (typeof TRANSITIONS)[number];
 export const INTENSITIES = ['subtle', 'medium', 'strong'] as const;
+export const ORIGINS = ['ai', 'draft', 'user'] as const;
+export type Origin = (typeof ORIGINS)[number];
 
 export interface Scene {
   scene_id?: string; // assigned by the server on first save; immutable afterwards
@@ -41,6 +43,7 @@ export interface Scene {
   sfx_cues?: string[];
   notes?: string;
   draft?: boolean; // true for auto-generated skeletons that still need a creative pass
+  origin?: { camera?: Origin; transition?: Origin }; // who last set these; kept by the server
 }
 export interface StoryboardContent {
   category?: string;
@@ -105,6 +108,7 @@ export function validateStoryboardShape(content: unknown): StoryboardContent {
     for (const k of ['transition_in', 'transition_out'] as const) {
       if (s[k] !== undefined && !TRANSITIONS.includes(s[k] as Transition)) throw bad(`${at} has invalid ${k}`);
     }
+    if (s.origin !== undefined && !(isObj(s.origin) && Object.entries(s.origin).every(([k, v]) => ['camera', 'transition'].includes(k) && ORIGINS.includes(v as Origin)))) throw bad(`${at} has invalid origin`);
     if (s.sfx_cues !== undefined && !(Array.isArray(s.sfx_cues) && s.sfx_cues.every((x) => typeof x === 'string'))) throw bad(`${at} sfx_cues must be strings`);
     if (s.scene_id !== undefined) {
       if (typeof s.scene_id !== 'string' || !s.scene_id) throw bad(`${at} has invalid scene_id`);

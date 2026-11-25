@@ -67,5 +67,8 @@ The Storyboard step lists every scene with its details and offers "Generate all"
 ### Scene styles
 A timeline can carry `effects: "folklore"` (chosen on Compose & render, stored in the composition). It applies the grammar of `docs/style/dark-folklore-shorts.md`: a camera move on every shot (replacing storyboard camera and transitions with hard cuts), extra framings about every 3 s from the same picture, a dark grade with vignette, grain and flicker, one-word uppercase italic captions with names and numbers in red, generated impact hits (and a drone bed when no music is set), and a 0.6 s glitch sting. Sounds are synthesized locally and listed in the licence manifest. Not included: the hand-drawn arrow, found-footage insert, in-picture text, image-to-video motion. The browser preview only approximates the style.
 
+### Camera and transition overrides
+A composition may carry `overrides[scene].camera / transition` and `overrides_all`. Precedence is in `app/server/src/render/resolve.ts`: scene override, storyboard value the person edited, video-wide override, AI value, automatic draft, default. Saving one invalidates only that composition and its final render. There are no screen controls yet; see `docs/CINEMATIC_EXPANSION_PLAN.md`.
+
 ### Platforms
 `app/server/src/platform.ts` holds the differences: tool lookup (`.exe`, `where`), path containment, ffmpeg filter-path escaping for drive letters, system font folders (names read from the font file outside macOS; a copy when links are refused), and SVG rasterizing (macOS `sips`; elsewhere FFmpeg with librsvg or `rsvg-convert`). macOS is tested. The Windows rules have unit tests run on macOS only; nothing has run on Windows. `say` voices and the shell-script test stubs remain macOS-only.

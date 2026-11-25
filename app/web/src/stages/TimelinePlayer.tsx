@@ -76,7 +76,7 @@ export function TimelinePlayer({ timeline, time, onTime, captions, still, onEnla
   // approximate the camera in the browser: the same linear move, and the extra framings of the folklore style
   const fx = timeline.effects === 'folklore';
   const local = scene ? Math.max(0, now - scene.start) : 0;
-  const shots = fx && scene ? Math.max(1, Math.ceil(scene.duration / 3 - 0.25)) : 1;
+  const shots = fx && scene && !scene.sources?.camera ? Math.max(1, Math.ceil(scene.duration / 3 - 0.25)) : 1;
   const shot = Math.min(shots - 1, Math.floor(local / ((scene?.duration || 1) / shots)));
   const progress = Math.min(1, (local - shot * (scene.duration / shots)) / (scene.duration / shots || 1));
   const cam = scene.camera ?? { movement: 'static' };

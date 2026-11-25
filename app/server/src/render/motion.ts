@@ -128,12 +128,13 @@ export interface SceneClipSpec {
   fps: number;
   effects?: 'folklore';
   glitch?: boolean; // the final shot of a folklore video
+  hold?: boolean; // one continuous camera move, even in a style that cuts between framings
 }
 
 /** Cache key: any input that changes the pixels changes the key; anything else (captions, audio, other scenes) does not. */
 export function sceneClipKey(s: SceneClipSpec): string {
   const { path: _p, ...asset } = s.asset;
-  return createHash('sha256').update(JSON.stringify({ v: 1, asset, focal: s.focal, camera: s.camera, crop: s.crop ?? null, d: Math.round(s.duration * 1000), w: s.width, h: s.height, fps: s.fps, effects: s.effects, glitch: s.glitch })).digest('hex').slice(0, 32);
+  return createHash('sha256').update(JSON.stringify({ v: 1, asset, focal: s.focal, camera: s.camera, crop: s.crop ?? null, d: Math.round(s.duration * 1000), w: s.width, h: s.height, fps: s.fps, effects: s.effects, glitch: s.glitch, hold: s.hold })).digest('hex').slice(0, 32);
 }
 
 export function sceneClipArgs(s: SceneClipSpec, out: string): string[] {
@@ -149,7 +150,7 @@ export function sceneClipArgs(s: SceneClipSpec, out: string): string[] {
   const plan = motionPlan(s.camera, focalRel);
   const over = 2; // oversample before zoompan to avoid integer-pixel jitter
   const size = { w: s.width, h: s.height };
-  const shots = s.effects ? Math.max(1, Math.ceil(s.duration / SHOT_SECONDS - 0.25)) : 1;
+  const shots = s.effects && !s.hold ? Math.max(1, Math.ceil(s.duration / SHOT_SECONDS - 0.25)) : 1;
   const camera = shots > 1 ? shotsFilter(plan, shots, frames, size, s.fps, focalRel) : zoompanFilter(plan, frames, size, s.fps);
   const look = s.effects ? [...LOOK_FILTERS, ...(s.glitch ? glitchFilters(frames / s.fps) : [])] : [];
   const chain = [cropF, `scale=${s.width * over}:${s.height * over}:flags=lanczos`, camera, 'setsar=1', ...look, 'format=yuv420p'];

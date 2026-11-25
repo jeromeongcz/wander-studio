@@ -421,4 +421,41 @@ test('10-second multi-format captioned video: research -> script -> storyboard -
   const cacheFiles = readdirSync(join(root, 'cache', 'scene_clips')).filter((f) => f.endsWith('.tmp.mp4'));
   assert.deepEqual(cacheFiles, []);
   if (OUT) writeFileSync(join(OUT, 'vertical_rerender.mp4'), readFileSync(join(root, again.json.renders[0].rel_path)));
+
+  // ===== Compose & Render overrides: camera and transitions =====
+  const ocomp = one('composition', 'en', 'vertical_9x16');
+  const before = (await call('GET', `/artifacts/${ocomp.id}`)).json.content;
+  const sceneUrl = (i: number) => `/artifacts/${ocomp.id}/scenes/${before.scenes[i].scene_id}/override`;
+  const change = { camera: { movement: 'pan', direction: 'up', intensity: 'strong' }, transition: { type: 'wipe', duration: 2 } };
+  await approve(one('final_render', 'en', 'vertical_9x16').id, 'final render before the override');
+  assert.equal((await call('PUT', sceneUrl(1), change)).status, 409, 'an approved composition is not changed without reopening it');
+  assert.equal((await call('PUT', sceneUrl(0), { transition: { type: 'fade' }, reopen: true })).status, 422, 'the first scene has no incoming transition');
+  assert.equal((await call('PUT', sceneUrl(1), { camera: { movement: 'orbit' }, reopen: true })).status, 422, 'a camera the renderer cannot do is refused');
+  await ok(call('PUT', sceneUrl(1), { ...change, caption_y_pct: 0.4, reopen: true }), 'scene override');
+  const after = (await call('GET', `/artifacts/${ocomp.id}`)).json.content;
+  assert.deepEqual(after.scenes[1].camera, change.camera);
+  assert.equal(after.scenes[1].transition_in.type, 'wipe');
+  const limit = 0.4 * Math.min(after.scenes[0].duration, after.scenes[1].duration);
+  assert.ok(Math.abs(after.scenes[1].transition_in.duration - Math.min(2, limit)) < 0.002, 'a long transition is shortened to fit the scenes');
+  assert.deepEqual(after.scenes[1].sources, { camera: 'scene_override', transition: 'scene_override' });
+  assert.deepEqual(after.captions.placement.map((x: any) => x.y_pct), [0.4], 'the new caption position reaches the render immediately');
+  assert.equal(after.duration, before.duration, 'overrides never change the video length');
+  assert.equal(state(one('final_render', 'en', 'vertical_9x16').id), 'needs_revision');
+  for (const k of ['storyboard', 'scene_asset', 'audio']) assert.ok(arts().filter((a) => a.kind === k && a.lang_code !== 'taglish').every((a) => a.state !== 'needs_revision'), `${k} not invalidated by a compose override`);
+  // a video-wide setting does not overrule storyboard values the person edited
+  await ok(call('PUT', `/artifacts/${ocomp.id}/override-all`, { camera: { movement: 'static' } }), 'video-wide override');
+  const wide = (await call('GET', `/artifacts/${ocomp.id}`)).json.content;
+  assert.deepEqual(wide.scenes.map((x: any) => x.camera), after.scenes.map((x: any) => x.camera));
+  await ok(call('POST', `/artifacts/${ocomp.id}/build-timeline`, {}), 'rebuild keeps overrides');
+  assert.deepEqual((await call('GET', `/artifacts/${ocomp.id}`)).json.content, wide);
+  await approve(ocomp.id, 'overridden composition');
+  const shot = await ok(call('POST', `/artifacts/${ocomp.id}/render`, { variants: ['captioned'], reopen: true }), 'render with overrides');
+  const spr = probe(join(root, shot.json.renders[0].rel_path));
+  assert.ok(Math.abs(Number(spr.format.duration) - wide.duration) < 0.25);
+  // clearing returns to the storyboard
+  await ok(call('PUT', sceneUrl(1), { camera: null, transition: null, caption_y_pct: null, reopen: true }), 'clear override');
+  await ok(call('PUT', `/artifacts/${ocomp.id}/override-all`, { camera: null }), 'clear video-wide');
+  const cleared = (await call('GET', `/artifacts/${ocomp.id}`)).json.content;
+  assert.deepEqual(cleared.scenes, before.scenes);
+  assert.deepEqual([cleared.overrides, cleared.overrides_all, cleared.captions.placement], [{}, undefined, []]);
 });

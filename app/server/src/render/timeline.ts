@@ -5,6 +5,9 @@ import type { PlacementOverride } from '../captions/ass.ts';
 import type { MixSpec } from '../audio/mix.ts';
 import type { Camera, Rect } from './motion.ts';
 import type { FormatSpec } from './formats.ts';
+import { checkDirectionOverride, resolveLayers, storyboardSource } from './resolve.ts';
+import type { DirectionOverride, Source, TransitionChoice } from './resolve.ts';
+import type { Scene, Transition } from '../studios/storyboard.ts';
 import { computeSceneTimes } from './timing.ts';
 import type { SceneIn } from './timing.ts';
 
@@ -19,6 +22,8 @@ export interface TimelineScene {
   focal: { x: number; y: number };
   camera: Camera;
   transition_in: { type: string; duration: number };
+  /** Present only for values that come from a Compose & Render override. */
+  sources?: { camera?: Source; transition?: Source };
 }
 
 /** Engine-agnostic composition: everything a renderer needs, no references back into the database. */
@@ -31,7 +36,8 @@ export interface Timeline {
   scenes: TimelineScene[];
   captions: { enabled: boolean; style: CaptionStyle; words: CaptionWord[]; placement: PlacementOverride[]; mode?: 'word' };
   audio: { chunks: { clip_id: string; rel_path: string; start: number; duration: number }[]; narration_total: number; mix: MixSpec; music: { clip_id: string; rel_path: string }[]; sfx: { clip_id: string; rel_path: string }[] };
-  overrides: Record<string, { crop?: Rect; caption_y_pct?: number }>;
+  overrides: Record<string, DirectionOverride & { crop?: Rect; caption_y_pct?: number }>;
+  overrides_all?: DirectionOverride; // camera and transition for the whole video
   source: Record<string, string | null | Record<string, string | null>>;
 }
 
@@ -41,14 +47,27 @@ const TRANSITION_SECONDS = 0.4;
 export interface BuildInput {
   lang: string;
   format: FormatSpec;
-  scenes: (SceneIn & { scene_id: string; title: string; camera: Camera; transition_in?: string })[];
+  scenes: (SceneIn & { scene_id: string; title: string; camera: Camera; transition_in?: string; origin?: Scene['origin']; draft?: boolean })[];
   assets: Map<string, TimelineScene['asset'] & { focal: { x: number; y: number } }>;
   timelineWords: { section_id: string; start: number; end: number }[];
   narration: Timeline['audio'];
   captionWords: CaptionWord[];
   style: CaptionStyle;
   overrides: Timeline['overrides'];
+  overrides_all?: DirectionOverride;
   source: Timeline['source'];
+}
+
+const OVERRIDES: Source[] = ['scene_override', 'composition_override'];
+
+/** One scene's camera and incoming transition, after precedence. */
+function direct(i: BuildInput, s: BuildInput['scenes'][number]) {
+  const own = i.overrides[s.scene_id];
+  const all = i.overrides_all;
+  const camera = resolveLayers<Camera>({ scene_override: own?.camera, [storyboardSource(s, 'camera')]: s.camera, composition_override: all?.camera, default: s.camera });
+  const stored: TransitionChoice | undefined = s.transition_in ? { type: s.transition_in as Transition } : undefined;
+  const transition = resolveLayers<TransitionChoice>({ scene_override: own?.transition, [storyboardSource(s, 'transition')]: stored, composition_override: all?.transition, default: { type: 'cut' } });
+  return { camera, transition };
 }
 
 export function buildTimeline(i: BuildInput): Timeline {
@@ -57,9 +76,14 @@ export function buildTimeline(i: BuildInput): Timeline {
   const scenes: TimelineScene[] = i.scenes.map((s, k) => {
     const a = i.assets.get(s.scene_id) ?? null;
     const t = times[k];
-    const type = k === 0 ? 'cut' : (s.transition_in ?? 'cut');
+    const { camera, transition } = direct(i, s);
+    const type = k === 0 ? 'cut' : transition.value.type;
     const prev = times[k - 1];
-    const dur = type === 'cut' ? 0 : Math.min(TRANSITION_SECONDS, 0.4 * Math.min(t.duration, prev ? prev.duration : t.duration));
+    const dur = type === 'cut' ? 0 : Math.min(transition.value.duration ?? TRANSITION_SECONDS, 0.4 * Math.min(t.duration, prev ? prev.duration : t.duration));
+    const sources = {
+      ...(OVERRIDES.includes(camera.source) ? { camera: camera.source } : {}),
+      ...(k > 0 && OVERRIDES.includes(transition.source) ? { transition: transition.source } : {}),
+    };
     return {
       scene_id: s.scene_id,
       index: k,
@@ -69,8 +93,9 @@ export function buildTimeline(i: BuildInput): Timeline {
       timing_source: t.source,
       asset: a ? { id: a.id, sha256: a.sha256, rel_path: a.rel_path, kind: a.kind, width: a.width, height: a.height } : null,
       focal: a?.focal ?? { x: 0.5, y: 0.5 },
-      camera: s.camera,
+      camera: camera.value,
       transition_in: { type, duration: Math.round(dur * 1000) / 1000 },
+      ...(Object.keys(sources).length ? { sources } : {}),
     };
   });
   const placement: PlacementOverride[] = scenes.flatMap((s) => {
@@ -86,6 +111,7 @@ export function buildTimeline(i: BuildInput): Timeline {
     captions: { enabled: i.captionWords.length > 0, style: i.style, words: i.captionWords, placement },
     audio: i.narration,
     overrides: i.overrides,
+    ...(i.overrides_all && Object.keys(i.overrides_all).length ? { overrides_all: i.overrides_all } : {}),
     source: i.source,
   };
 }
@@ -112,5 +138,7 @@ export function validateTimelineShape(c: unknown): Timeline {
     prevEnd = s.start + s.duration;
   }
   if (!isObj(c.captions) || !isObj(c.audio) || !isObj(c.overrides)) throw bad('captions, audio and overrides are required');
+  for (const o of Object.values(c.overrides)) checkDirectionOverride(o);
+  if (c.overrides_all !== undefined) checkDirectionOverride(c.overrides_all);
   return c as unknown as Timeline;
 }

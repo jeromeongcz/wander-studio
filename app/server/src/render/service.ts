@@ -152,7 +152,7 @@ export class RenderService {
   }
 
   /** `effects`: a style, 'none' to clear it, or left out to keep what the timeline already has. */
-  build(compId: string, effects?: string): Timeline {
+  build(compId: string, effects?: string, change: Partial<Pick<Timeline, 'overrides' | 'overrides_all'>> = {}): Timeline {
     const { comp, sbc, audio, caption, source } = this.currentSource(compId);
     if (comp.kind !== 'composition' || !comp.lang_code || !comp.format) throw new EngineError('VALIDATION', 'Not a composition artifact');
     if (!sbc?.scenes.length) throw new EngineError('NO_VERSION', 'The storyboard has no scenes yet');
@@ -180,7 +180,7 @@ export class RenderService {
     return applyEffects(buildTimeline({
       lang: comp.lang_code,
       format: parseFormat(comp.format),
-      scenes: sbc.scenes.map((s) => ({ scene_id: s.scene_id!, script_segment_id: s.script_segment_id, segment_text: s.segment_text, target_duration: s.target_duration, title: s.title, camera: s.camera, transition_in: s.transition_in })),
+      scenes: sbc.scenes.map((s) => ({ scene_id: s.scene_id!, script_segment_id: s.script_segment_id, segment_text: s.segment_text, target_duration: s.target_duration, title: s.title, camera: s.camera, transition_in: s.transition_in, origin: s.origin, draft: s.draft })),
       assets,
       timelineWords: track?.words.length ? track.words.map((w) => ({ section_id: w.section_id, start: w.start, end: w.end })) : this.estimatedWords(layout, script),
       narration: {
@@ -192,7 +192,8 @@ export class RenderService {
       },
       captionWords: track?.words ?? [],
       style: track?.style ?? DEFAULT_STYLE,
-      overrides: prev?.overrides ?? {},
+      overrides: change.overrides ?? prev?.overrides ?? {},
+      overrides_all: change.overrides_all ?? prev?.overrides_all,
       source,
     }), style);
   }
@@ -213,6 +214,8 @@ export class RenderService {
       height: tl.format.height,
       fps: tl.format.fps,
       ...(tl.effects ? { effects: tl.effects, ...(s.index === tl.scenes.length - 1 ? { glitch: true } : {}) } : {}),
+      // a camera the person chose is played as chosen: the style adds no extra framings to it
+      ...(tl.effects && s.sources?.camera ? { hold: true } : {}),
     };
     const out = this.cache('scene_clips', `${sceneClipKey(spec)}.mp4`);
     if (existsSync(out) && (await stat(out)).size > 0) return { path: out, cached: true };

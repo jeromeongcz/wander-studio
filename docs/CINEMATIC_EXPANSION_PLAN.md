@@ -1,6 +1,6 @@
 # Cinematic expansion: implementation plan
 
-Status: **approved 2026-11-26 with the recommended answers A to D; building one phase at a time**. Baseline on 2026-11-26: `npm test` 144 passed, 1 skipped, 0 failed.
+Status: **approved 2026-11-26 with the recommended answers A to D; building one phase at a time**. Phases 0 and 1 are done (section 8). Baseline on 2026-11-26: `npm test` 144 passed, 1 skipped, 0 failed.
 
 ## 1. How it works today
 
@@ -129,3 +129,12 @@ Notes for Phase 6:
 | B | Storyboard hand edit versus composition-wide setting | The hand edit wins |
 | C | Ambient audio (forest, wind, insects, animals) | Store the preference; synthesize only wind, drones and impacts; you import licensed clips for the rest |
 | D | Delivery | Build and review one phase at a time |
+
+## 8. Progress
+
+**Phase 0 (done).** `app/server/test/render-golden.test.ts` pins FFmpeg arguments, cache keys, captions and the sound graph of the old renderer. `node scripts/reference-render.mjs <label> --compare before` compares real output frame by frame. The folklore ending glitch is random in every run, before this work too.
+
+**Phase 1 (done).** `render/resolve.ts` holds precedence and validation. Compose overrides for camera and transition (type and duration) work through `PUT /artifacts/:id/scenes/:sceneId/override` and `PUT /artifacts/:id/override-all`; there are no screen controls until Phase 5. The server records who last set a storyboard camera or transition (`origin`). Only values today's renderer can execute are accepted: style, look, direction-of-transition, easing and the project selections are added with the phases that implement them. In the classic folklore style an overridden scene keeps the chosen camera and transition.
+
+Fixed on the way: a caption position change or reset reached the rendered video only after one more rebuild. A composition built before this fix can hold such a leftover position until it is rebuilt.
+
