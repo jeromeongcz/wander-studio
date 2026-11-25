@@ -7,7 +7,6 @@ import { useAsync, useInterval } from '../hooks';
 import { Btn, Card, Empty, Field, Icon, Loading, Modal, Pill, StateBadge, fmtSec, useToast } from '../ui';
 import { url } from '../api';
 import { ASSET_TYPES } from '../types';
-import { ProjectDetailsEditor } from './shared';
 
 const MOVES = ['static', 'pan', 'zoom', 'ken_burns', 'parallax'];
 const TRANS = ['cut', 'fade', 'dissolve', 'slide', 'zoom', 'wipe'];
@@ -20,10 +19,8 @@ export function StoryboardStage() {
   const { push } = useToast();
   const loaded = useAsync(() => api.get<any>(`/artifacts/${art.id}`), [art.id, art.current_version_id]);
   const baseDoc = useAsync(() => api.get<any>(`/artifacts/${base.id}`), [base.id, base.current_version_id]);
-  const recs = useAsync(() => api.get<any>(`/categories/${encodeURIComponent(project.category ?? 'custom')}/recommendations`), [project.category]);
   const [c, setC] = useState<any>(null);
   const [dirty, setDirty] = useState(false);
-  const [pickCat, setPickCat] = useState(false);
   // how the scenes are laid out; remembered in this browser
   const [view, setView] = useState<'list' | 'grid'>(() => { try { return localStorage.getItem('wander-storyboard-view') === 'grid' ? 'grid' : 'list'; } catch { return 'list'; } });
   const layout = (v: 'list' | 'grid') => { setView(v); try { localStorage.setItem('wander-storyboard-view', v); } catch { /* storage unavailable */ } };
@@ -119,18 +116,6 @@ export function StoryboardStage() {
   return (
     <>
       <ArtifactBar artifact={art} onChanged={done}>{dirty && <Pill tone="warn">unsaved</Pill>}</ArtifactBar>
-      {recs.data && (
-        <Card title={`Visual approach: ${recs.data.name}`} actions={<Btn small kind="ghost" onClick={() => setPickCat(!pickCat)}>{pickCat ? 'Close' : 'Change category'}</Btn>}>
-          {pickCat && <div style={{ marginBottom: 12 }}><ProjectDetailsEditor compact project={project} onSaved={() => { setPickCat(false); reload(); recs.reload(); }} /></div>}
-          <div className="row gap wrap small">
-            <span className="muted">Suggested sources:</span>{recs.data.profile.assets.map((a: string) => <Pill key={a} tone="info">{a.replace(/_/g, ' ')}</Pill>)}
-            <span className="muted">Looks:</span>{recs.data.profile.styles.map((a: string) => <Pill key={a}>{a}</Pill>)}
-            <span className="muted">Camera:</span>{recs.data.profile.cameras.map((a: string) => <Pill key={a}>{a.replace('_', ' ')}</Pill>)}
-          </div>
-          {recs.data.custom && <p className="muted small" style={{ marginBottom: 0 }}>Custom category: using general defaults. Override anything per scene.</p>}
-          {recs.data.profile.notes && <p className="small" style={{ marginBottom: 0 }}>{recs.data.profile.notes}</p>}
-        </Card>
-      )}
       <section className="board-head">
         <div className="grow">
           <h3>{total} scene{total === 1 ? '' : 's'}</h3>
@@ -145,6 +130,10 @@ export function StoryboardStage() {
             {([['list', 'rows', 'Horizontal'], ['grid', 'grid', 'Grid']] as const).map(([v, icon, label]) => <button key={v} type="button" className={view === v ? 'on' : ''} aria-pressed={view === v} onClick={() => layout(v)}><Icon name={icon} small /> {label}</button>)}
           </div>
           <Btn kind="primary" disabled={!ready || !!drawing || !total || have === total} onClick={() => generate()}><Icon name="spark" small /> {drawing ? 'Drawing…' : have === total && total ? 'All drawn' : have ? `Generate ${total - have} remaining` : `Generate all ${total}`}</Btn>
+          {c && <>
+            <span className="vsep" role="separator" aria-orientation="vertical" />
+            <Btn kind="primary" disabled={!dirty} title={dirty ? 'Save your changes' : 'No changes to save'} onClick={async () => { const r = await saveArtifact(art.id, c); push('ok', r.changed ? 'Storyboard saved' : 'No changes'); done(); }}>Save storyboard</Btn>
+          </>}
         </div>
       </section>
       {base.state !== 'approved' && <div className="notice warn">Approve the base script first: the scenes come from it.</div>}
@@ -179,7 +168,7 @@ export function StoryboardStage() {
                       <Btn small title="Show this scene one place later" onClick={() => move(i, 1)} disabled={i === c.scenes.length - 1}>↓ Later</Btn>
                       <Btn small kind="danger" title="Delete this scene from the storyboard" onClick={() => { if (confirm(`Delete scene ${i + 1} from the storyboard?\n\nIt is removed when you press Save storyboard.`)) edit({ scenes: c.scenes.filter((_: any, k: number) => k !== i) }); }}><Icon name="trash" small /> Delete</Btn>
                     </div>
-                    {dirty && <span className="draft-note">Changes are not saved: press Save storyboard below.</span>}
+                    {dirty && <span className="draft-note">Changes are not saved: press Save storyboard at the top.</span>}
                   </div>
                 ))}
                 <div className="scene-body">
@@ -217,7 +206,6 @@ export function StoryboardStage() {
             ))}
             {c.scenes.length === 0 && <Empty>No scenes.</Empty>}
           </div>
-          <div className="row gap"><Btn kind="primary" disabled={!dirty} onClick={async () => { const r = await saveArtifact(art.id, c); push('ok', r.changed ? 'Storyboard saved' : 'No changes'); done(); }}>Save storyboard</Btn><span className="muted small">Saving keeps one visual slot per scene in sync. A scene whose visual is already approved cannot be removed.</span></div>
         </>
       )}
       {zoom !== null && sketches.data?.[zoom]?.asset_id && (

@@ -352,3 +352,4 @@ textarea.vis { min-height: 0; field-sizing: content; }
 .zoom-view { margin: 0 0 12px; display: flex; flex-direction: column; align-items: center; gap: 10px; }
 .zoom-view img { max-width: 100%; max-height: 66vh; border-radius: var(--radius); background: #000; }
 .zoom-view figcaption { font-weight: 600; text-align: center; }
+.vsep { width: 1px; align-self: stretch; min-height: 32px; background: var(--line-strong); margin: 0 4px; }
