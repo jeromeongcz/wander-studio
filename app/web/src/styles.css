@@ -152,9 +152,6 @@ a.step:hover .step-dot { border-color: var(--brand); }
 .kpi b { display: block; font-size: 26px; line-height: 1.1; font-weight: 800; } .kpi span { color: var(--muted); font-size: 13px; }
 .k-teal .kpi-ico { background: var(--brand-tint); color: var(--brand); } .k-amber .kpi-ico { background: var(--accent-tint); color: var(--accent-ink); } .k-blue .kpi-ico { background: var(--info-bg); color: var(--info); } .k-green .kpi-ico { background: var(--good-bg); color: var(--good); }
 .section-h { display: flex; align-items: baseline; gap: 10px; margin: 26px 0 12px; } .section-h h2 { font-size: 18px; } .section-h .muted { font-size: 13px; }
-.pcard { display: flex; flex-direction: column; gap: 12px; height: 100%; background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 18px 20px; box-shadow: var(--shadow); color: var(--text); font-weight: 400; transition: border-color .15s, transform .15s, box-shadow .15s; }
-.pcard:hover { text-decoration: none; border-color: var(--brand); transform: translateY(-2px); box-shadow: 0 10px 28px rgba(19, 78, 74, .12); }
-.pcard h3 { font-size: 16px; }
 .pipe { display: grid; grid-template-columns: repeat(6, 1fr); gap: 4px; }
 .pipe i { height: 7px; border-radius: 99px; background: var(--panel2); } .pipe i.done { background: var(--brand); } .pipe i.current { background: var(--accent); } .pipe i.attention { background: var(--bad); }
 .next { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--muted); } .next b { color: var(--text); }
@@ -329,16 +326,12 @@ textarea.vis { min-height: 0; field-sizing: content; }
 .approved-mark { display: flex; align-items: center; justify-content: center; gap: 6px; min-height: 32px; border-radius: 8px; background: var(--good-bg); color: var(--good); font-weight: 700; font-size: 12.5px; }
 .scene-card.wide .frame-col .frame-slot { max-height: 220px; }
 .board-head { row-gap: 12px; column-gap: 8px; } .board-head > .grow { flex-basis: 100%; } .board-head > .btn-primary { margin-left: auto; }
-.scene-tools { display: flex; align-items: center; justify-content: space-between; gap: 4px; flex-shrink: 0; }
 .scene-card.wide .frame-col { gap: 8px; }
 .scene-card.wide .frame-col .frame-slot { min-height: 100px; flex: 0 1 auto; }
 /* storyboard header: scene count on the left, buttons on the right */
 .board-head { justify-content: space-between; align-items: center; text-align: left; }
 .board-head > .grow { flex: 1 1 240px; }
 .board-actions { display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: 8px; margin-left: auto; max-width: 100%; }
-.scene-tools { flex-direction: column; align-items: stretch; gap: 6px; border-top: 1px solid var(--line); padding-top: 8px; }
-.tool-row { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 4px; }
-.tool-row .btn { padding: 4px 4px; gap: 4px; white-space: nowrap; font-size: 11.5px; }
 .draft-note { font-size: 11.5px; font-weight: 700; color: var(--warn); text-align: center; line-height: 1.3; }
 .scene-card.wide { height: 360px; } .scene-card.wide .frame-col .frame-slot { min-height: 90px; }
 /* horizontal cards never scroll inside; long text fades out and opens with "Show full details" */
@@ -438,3 +431,31 @@ textarea.vis { min-height: 0; field-sizing: content; }
 
 .ws-topics { container-type: inline-size; }
 @container (max-width: 380px) { .filters { flex-wrap: wrap; } .filters > input[type="search"] { flex: 1 0 100%; } .filters > select { flex: 1 1 30%; } }
+/* three topic tabs fit a phone screen without scrolling */
+@container (max-width: 420px) { .ws-topics .tabs button { flex: 1 1 auto; padding: 10px 4px; font-size: 13px; } }
+/* video cards on the Dashboard and in Video Production: the topic card style, coloured by what the video needs */
+.topic-video { position: relative; overflow: hidden; border-color: color-mix(in srgb, var(--tone) 35%, var(--line)); }
+.v-progress { --tone: #2563EB; } .v-ready { --tone: #0F766E; } .v-waiting { --tone: #B45309; } .v-attention { --tone: #B91C1C; }
+.topic-video .topic-go, .topic-video .topic-go:hover { background: linear-gradient(135deg, color-mix(in srgb, var(--tone) 82%, #000), var(--tone)); box-shadow: 0 8px 18px color-mix(in srgb, var(--tone) 32%, transparent); }
+/* step content inside a video: the same card style, coloured by the state of the part on screen */
+.step-content { --tone: #2563EB; }
+.step-content.v-ready { --tone: #0F766E; } .step-content.v-waiting { --tone: #B45309; } .step-content.v-attention { --tone: #B91C1C; }
+.step-content .card, .step-content .board-head, .step-content .scene-card { border-color: color-mix(in srgb, var(--tone) 35%, var(--line)); }
+.step-content .card > .card-h, .step-content .board-head { background: linear-gradient(105deg, var(--panel) 20%, color-mix(in srgb, var(--tone) 16%, var(--panel))); }
+.step-content .card > .card-h { justify-content: flex-start; margin: -18px -20px 14px; padding: 12px 16px 12px 20px; border-bottom: 1px solid color-mix(in srgb, var(--tone) 22%, var(--line)); border-radius: calc(var(--radius) - 1px) calc(var(--radius) - 1px) 0 0; }
+.step-content .card > .card-h > h3 { flex: 1 1 140px; min-width: 0; }
+.step-content .card-ico, .step-content .card-h > .scene-n { width: 32px; height: 32px; flex: none; border-radius: 50%; display: grid; place-items: center; background: var(--tone); color: var(--panel); box-shadow: 0 4px 12px color-mix(in srgb, var(--tone) 35%, transparent); }
+@media (max-width: 760px) { .step-content .card > .card-h { margin: -15px -15px 12px; padding-left: 15px; } }
+/* storyboard scene header: number, draft note and order/delete buttons across the top of the card */
+.scene-card .scene-top { margin: 0; padding: 10px 12px; flex-shrink: 0; }
+.scene-card .scene-top .scene-n { position: static; border: 0; width: 32px; height: 32px; flex: none; background: var(--tone, var(--brand)); color: var(--panel); }
+.scene-card .scene-top .draft-note { color: var(--warn); text-align: left; }
+.scene-top .tool-row { display: flex; flex-wrap: wrap; gap: 6px; margin-left: auto; }
+@media (min-width: 761px) {
+  .scene-card.wide:has(.scene-top) { display: grid; grid-template-columns: auto minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); column-gap: 0; height: 416px; }
+  .scene-card.wide:has(.scene-top).open { height: auto; }
+  .scene-card.wide .scene-top { grid-column: 1 / -1; }
+}
+@media (max-width: 760px) { .scene-card.wide:has(.scene-top) { height: 620px; } .scene-card.wide:has(.scene-top).open { height: auto; } }
+.scene-card.tall:has(.scene-top) { height: 690px; }
+.scene-card.tall:has(.scene-top).open { height: auto; }

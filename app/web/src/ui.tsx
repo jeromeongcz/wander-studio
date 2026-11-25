@@ -86,17 +86,24 @@ export function Btn({ children, onClick, kind = 'default', disabled, busy, title
   );
 }
 
-export const Card = ({ title, actions, children, className = '' }: { title?: ReactNode; actions?: ReactNode; children: ReactNode; className?: string }) => (
-  <section className={`card ${className}`}>
-    {(title || actions) && (
-      <header className="card-h">
-        <h3>{title}</h3>
-        <div className="row gap">{actions}</div>
-      </header>
-    )}
-    {children}
-  </section>
-);
+/** Set around a video's step panels: card headers then show this state icon, like a Research Studio topic. */
+export const CardIcon = createContext<string | null>(null);
+
+export const Card = ({ title, actions, children, className = '' }: { title?: ReactNode; actions?: ReactNode; children: ReactNode; className?: string }) => {
+  const icon = useContext(CardIcon);
+  return (
+    <section className={`card ${className}`}>
+      {(title || actions) && (
+        <header className="card-h">
+          {icon && <i className="card-ico" aria-hidden="true"><Icon name={icon} small /></i>}
+          <h3>{title}</h3>
+          <div className="row gap">{actions}</div>
+        </header>
+      )}
+      {children}
+    </section>
+  );
+};
 
 export const Field = ({ label, hint, children, wide }: { label: string; hint?: ReactNode; children: ReactNode; wide?: boolean }) => (
   <label className={`field${wide ? ' wide' : ''}`}>

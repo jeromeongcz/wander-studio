@@ -66,11 +66,11 @@ function SceneRow({ index, scene, art, assets, onChanged, onPrompt, push }: any)
     onChanged(); doc.reload();
   };
   return (
-    <div className="scene">
-      <div className="row gap wrap">
-        <span className="scene-n">{index + 1}</span><strong>{scene.title}</strong><Pill>{scene.asset_type.replace(/_/g, ' ')}</Pill><span className="grow" />
-        {art && <ArtifactBar artifact={art} onChanged={() => { onChanged(); doc.reload(); }} />}
-      </div>
+    <section className="card">
+      <header className="card-h">
+        <span className="scene-n">{index + 1}</span><h3>{scene.title}</h3><Pill>{scene.asset_type.replace(/_/g, ' ')}</Pill>
+      </header>
+      {art && <ArtifactBar artifact={art} onChanged={() => { onChanged(); doc.reload(); }} />}
       <div className="grid g2" style={{ marginTop: 10, gridTemplateColumns: 'minmax(180px, 260px) 1fr' }}>
         {asset ? <AssetMedia a={asset} /> : <div className="thumb" style={{ display: 'grid', placeItems: 'center' }}><span className="muted small">No visual yet</span></div>}
         <div className="stack">
@@ -85,7 +85,7 @@ function SceneRow({ index, scene, art, assets, onChanged, onPrompt, push }: any)
           <div className="row gap"><Btn small onClick={onPrompt}>Image prompt for my own generator</Btn></div>
         </div>
       </div>
-    </div>
+    </section>
   );
 }
 

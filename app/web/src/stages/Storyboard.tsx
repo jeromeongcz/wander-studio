@@ -1,5 +1,4 @@
 import { useEffect, useState } from 'react';
-import type { ReactNode } from 'react';
 import { api } from '../api';
 import { ArtifactBar, saveArtifact } from '../actions';
 import { useProject } from '../pages/Project';
@@ -139,7 +138,7 @@ export function StoryboardStage() {
     sketches.reload();
     done();
   };
-  const picture = (i: number, tools?: ReactNode) => {
+  const picture = (i: number) => {
     const row = sketches.data?.[i];
     return (
       <div className="frame-col">
@@ -148,7 +147,6 @@ export function StoryboardStage() {
         {row?.asset_id && (row.state === 'approved'
           ? <span className="approved-mark"><Icon name="check" small /> Approved</span>
           : <Btn small kind="primary" disabled={!!drawing} onClick={() => approveScene(i)}><Icon name="check" small /> Approve</Btn>)}
-        {tools}
       </div>
     );
   };
@@ -198,20 +196,24 @@ export function StoryboardStage() {
           <div className={listClass}>
             {c.scenes.map((s: any, i: number) => (
               <div key={s.scene_id ?? i} className={cardClass(i)}>
-                {picture(i, (
-                  <div className="scene-tools" role="group" aria-label={`Scene ${i + 1} order and removal`}>
-                    {s.draft && <span className="draft-note" title="Written automatically from the script. Edit the description under Edit details to mark it as yours.">Draft: not edited by you yet</span>}
-                    <div className="tool-row">
-                      <Btn small title="Show this scene one place earlier" onClick={() => move(i, -1)} disabled={i === 0}>↑ Earlier</Btn>
-                      <Btn small title="Show this scene one place later" onClick={() => move(i, 1)} disabled={i === c.scenes.length - 1}>↓ Later</Btn>
-                      <Btn small kind="danger" title="Delete this scene from the storyboard" onClick={() => { if (confirm(`Delete scene ${i + 1} from the storyboard?\n\nIt is removed when you press Save storyboard.`)) edit({ scenes: c.scenes.filter((_: any, k: number) => k !== i) }); }}><Icon name="trash" small /> Delete</Btn>
-                    </div>
-                    {dirty && <span className="draft-note">Changes are not saved: press Save storyboard at the top.</span>}
+                <header className="topic-top scene-top" role="group" aria-label={`Scene ${i + 1} order and removal`}>
+                  <span className="topic-state">
+                    <span className="scene-n">{i + 1}</span>
+                    <span>
+                      <b>Scene {i + 1}</b>
+                      {s.draft && <span className="draft-note" title="Written automatically from the script. Edit the description under Edit details to mark it as yours.">Draft: not edited by you yet</span>}
+                      {dirty && <span className="draft-note">Changes are not saved: press Save storyboard at the top.</span>}
+                    </span>
+                  </span>
+                  <div className="tool-row">
+                    <Btn small title="Show this scene one place earlier" onClick={() => move(i, -1)} disabled={i === 0}>↑ Earlier</Btn>
+                    <Btn small title="Show this scene one place later" onClick={() => move(i, 1)} disabled={i === c.scenes.length - 1}>↓ Later</Btn>
+                    <Btn small kind="danger" title="Delete this scene from the storyboard" onClick={() => { if (confirm(`Delete scene ${i + 1} from the storyboard?\n\nIt is removed when you press Save storyboard.`)) edit({ scenes: c.scenes.filter((_: any, k: number) => k !== i) }); }}><Icon name="trash" small /> Delete</Btn>
                   </div>
-                ))}
+                </header>
+                {picture(i)}
                 <div className="scene-body">
                 <div className="row gap wrap">
-                  <span className="scene-n">{i + 1}</span>
                   <input aria-label="Scene title" value={s.title} onChange={(e) => setScene(i, { title: e.target.value })} />
                 </div>
                 {s.segment_text && <p className="quote">“{s.segment_text}”</p>}
