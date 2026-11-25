@@ -353,3 +353,21 @@ textarea.vis { min-height: 0; field-sizing: content; }
 .zoom-view img { max-width: 100%; max-height: 66vh; border-radius: var(--radius); background: #000; }
 .zoom-view figcaption { font-weight: 600; text-align: center; }
 .vsep { width: 1px; align-self: stretch; min-height: 32px; background: var(--line-strong); margin: 0 4px; }
+
+/* ---------- narration by section ---------- */
+.narr-all { display: flex; align-items: center; gap: 10px; padding: 10px 14px; background: var(--panel3); border: 1px solid var(--line); border-radius: var(--radius-sm); cursor: pointer; }
+.narr { list-style: none; margin: 10px 0 0; padding: 0; display: flex; flex-direction: column; gap: 10px; }
+.narr-row { display: flex; gap: 12px; align-items: flex-start; padding: 12px 14px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--panel); transition: border-color .15s, background .15s; }
+.narr-row > input { margin-top: 5px; flex: none; }
+.narr-row.on { border-color: var(--brand); background: var(--brand-soft); }
+.narr-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 8px; }
+.narr-n { width: 28px; height: 28px; border-radius: 50%; background: var(--brand); color: var(--brand-ink); display: grid; place-items: center; font-weight: 800; font-size: 13px; flex: none; }
+.empty-row .narr-n { background: var(--panel2); color: var(--muted); }
+.narr-text { margin: 0; font-size: 14.5px; line-height: 1.55; }
+.player { display: flex; align-items: center; gap: 12px; padding: 8px 14px 8px 8px; background: var(--panel3); border: 1px solid var(--line); border-radius: 999px; }
+.play { width: 40px; height: 40px; border-radius: 50%; border: 0; background: var(--brand); color: var(--brand-ink); display: grid; place-items: center; flex: none; }
+.play:hover { background: var(--brand-hover); } .play .icon { fill: currentColor; }
+.player-wave { flex: 1; min-width: 0; height: 34px; cursor: pointer; }
+.player-time { color: var(--muted); white-space: nowrap; }
+.narr-none { padding: 10px 14px; border: 1.5px dashed var(--line-strong); border-radius: 999px; color: var(--muted); font-size: 12.5px; text-align: center; }
+@media (max-width: 760px) { .player-time { display: none; } .narr-row { padding: 10px; } }

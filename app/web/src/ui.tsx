@@ -189,6 +189,8 @@ export function FilePick({ accept, onFile, label = 'Choose file' }: { accept: st
 }
 
 const ICONS: Record<string, string> = {
+  play: 'M8 5.5v13l11-6.5z',
+  pause: 'M8 5v14M16 5v14',
   trash: 'M3 6h18M8 6V4h8v2M6 6l1 14h10l1-14M10 11v5M14 11v5',
   rows: 'M3 5h18v5H3zM3 14h18v5H3z',
   grid: 'M4 4h7v7H4zM13 4h7v7h-7zM4 13h7v7H4zM13 13h7v7h-7z',

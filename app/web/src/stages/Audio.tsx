@@ -3,7 +3,7 @@ import { api, url } from '../api';
 import { ArtifactBar, saveArtifact } from '../actions';
 import { useProject } from '../pages/Project';
 import { useAsync } from '../hooks';
-import { Btn, Card, Empty, Field, FilePick, Loading, Pill, Tabs, fmtSec, useToast } from '../ui';
+import { Btn, Card, Empty, Field, FilePick, Icon, Loading, Pill, Tabs, fmtSec, useToast } from '../ui';
 import { langName } from '../types';
 import { runJob, startTask } from '../progress';
 
@@ -18,25 +18,53 @@ export function AudioStage() {
   );
 }
 
-function Wave({ clipId }: { clipId: string }) {
-  const ref = useRef<HTMLCanvasElement>(null);
-  const peaks = useAsync(() => api.get<{ peaks: number[] }>(`/audio/${clipId}/peaks?buckets=160`), [clipId]);
+const mmss = (t: number) => `${Math.floor(t / 60)}:${String(Math.floor(t % 60)).padStart(2, '0')}`;
+
+/** A narration clip: one play button and a waveform you can click to jump. Starting one clip pauses the others. */
+function Player({ clipId, seconds, label }: { clipId: string; seconds: number; label: string }) {
+  const canvas = useRef<HTMLCanvasElement>(null);
+  const audio = useRef<HTMLAudioElement>(null);
+  const peaks = useAsync(() => api.get<{ peaks: number[] }>(`/audio/${clipId}/peaks?buckets=110`), [clipId]);
+  const [playing, setPlaying] = useState(false);
+  const [at, setAt] = useState(0);
+  useEffect(() => { setAt(0); setPlaying(false); }, [clipId]);
   useEffect(() => {
-    const c = ref.current;
+    const c = canvas.current;
     if (!c || !peaks.data) return;
     const dpr = devicePixelRatio || 1;
     c.width = c.clientWidth * dpr;
     c.height = c.clientHeight * dpr;
     const g = c.getContext('2d')!;
-    g.clearRect(0, 0, c.width, c.height);
-    g.fillStyle = getComputedStyle(c).getPropertyValue('--brand') || '#4f46e5';
+    const css = getComputedStyle(c);
+    const played = css.getPropertyValue('--brand').trim() || '#0F766E';
+    const rest = css.getPropertyValue('--line-strong').trim() || '#A9CFCA';
     const n = peaks.data.peaks.length;
+    const step = c.width / n;
     peaks.data.peaks.forEach((p, i) => {
-      const h = Math.max(2 * dpr, p * c.height);
-      g.fillRect((i / n) * c.width, (c.height - h) / 2, Math.max(1, c.width / n - 1), h);
+      const h = Math.max(3 * dpr, p * c.height);
+      g.fillStyle = i / n < at / (seconds || 1) ? played : rest;
+      g.beginPath();
+      g.roundRect(i * step, (c.height - h) / 2, Math.max(1.5, step * 0.6), h, 2 * dpr);
+      g.fill();
     });
-  }, [peaks.data]);
-  return <canvas ref={ref} className="wave" aria-label="Waveform" />;
+  }, [peaks.data, at, seconds]);
+  const toggle = () => {
+    const el = audio.current!;
+    if (!el.paused) return el.pause();
+    document.querySelectorAll('audio').forEach((o) => o !== el && o.pause());
+    void el.play();
+  };
+  const seek = (ratio: number) => { const el = audio.current!; el.currentTime = Math.max(0, Math.min(1, ratio)) * seconds; setAt(el.currentTime); };
+  return (
+    <div className="player">
+      <button type="button" className="play" onClick={toggle} aria-label={`${playing ? 'Pause' : 'Play'} ${label}`}><Icon name={playing ? 'pause' : 'play'} /></button>
+      <canvas ref={canvas} className="player-wave" role="slider" tabIndex={0} aria-label={`Position in ${label}`} aria-valuemin={0} aria-valuemax={Math.round(seconds)} aria-valuenow={Math.round(at)}
+        onClick={(e) => { const r = e.currentTarget.getBoundingClientRect(); seek((e.clientX - r.left) / r.width); }}
+        onKeyDown={(e) => { if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') { e.preventDefault(); seek((at + (e.key === 'ArrowRight' ? 1 : -1)) / (seconds || 1)); } }} />
+      <span className="player-time mono">{mmss(at)} / {mmss(seconds)}</span>
+      <audio ref={audio} preload="none" src={url(`/audio/${clipId}/file`)} onPlay={() => setPlaying(true)} onPause={() => setPlaying(false)} onTimeUpdate={(e) => setAt(e.currentTarget.currentTime)} onEnded={() => { setPlaying(false); setAt(0); }} />
+    </div>
+  );
 }
 
 function LangAudio({ lang }: { lang: string }) {
@@ -120,31 +148,37 @@ function LangAudio({ lang }: { lang: string }) {
       </Card>
 
       <Card title="Narration by section" actions={content && <span className="muted small">measured total ≈ {fmtSec(content.chunks.reduce((n: number, c: any) => n + (clips.data?.find((x) => x.id === c.clip_id)?.duration_seconds ?? 0), 0))}</span>}>
-        <table>
-          <thead>
-            <tr>
-              <th style={{ width: 28 }}>
-                <input type="checkbox" id="select-all-sections" disabled={!sections.length} checked={allPicked}
-                  ref={(el) => { if (el) el.indeterminate = somePicked; }}
-                  onChange={() => setPicked(allPicked ? [] : sections.map((s) => s.id))} />
-              </th>
-              <th colSpan={3} style={{ textTransform: 'none', letterSpacing: 0, fontSize: 13 }}><label htmlFor="select-all-sections" style={{ cursor: 'pointer', color: 'var(--text)' }}>Select all</label> <span className="muted">· {chosen} of {sections.length} selected</span></th>
-            </tr>
-          </thead>
-          <tbody>
-            {sections.map((s) => {
-              const clip = clipOf(s.id);
-              return (
-                <tr key={s.id}>
-                  <td style={{ width: 28 }}><input type="checkbox" aria-label={`Select ${s.kind}`} checked={picked.includes(s.id)} onChange={(e) => setPicked(e.target.checked ? [...picked, s.id] : picked.filter((x) => x !== s.id))} /></td>
-                  <td style={{ width: 80 }}><Pill>{s.kind}</Pill></td>
-                  <td className="small">{s.text}</td>
-                  <td style={{ width: 260 }}>{clip ? <div className="stack"><audio controls preload="none" style={{ width: '100%', height: 32 }} src={url(`/audio/${clip.id}/file`)} /><Wave clipId={clip.id} /><span className="muted small">{fmtSec(clip.duration_seconds)} · {clip.provider}{clip.voice ? ` / ${clip.voice}` : ''}</span></div> : <span className="muted small">no audio yet</span>}</td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
+        <label className="narr-all">
+          <input type="checkbox" id="select-all-sections" disabled={!sections.length} checked={allPicked}
+            ref={(el) => { if (el) el.indeterminate = somePicked; }}
+            onChange={() => setPicked(allPicked ? [] : sections.map((x) => x.id))} />
+          <strong>Select all</strong>
+          <span className="muted small">{chosen} of {sections.length} selected</span>
+          <span className="grow" />
+          <span className="muted small">{sections.filter((x) => clipOf(x.id)).length} of {sections.length} recorded</span>
+        </label>
+        <ol className="narr">
+          {sections.map((x, i) => {
+            const clip = clipOf(x.id);
+            const on = picked.includes(x.id);
+            return (
+              <li key={x.id} className={`narr-row${on ? ' on' : ''}${clip ? '' : ' empty-row'}`}>
+                <input type="checkbox" aria-label={`Select section ${i + 1}`} checked={on} onChange={(e) => setPicked(e.target.checked ? [...picked, x.id] : picked.filter((y) => y !== x.id))} />
+                <div className="narr-body">
+                  <div className="row gap wrap">
+                    <span className="narr-n">{i + 1}</span>
+                    <Pill tone="info">{x.kind}</Pill>
+                    {clip && <span className="muted small">{clip.voice ? clip.voice.replace(/^[a-z]{2,3}-[A-Z]{2}-|Neural$/g, '') : clip.provider} · {fmtSec(clip.duration_seconds)}</span>}
+                    <span className="grow" />
+                    <Btn small kind={clip ? 'ghost' : 'default'} disabled={!provInfo?.status.ok || !voice} title={clip ? 'Record this section again with the voice chosen above' : 'Record this section'} onClick={() => synth([x.id])}><Icon name={clip ? 'refresh' : 'spark'} small /> {clip ? 'Redo' : 'Generate'}</Btn>
+                  </div>
+                  <p className="narr-text">{x.text}</p>
+                  {clip ? <Player clipId={clip.id} seconds={clip.duration_seconds} label={`section ${i + 1}`} /> : <div className="narr-none">No audio yet</div>}
+                </div>
+              </li>
+            );
+          })}
+        </ol>
         <p className="muted small" style={{ marginBottom: 0 }}>The measured length of the audio becomes the authoritative timing for scenes and captions once you approve it.</p>
         <div className="row gap wrap" style={{ marginTop: 14 }}>
           <Btn kind="primary" disabled={!provInfo?.status.ok || !voice} onClick={() => synth()}>Generate narration for the whole script</Btn>
