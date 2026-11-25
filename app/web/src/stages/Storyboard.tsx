@@ -4,7 +4,7 @@ import { api } from '../api';
 import { ArtifactBar, saveArtifact } from '../actions';
 import { useProject } from '../pages/Project';
 import { useAsync, useInterval } from '../hooks';
-import { Btn, Card, Empty, Field, Icon, Loading, Pill, StateBadge, fmtSec, useToast } from '../ui';
+import { Btn, Card, Empty, Field, Icon, Loading, Modal, Pill, StateBadge, fmtSec, useToast } from '../ui';
 import { url } from '../api';
 import { ASSET_TYPES } from '../types';
 import { ProjectDetailsEditor } from './shared';
@@ -29,6 +29,7 @@ export function StoryboardStage() {
   const layout = (v: 'list' | 'grid') => { setView(v); try { localStorage.setItem('wander-storyboard-view', v); } catch { /* storage unavailable */ } };
   const listClass = view === 'grid' ? 'board board-grid' : 'stack';
   const [open, setOpen] = useState<number[]>([]);
+  const [zoom, setZoom] = useState<number | null>(null);
   const cardClass = (i: number) => (view === 'grid' ? 'scene-card tall' : `scene-card wide${open.includes(i) ? ' open' : ''}`);
   // horizontal cards do not scroll inside (that traps the page's scroll): they open to full height instead
   const more = (i: number) => view === 'list' && (
@@ -80,7 +81,7 @@ export function StoryboardStage() {
     const row = sketches.data?.[i];
     return (
       <div className="frame-slot" style={{ aspectRatio: ratio }}>
-        {row?.asset_id ? <img src={url(`/assets/${row.asset_id}/file`)} alt={`Scene ${i + 1} picture`} /> : <span className="muted small">{drawing && (!row || drawing.params?.sceneIds?.includes(row.scene_id)) ? <><span className="spin" /> in the queue</> : 'No picture yet'}</span>}
+        {row?.asset_id ? <button type="button" className="zoom-open" aria-label={`Enlarge scene ${i + 1} picture`} title="Click to enlarge" onClick={() => setZoom(i)}><img src={url(`/assets/${row.asset_id}/file`)} alt={`Scene ${i + 1} picture`} /></button> : <span className="muted small">{drawing && (!row || drawing.params?.sceneIds?.includes(row.scene_id)) ? <><span className="spin" /> in the queue</> : 'No picture yet'}</span>}
       </div>
     );
   };
@@ -219,6 +220,45 @@ export function StoryboardStage() {
           <div className="row gap"><Btn kind="primary" disabled={!dirty} onClick={async () => { const r = await saveArtifact(art.id, c); push('ok', r.changed ? 'Storyboard saved' : 'No changes'); done(); }}>Save storyboard</Btn><span className="muted small">Saving keeps one visual slot per scene in sync. A scene whose visual is already approved cannot be removed.</span></div>
         </>
       )}
+      {zoom !== null && sketches.data?.[zoom]?.asset_id && (
+        <PicturePopup
+          src={url(`/assets/${sketches.data[zoom].asset_id}/file`)}
+          title={`Scene ${zoom + 1}`}
+          caption={c?.scenes[zoom]?.segment_text ?? ''}
+          prev={[...sketches.data.keys()].filter((k) => k < zoom && sketches.data![k].asset_id).at(-1)}
+          next={[...sketches.data.keys()].find((k) => k > zoom && sketches.data![k].asset_id)}
+          go={setZoom}
+          onClose={() => setZoom(null)}
+        />
+      )}
     </>
+  );
+}
+
+/** A scene picture at full size. Escape closes it; the arrow keys move between scenes that have a picture. */
+function PicturePopup({ src, title, caption, prev, next, go, onClose }: { src: string; title: string; caption: string; prev?: number; next?: number; go: (i: number) => void; onClose: () => void }) {
+  useEffect(() => {
+    const key = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose();
+      if (e.key === 'ArrowLeft' && prev !== undefined) go(prev);
+      if (e.key === 'ArrowRight' && next !== undefined) go(next);
+    };
+    document.addEventListener('keydown', key);
+    return () => document.removeEventListener('keydown', key);
+  });
+  return (
+    <Modal title={title} wide onClose={onClose}>
+      <figure className="zoom-view">
+        <img src={src} alt={`${title} picture`} />
+        {caption && <figcaption>“{caption}”</figcaption>}
+      </figure>
+      {(prev !== undefined || next !== undefined) && (
+        <div className="row gap">
+          <Btn small disabled={prev === undefined} onClick={() => go(prev!)}>← Previous</Btn>
+          <span className="grow" />
+          <Btn small disabled={next === undefined} onClick={() => go(next!)}>Next →</Btn>
+        </div>
+      )}
+    </Modal>
   );
 }
