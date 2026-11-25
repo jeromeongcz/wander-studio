@@ -22,8 +22,18 @@ export function checkSeconds(n: unknown): number {
   return s;
 }
 export const beatsFor = (seconds: number) => Math.max(4, Math.round(seconds / BEAT_SECONDS));
+export const MIN_SCENES = 3;
+/** A scene needs time to be seen and a few words to be said: at least about 2.5 s each. */
+export const maxScenes = (seconds: number) => Math.min(MAX_SECTIONS, Math.floor(seconds / 2.5));
+/** The number of storyboard scenes the person asked for; left out, one about every four seconds. */
+export function checkScenes(n: unknown, seconds: number): number {
+  if (n === undefined || n === null) return beatsFor(seconds);
+  const c = Number(n);
+  if (!Number.isInteger(c) || c < MIN_SCENES || c > maxScenes(seconds)) throw bad(`For ${seconds} seconds choose between ${MIN_SCENES} and ${maxScenes(seconds)} scenes`);
+  return c;
+}
 /** Words that fit once the estimator's pauses (about 0.35 s per sentence and 0.3 s between sections) are taken out. */
-export const wordBudget = (seconds: number, wpm: number) => Math.max(beatsFor(seconds) * 4, Math.floor(((seconds * 0.95 - beatsFor(seconds) * 0.65) * wpm) / 60));
+export const wordBudget = (seconds: number, wpm: number, scenes = beatsFor(seconds)) => Math.max(scenes * 4, Math.floor(((seconds * 0.95 - scenes * 0.65) * wpm) / 60));
 export const presetFor = (seconds: number): PresetId => (seconds <= 30 ? 'short_lt30' : seconds <= 45 ? 'short_30_45' : seconds <= 60 ? 'short_45_60' : 'custom');
 
 const FRAMING: Record<string, string> = {
@@ -45,6 +55,7 @@ export interface ScriptBrief {
   lang: string;
   langName: string;
   seconds: number;
+  scenes: number;
   words: number;
   formats: string[];
   notes?: string;
@@ -52,13 +63,13 @@ export interface ScriptBrief {
 
 export function buildScriptPrompt(b: ScriptBrief): string {
   const { name, profile } = profileFor(b.category);
-  const beats = beatsFor(b.seconds);
+  const beats = b.scenes;
   return [
     `Write the script for a faceless narrated video about: ${b.topic}`,
     b.angle ? `Hook idea: ${b.angle}` : '',
     `Category: ${name}. Visual approach: ${profile.styles.join('; ')}.${profile.notes ? ` ${profile.notes}` : ''}`,
     '',
-    `Length: about ${b.seconds} seconds. Write NO MORE THAN ${b.words} words of narration in total (about ${Math.max(4, Math.round(b.words / beats))} per section), split into about ${beats} sections of roughly ${BEAT_SECONDS} seconds each. Count the words before answering: going over makes the video too long.`,
+    `Length: about ${b.seconds} seconds, in EXACTLY ${beats} sections (one storyboard scene each, roughly ${Math.round((b.seconds / beats) * 10) / 10} seconds per section). Write NO MORE THAN ${b.words} words of narration in total (about ${Math.max(4, Math.round(b.words / beats))} per section). Count the sections and words before answering: going over makes the video too long.`,
     `Picture format: ${b.formats.map((f) => FRAMING[f] ?? f).join(' and ')}.`,
     `Narration language: ${LANGUAGE[b.lang] ?? b.langName}. Write every visual description in English.`,
     '',
@@ -121,10 +132,11 @@ export class ScriptWriter {
     this.s = studio;
   }
 
-  private brief(scriptId: string, o: { seconds: unknown; notes?: string }): ScriptBrief {
+  private brief(scriptId: string, o: { seconds: unknown; scenes?: unknown; notes?: string }): ScriptBrief {
     const art = this.s.engine.get(scriptId);
     if (art.kind !== 'script_base') throw bad('Scripts are written on the base script');
     const seconds = checkSeconds(o.seconds);
+    const scenes = checkScenes(o.scenes, seconds);
     const project = this.s.engine.getProject(art.project_id);
     const research = this.s.engine.list(art.project_id, { kind: 'research' })[0];
     if (research.state !== 'approved') throw new EngineError('NOT_READY', 'Approve the topic first: the script is written from the approved research');
@@ -138,13 +150,14 @@ export class ScriptWriter {
       lang,
       langName: this.s.getLocale(lang)?.name ?? lang,
       seconds,
-      words: wordBudget(seconds, this.s.wpm(lang).wpm),
+      scenes,
+      words: wordBudget(seconds, this.s.wpm(lang).wpm, scenes),
       formats: (project.settings.formats as string[] | undefined) ?? ['vertical_9x16'],
       notes: o.notes?.trim().slice(0, 600) || undefined,
     };
   }
 
-  prompt(scriptId: string, o: { seconds: unknown; notes?: string }): string {
+  prompt(scriptId: string, o: { seconds: unknown; scenes?: unknown; notes?: string }): string {
     return buildScriptPrompt(this.brief(scriptId, o));
   }
 
@@ -156,11 +169,12 @@ export class ScriptWriter {
   private store(scriptId: string, b: ScriptBrief, answer: string, reopen?: boolean) {
     const content = parseScriptAnswer(answer, { title: b.topic, lang: b.lang, seconds: b.seconds });
     const saved = this.s.save(scriptId, content, { actor: 'ai', reopen });
-    return { ...saved, sections: content.sections.length };
+    // report the real count: the person asked for a number and should see if the writer missed it
+    return { ...saved, sections: content.sections.length, requested: b.scenes };
   }
 
   /** Ask Claude Code (with no tools) for a script and save it as a draft. */
-  async generate(scriptId: string, o: { seconds: unknown; notes?: string; reopen?: boolean }) {
+  async generate(scriptId: string, o: { seconds: unknown; scenes?: unknown; notes?: string; reopen?: boolean }) {
     const b = this.brief(scriptId, o);
     this.guard(scriptId, o.reopen); // before spending a run
     if (this.writing.has(scriptId)) throw new EngineError('BUSY', 'This script is already being written');
@@ -174,7 +188,7 @@ export class ScriptWriter {
   }
 
   /** Manual path: paste the JSON answer from any AI. Same checks. */
-  importText(scriptId: string, o: { text: unknown; seconds: unknown; reopen?: boolean }) {
+  importText(scriptId: string, o: { text: unknown; seconds: unknown; scenes?: unknown; reopen?: boolean }) {
     if (typeof o.text !== 'string' || !o.text.trim()) throw bad('Paste the answer to import');
     if (o.text.length > 600_000) throw bad('That answer is too long to import');
     const b = this.brief(scriptId, o);

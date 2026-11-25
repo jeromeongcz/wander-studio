@@ -563,10 +563,13 @@ test('the script is written only from approved research, with narration and a vi
   await approveResearch(t);
   for (const seconds of [0, 5, 10000, 'x', 30.5]) assert.equal((await t.call('POST', `/artifacts/${t.script.id}/script/generate`, { seconds })).status, 422, String(seconds));
 
-  const r = await t.call('POST', `/artifacts/${t.script.id}/script/generate`, { seconds: 45, notes: 'gentle tone' });
+  for (const scenes of [2, 19, 4.5, 'many']) assert.equal((await t.call('POST', `/artifacts/${t.script.id}/script/generate`, { seconds: 45, scenes })).status, 422, `scenes ${scenes}`);
+  assert.equal(t.stub.calls(), 0);
+  const r = await t.call('POST', `/artifacts/${t.script.id}/script/generate`, { seconds: 45, scenes: 9, notes: 'gentle tone' });
   assert.equal(r.status, 200, JSON.stringify(r.json));
   const prompt = t.stub.read('prompt_1');
-  assert.match(prompt, /about 45 seconds/);
+  assert.match(prompt, /about 45 seconds, in EXACTLY 9 sections/);
+  assert.deepEqual([r.json.sections, r.json.requested], [3, 9], 'a different count is reported, not hidden');
   assert.match(prompt, /9:16/);
   assert.match(prompt, /NOT verified.*Galleons sailed/);
   assert.match(prompt, /gentle tone/);

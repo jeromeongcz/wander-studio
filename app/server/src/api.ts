@@ -243,9 +243,9 @@ export function buildApi(engine: Engine, config: Partial<AppConfig> = {}): Fasti
     return engine.getProject(id);
   });
   // ---- script writing: draft only; the person reviews and approves ----
-  app.post('/artifacts/:id/script/generate', async (req) => studio.writer.generate((req.params as { id: string }).id, { seconds: body(req).seconds, notes: body(req).notes as string | undefined, reopen: body(req).reopen === true }));
-  app.post('/artifacts/:id/script/prompt', async (req) => ({ prompt: studio.writer.prompt((req.params as { id: string }).id, { seconds: body(req).seconds, notes: body(req).notes as string | undefined }) }));
-  app.post('/artifacts/:id/script/import', async (req) => studio.writer.importText((req.params as { id: string }).id, { text: body(req).text, seconds: body(req).seconds, reopen: body(req).reopen === true }));
+  app.post('/artifacts/:id/script/generate', async (req) => studio.writer.generate((req.params as { id: string }).id, { seconds: body(req).seconds, scenes: body(req).scenes, notes: body(req).notes as string | undefined, reopen: body(req).reopen === true }));
+  app.post('/artifacts/:id/script/prompt', async (req) => ({ prompt: studio.writer.prompt((req.params as { id: string }).id, { seconds: body(req).seconds, scenes: body(req).scenes, notes: body(req).notes as string | undefined }) }));
+  app.post('/artifacts/:id/script/import', async (req) => studio.writer.importText((req.params as { id: string }).id, { text: body(req).text, seconds: body(req).seconds, scenes: body(req).scenes, reopen: body(req).reopen === true }));
   app.post('/artifacts/:id/seed-from-base', async (req, reply) => reply.status(201).send(studio.seedFromBase((req.params as { id: string }).id)));
   app.get('/artifacts/:id/adaptation-prompt', async (req) => {
     const q = req.query as { notes?: string };

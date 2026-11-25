@@ -37,7 +37,7 @@ export function ScriptStage() {
   return (
     <>
       <ArtifactBar artifact={art} onChanged={() => { reload(); loaded.reload(); }}>{dirty && <Pill tone="warn">unsaved</Pill>}</ArtifactBar>
-      <ScriptWriterCard artifactId={art.id} initialSeconds={c.target_seconds ?? 45} hasText={!empty} onWritten={() => { reload(); loaded.reload(); }} />
+      <ScriptWriterCard artifactId={art.id} initialSeconds={c.target_seconds ?? 45} initialScenes={empty ? undefined : c.sections.length} hasText={!empty} onWritten={() => { reload(); loaded.reload(); }} />
       <Card title="Base script">
         <div className="form">
           <Field label="Title"><input value={c.title} onChange={(e) => edit({ title: e.target.value })} /></Field>
