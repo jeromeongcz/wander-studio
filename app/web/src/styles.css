@@ -485,3 +485,11 @@ textarea.vis { min-height: 0; field-sizing: content; }
 .step-content .card.dir-changed { --tone: #B91C1C; }
 .dir-changed .dir-note { color: var(--bad); font-weight: 700; }
 .dir-review { justify-content: flex-end; padding-top: 12px; border-top: 1px solid var(--line); }
+/* Compose & render: the preview with rendering and finished videos beside it */
+.compose-wrap { container-type: inline-size; }
+.compose-top { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; align-items: start; }
+.compose-top > :only-child { grid-column: 1 / -1; }
+@container (max-width: 640px) { .compose-top { grid-template-columns: minmax(0, 1fr); } }
+.finished { margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--line); } .finished h4 { margin-bottom: 10px; }
+.finished-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 180px), 1fr)); gap: 14px; }
+.finished-grid video { width: 100%; } .finished-grid > .stack { min-width: 0; }

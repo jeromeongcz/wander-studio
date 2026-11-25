@@ -79,16 +79,65 @@ function Composition({ lang, format }: { lang: string; format: string }) {
       <TimelineBuilder lang={lang} format={format} timeline={tl} built={!!st?.has_timeline} stale={!!st?.stale} onBuild={build} onPick={setT} at={t} />
       <ArtifactBar artifact={comp} onChanged={done} />
 
+      {(tl || (renders.data?.length ?? 0) > 0) && (
+        <div className="compose-wrap">
+          <div className="compose-top">
+            {tl && (
+              <Card title="Preview" actions={<><Pill>{tl.format.width}×{tl.format.height}</Pill><Pill>{fmtSec(tl.duration)}</Pill></>}>
+                <div className="stack">
+                  <TimelinePlayer key={comp.current_version_id ?? 'none'} timeline={tl} time={t} onTime={setT} captions={captions} onEnlarge={() => setPopup(true)}
+                    still={popup ? undefined : <PreviewFrame id={comp.id} version={comp.current_version_id ?? ''} t={t} captions={captions} stale={!!st?.stale} />} />
+                  <label className="row gap"><input type="checkbox" checked={captions} onChange={(e) => setCaptions(e.target.checked)} />Show captions</label>
+                  <p className="muted small" style={{ margin: 0 }}>Paused, you see an exact frame from the renderer. Playing is a quick check of pictures, voice, captions and a rough approximation of the camera and style: transitions, grain, atmosphere, sound effects, music and exact styling appear in the rendered video. The scene previews below show each transition.</p>
+                </div>
+              </Card>
+            )}
+            <Card title="Render & finished videos" actions={<span className="muted small">Final render: {fin.state.replace('_', ' ')}</span>}>
+              {tl && (
+                <>
+                  <div className="row gap wrap">
+                    <Btn kind="primary" disabled={running || st?.stale || comp.state !== 'approved'} title={comp.state !== 'approved' ? 'Approve the composition first' : ''} onClick={() => startRender(['captioned', 'clean'])}>Render captioned + clean</Btn>
+                    <Btn disabled={running || st?.stale || comp.state !== 'approved'} onClick={() => startRender(['captioned'])}>Captioned only</Btn>
+                    <Btn disabled={running || st?.stale || comp.state !== 'approved'} onClick={() => startRender(['clean'])}>Clean only (use with .srt/.vtt)</Btn>
+                  </div>
+                  {comp.state !== 'approved' && <p className="muted small">Approve the composition above to enable rendering.</p>}
+                  {job && (
+                    <div className="row gap" style={{ marginTop: 12 }}>
+                      <Pill tone={job.state === 'succeeded' ? 'good' : job.state === 'failed' ? 'bad' : 'info'}>{job.state}</Pill>
+                      <div className="bar-prog grow"><i style={{ width: `${Math.round(job.progress * 100)}%` }} /></div>
+                      <span className="muted small">{job.message}</span>
+                      {running && <Btn small kind="danger" onClick={async () => setJob(await api.post(`/jobs/${job.id}/cancel`))}>Cancel</Btn>}
+                    </div>
+                  )}
+                  {job?.state === 'failed' && <div className="notice bad" style={{ marginTop: 10 }}>{job.error?.message}{job.error?.recovery && <div>Fix: {job.error.recovery}</div>}</div>}
+                  <p className="muted small" style={{ marginBottom: 0 }}>Scenes that have not changed are reused from the cache, so small edits re-render quickly. A render only counts as done after it passes verification (codec, size, audio and length).</p>
+                </>
+              )}
+              {(renders.data?.length ?? 0) > 0 && (
+                <div className="finished">
+                  <h4>Finished videos</h4>
+                  <div className="finished-grid">
+                    {(['captioned', 'clean'] as const).map((v) => {
+                      const r = latest(v);
+                      if (!r) return null;
+                      return (
+                        <div key={v} className="stack">
+                          <div className="row gap wrap"><strong>{v === 'captioned' ? 'With captions' : 'Clean (no captions)'}</strong><span className="grow" /><span className="muted small">{fmtSec(r.duration_seconds)} · {fmtBytes(r.bytes)}</span></div>
+                          <video controls preload="metadata" src={url(`/renders/${r.id}/file`)} style={{ maxWidth: '100%', maxHeight: 420, background: '#000', borderRadius: 8 }} />
+                          <span className="muted small mono">sha256 {r.sha256.slice(0, 16)}…</span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+            </Card>
+          </div>
+        </div>
+      )}
+
       {tl && (
         <>
-          <Card title="Preview" actions={<><Pill>{tl.format.width}×{tl.format.height}</Pill><Pill>{fmtSec(tl.duration)}</Pill></>}>
-            <div className="stack">
-              <TimelinePlayer key={comp.current_version_id ?? 'none'} timeline={tl} time={t} onTime={setT} captions={captions} onEnlarge={() => setPopup(true)}
-                still={popup ? undefined : <PreviewFrame id={comp.id} version={comp.current_version_id ?? ''} t={t} captions={captions} stale={!!st?.stale} />} />
-              <label className="row gap"><input type="checkbox" checked={captions} onChange={(e) => setCaptions(e.target.checked)} />Show captions</label>
-              <p className="muted small" style={{ margin: 0 }}>Paused, you see an exact frame from the renderer. Playing is a quick check of pictures, voice, captions and a rough approximation of the camera and style: transitions, grain, atmosphere, sound effects, music and exact styling appear in the rendered video. The scene previews below show each transition.</p>
-            </div>
-          </Card>
           {popup && (
             <Modal title="Preview" wide onClose={() => setPopup(false)}>
               <TimelinePlayer timeline={tl} time={t} onTime={setT} captions={captions} autoPlay />
@@ -115,45 +164,9 @@ function Composition({ lang, format }: { lang: string; format: string }) {
               </>
             );
           }} />
-
-          <Card title="Render" actions={<span className="muted small">Final render: {fin.state.replace('_', ' ')}</span>}>
-            <div className="row gap wrap">
-              <Btn kind="primary" disabled={running || st?.stale || comp.state !== 'approved'} title={comp.state !== 'approved' ? 'Approve the composition first' : ''} onClick={() => startRender(['captioned', 'clean'])}>Render captioned + clean</Btn>
-              <Btn disabled={running || st?.stale || comp.state !== 'approved'} onClick={() => startRender(['captioned'])}>Captioned only</Btn>
-              <Btn disabled={running || st?.stale || comp.state !== 'approved'} onClick={() => startRender(['clean'])}>Clean only (use with .srt/.vtt)</Btn>
-            </div>
-            {comp.state !== 'approved' && <p className="muted small">Approve the composition above to enable rendering.</p>}
-            {job && (
-              <div className="row gap" style={{ marginTop: 12 }}>
-                <Pill tone={job.state === 'succeeded' ? 'good' : job.state === 'failed' ? 'bad' : 'info'}>{job.state}</Pill>
-                <div className="bar-prog grow"><i style={{ width: `${Math.round(job.progress * 100)}%` }} /></div>
-                <span className="muted small">{job.message}</span>
-                {running && <Btn small kind="danger" onClick={async () => setJob(await api.post(`/jobs/${job.id}/cancel`))}>Cancel</Btn>}
-              </div>
-            )}
-            {job?.state === 'failed' && <div className="notice bad" style={{ marginTop: 10 }}>{job.error?.message}{job.error?.recovery && <div>Fix: {job.error.recovery}</div>}</div>}
-            <p className="muted small" style={{ marginBottom: 0 }}>Scenes that have not changed are reused from the cache, so small edits re-render quickly. A render only counts as done after it passes verification (codec, size, audio and length).</p>
-          </Card>
         </>
       )}
 
-      {(renders.data?.length ?? 0) > 0 && (
-        <Card title="Finished videos">
-          <div className="grid g2">
-            {(['captioned', 'clean'] as const).map((v) => {
-              const r = latest(v);
-              if (!r) return null;
-              return (
-                <div key={v} className="stack">
-                  <div className="row gap"><strong>{v === 'captioned' ? 'With captions' : 'Clean (no captions)'}</strong><span className="grow" /><span className="muted small">{fmtSec(r.duration_seconds)} · {fmtBytes(r.bytes)}</span></div>
-                  <video controls preload="metadata" src={url(`/renders/${r.id}/file`)} style={{ maxWidth: '100%', maxHeight: 420, background: '#000', borderRadius: 8 }} />
-                  <span className="muted small mono">sha256 {r.sha256.slice(0, 16)}…</span>
-                </div>
-              );
-            })}
-          </div>
-        </Card>
-      )}
       <Card title="Final render approval"><ArtifactBar artifact={fin} onChanged={done} /><p className="muted small" style={{ marginBottom: 0 }}>Watch the finished video before approving. Approval is yours alone; only approved renders are included in the export package.</p></Card>
     </div>
   );
