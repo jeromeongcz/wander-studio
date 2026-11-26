@@ -6,7 +6,7 @@ import { AssetLibrary } from './pages/AssetLibrary';
 import { ProjectPage } from './pages/Project';
 import { SettingsPage } from './pages/Settings';
 import { Notifications } from './Notifications';
-import { Icon } from './ui';
+import { Icon, Btn, Modal } from './ui';
 import { api } from './api';
 
 function useTheme() {
@@ -33,10 +33,20 @@ export function App() {
   const [, , projectId, stageId] = hash.split('/'); // "/p/<id>/<stage>"
   const route = hash.startsWith('/p/') || hash.startsWith('/projects') ? 'production' : hash.startsWith('/research') ? 'research' : hash.startsWith('/assets') ? 'assets' : hash.startsWith('/settings') ? 'settings' : 'dashboard';
   const [activeAI, setActiveAI] = useState<{ id: string | null; name?: string } | null>(null);
+
+  // Models for the provider model picker modal
   const [openRouterModels, setOpenRouterModels] = useState<Array<{ id: string; name: string }>>([]);
-  const [fetchingORModels, setFetchingORModels] = useState(false);
   const [ollamaModels, setOllamaModels] = useState<Array<{ id: string; name: string }>>([]);
-  const [fetchingOllamaModels, setFetchingOllamaModels] = useState(false);
+  const [fetchingModels, setFetchingModels] = useState(false);
+
+  // Modal state
+  const [modalOpen, setModalOpen] = useState(false);
+  const [modalProvider, setModalProvider] = useState<'ollama' | 'openrouter' | null>(null);
+  const [modalSelectedModel, setModalSelectedModel] = useState<string>('');
+
+  // Test connection state
+  const [testOutput, setTestOutput] = useState<string[]>([]);
+  const [testing, setTesting] = useState(false);
 
   useEffect(() => {
     setMenu(false);
@@ -53,62 +63,70 @@ export function App() {
     return () => { cancelled = true; };
   }, []);
 
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      if (activeAI?.id !== 'openrouter') return;
-      try {
-        setFetchingORModels(true);
-        const models = await api.get<Array<{ id: string; name: string }>>('/llm/providers/openrouter/models');
-        if (!cancelled) setOpenRouterModels(models);
-      } catch { /* openrouter models unavailable */ }
-      finally {
-        if (!cancelled) setFetchingORModels(false);
-      }
-    })();
-    return () => { cancelled = true; };
-  }, [activeAI?.id]);
-
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      if (activeAI?.id !== 'ollama') return;
-      try {
-        setFetchingOllamaModels(true);
-        const models = await api.get<Array<{ id: string; name: string }>>('/llm/providers/ollama/models');
-        if (!cancelled) setOllamaModels(models);
-      } catch { /* ollama models unavailable */ }
-      finally {
-        if (!cancelled) setFetchingOllamaModels(false);
-      }
-    })();
-    return () => { cancelled = true; };
-  }, [activeAI?.id]);
-
-  const switchOpenRouterModel = async (modelId: string) => {
+  const fetchModels = async (providerId: 'ollama' | 'openrouter') => {
+    setFetchingModels(true);
     try {
-      await api.put('/llm/active', { providerId: 'openrouter', selectedModel: modelId });
-      setOpenRouterModels([]);
+      const models = await api.get<Array<{ id: string; name: string }>>(`/llm/providers/${providerId}/models`);
+      if (providerId === 'ollama') setOllamaModels(models);
+      else setOpenRouterModels(models);
+    } catch { /* models unavailable */ }
+    finally {
+      setFetchingModels(false);
+    }
+  };
+
+  const openModelPicker = (providerId: 'ollama' | 'openrouter') => {
+    setModalProvider(providerId);
+    setModalSelectedModel('');
+    setModalOpen(true);
+    fetchModels(providerId);
+  };
+
+  const closeModelPicker = () => {
+    setModalOpen(false);
+    setModalProvider(null);
+    setModalSelectedModel('');
+    setTestOutput([]);
+    setTesting(false);
+  };
+
+  const switchModel = async (modelId: string) => {
+    if (!modalProvider) return;
+    try {
+      await api.put('/llm/active', { providerId: modalProvider, selectedModel: modelId });
       const data = await api.get<{ active: string | null; fallback: string | null; defaultToFreeFirst: boolean; selectedModel: string | null }>('/llm/active');
       setActiveAI({ id: data.active });
-      setFetchingORModels(true);
-      const models = await api.get<Array<{ id: string; name: string }>>('/llm/providers/openrouter/models');
-      setOpenRouterModels(models);
-      setFetchingORModels(false);
+      closeModelPicker();
     } catch { /* switch failed */ }
   };
 
-  const switchOllamaModel = async (modelId: string) => {
+  const testConnection = async () => {
+    if (!modalProvider) return;
+    setTesting(true);
+    setTestOutput([`Testing ${modalProvider} connection...`]);
     try {
-      await api.put('/llm/active', { providerId: 'ollama', selectedModel: modelId });
-      setOllamaModels([]);
-      const data = await api.get<{ active: string | null; fallback: string | null; defaultToFreeFirst: boolean; selectedModel: string | null }>('/llm/active');
-      setActiveAI({ id: data.active });
-      setFetchingOllamaModels(true);
-      const models = await api.get<Array<{ id: string; name: string }>>('/llm/providers/ollama/models');
-      setOllamaModels(models);
-      setFetchingOllamaModels(false);
-    } catch { /* switch failed */ }
+      const res = await api.post<{ ok: boolean; detail: string; latencyMs?: number; lastError?: string }>(`/llm/providers/${modalProvider}/health`);
+      const lines: string[] = [];
+      lines.push(`POST /llm/providers/${modalProvider}/health`);
+      lines.push(`Status: ${res.ok ? 'OK' : 'ERROR'}`);
+      lines.push(`Detail: ${res.detail}`);
+      if (res.latencyMs !== undefined) lines.push(`Latency: ${res.latencyMs}ms`);
+      if (res.lastError) lines.push(`Last error: ${res.lastError}`);
+      lines.push('');
+      lines.push(res.ok ? '✓ Connection successful' : '✗ Connection failed');
+      setTestOutput(lines);
+    } catch (e: any) {
+      setTestOutput([
+        `POST /llm/providers/${modalProvider}/health`,
+        `Status: ERROR`,
+        `Message: ${e?.message ?? String(e)}`,
+        '',
+        '✗ Connection failed',
+      ]);
+    }
+    finally {
+      setTesting(false);
+    }
   };
 
   return (
@@ -132,30 +150,10 @@ export function App() {
           <span className="grow" />
           <Notifications />
           {activeAI?.id === 'openrouter' && (
-            <div className="ai-label" title={`Active AI: ${activeAI.id}`}>
-              <select
-                className="ai-select"
-                disabled={fetchingORModels || openRouterModels.length === 0}
-                onChange={(e) => switchOpenRouterModel(e.target.value)}
-              >
-                {openRouterModels.map((m) => (
-                  <option key={m.id} value={m.id}>{m.name}</option>
-                ))}
-              </select>
-            </div>
+            <Btn small onClick={() => openModelPicker('openrouter')}>OpenRouter models</Btn>
           )}
           {activeAI?.id === 'ollama' && (
-            <div className="ai-label" title={`Active AI: ${activeAI.id}`}>
-              <select
-                className="ai-select"
-                disabled={fetchingOllamaModels || ollamaModels.length === 0}
-                onChange={(e) => switchOllamaModel(e.target.value)}
-              >
-                {ollamaModels.map((m) => (
-                  <option key={m.id} value={m.id}>{m.name}</option>
-                ))}
-              </select>
-            </div>
+            <Btn small onClick={() => openModelPicker('ollama')}>Ollama models</Btn>
           )}
           {activeAI?.id && activeAI.id !== 'openrouter' && activeAI.id !== 'ollama' && (
             <span className="ai-label" title={`Active AI: ${activeAI.id}`}>{activeAI.id}</span>
@@ -170,6 +168,64 @@ export function App() {
           {route === 'settings' && <SettingsPage />}
         </main>
       </div>
+
+      {modalOpen && modalProvider && (
+        <Modal title={`${modalProvider} models`} onClose={closeModelPicker} wide>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+            <div>
+              <strong style={{ fontSize: 14 }}>{modalProvider} models</strong>
+              <span className="muted small" style={{ marginLeft: 8 }}>{fetchingModels ? 'Loading…' : `${(modalProvider === 'ollama' ? ollamaModels : openRouterModels).length} available`}</span>
+            </div>
+
+            {/* Model list */}
+            <div style={{ maxHeight: 300, overflowY: 'auto', border: '1px solid var(--line)', borderRadius: 6, padding: 8, background: 'color-mix(in srgb, var(--panel) 40%, transparent)' }}>
+              {fetchingModels ? (
+                <div className="muted small">Loading models…</div>
+              ) : (modalProvider === 'ollama' ? ollamaModels : openRouterModels).length === 0 ? (
+                <div className="muted small">No models available.</div>
+              ) : (
+                (modalProvider === 'ollama' ? ollamaModels : openRouterModels).map((m) => (
+                  <div
+                    key={m.id}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: 8,
+                      padding: 6,
+                      borderRadius: 4,
+                      cursor: 'pointer',
+                      border: modalSelectedModel === m.id ? '1px solid var(--brand)' : '1px solid transparent',
+                      background: modalSelectedModel === m.id ? 'color-mix(in srgb, var(--brand) 15%, transparent)' : 'transparent',
+                    }}
+                    onClick={() => setModalSelectedModel(m.id)}
+                  >
+                    <span style={{ fontSize: 13 }}>{m.name}</span>
+                    <span className="muted small mono" style={{ marginLeft: 'auto', fontSize: 11 }}>{m.id}</span>
+                    {modalSelectedModel === m.id && <span style={{ color: 'var(--good)', fontSize: 11 }}>● selected</span>}
+                  </div>
+                ))
+              )}
+            </div>
+
+            <div style={{ display: 'flex', gap: 8 }}>
+              <Btn small onClick={() => switchModel(modalSelectedModel)} disabled={!modalSelectedModel || testing}>
+                {testing ? 'Switching…' : 'Select model'}
+              </Btn>
+              <Btn small kind="ghost" onClick={testConnection} disabled={testing}>
+                {testing ? 'Testing…' : 'Test connection'}
+              </Btn>
+            </div>
+
+            {/* Terminal output */}
+            <div style={{ marginTop: 8, border: '1px solid var(--line)', borderRadius: 6, background: '#0b0b0f', color: '#e8e8ea', fontFamily: 'monospace', fontSize: 11, padding: 8, maxHeight: 200, overflowY: 'auto' }}>
+              {testOutput.map((line, i) => (
+                <div key={i} style={{ whiteSpace: 'pre-wrap', marginBottom: 2 }}>{line}</div>
+              ))}
+              {testing && <div style={{ color: 'var(--brand)' }}>⏳ testing…</div>}
+            </div>
+          </div>
+        </Modal>
+      )}
     </div>
   );
 }
