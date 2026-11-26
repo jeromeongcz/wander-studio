@@ -33,6 +33,8 @@ export function App() {
   const [, , projectId, stageId] = hash.split('/'); // "/p/<id>/<stage>"
   const route = hash.startsWith('/p/') || hash.startsWith('/projects') ? 'production' : hash.startsWith('/research') ? 'research' : hash.startsWith('/assets') ? 'assets' : hash.startsWith('/settings') ? 'settings' : 'dashboard';
   const [activeAI, setActiveAI] = useState<{ id: string | null; name?: string } | null>(null);
+  const [openRouterModels, setOpenRouterModels] = useState<Array<{ id: string; name: string }>>([]);
+  const [fetchingORModels, setFetchingORModels] = useState(false);
 
   useEffect(() => {
     setMenu(false);
@@ -48,6 +50,35 @@ export function App() {
     })();
     return () => { cancelled = true; };
   }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      if (activeAI?.id !== 'openrouter') return;
+      try {
+        setFetchingORModels(true);
+        const models = await api.get<Array<{ id: string; name: string }>>('/llm/providers/openrouter/models');
+        if (!cancelled) setOpenRouterModels(models);
+      } catch { /* openrouter models unavailable */ }
+      finally {
+        if (!cancelled) setFetchingORModels(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [activeAI?.id]);
+
+  const switchOpenRouterModel = async (modelId: string) => {
+    try {
+      await api.put('/llm/active', { providerId: 'openrouter', selectedModel: modelId });
+      setOpenRouterModels([]);
+      const data = await api.get<{ active: string | null; fallback: string | null; defaultToFreeFirst: boolean; selectedModel: string | null }>('/llm/active');
+      setActiveAI({ id: data.active });
+      setFetchingORModels(true);
+      const models = await api.get<Array<{ id: string; name: string }>>('/llm/providers/openrouter/models');
+      setOpenRouterModels(models);
+      setFetchingORModels(false);
+    } catch { /* switch failed */ }
+  };
 
   return (
     <div className="app">
@@ -69,7 +100,20 @@ export function App() {
           <button className="icon-btn menu-btn" aria-label="Open menu" onClick={() => setMenu(true)}><Icon name="menu" /></button>
           <span className="grow" />
           <Notifications />
-          {activeAI?.id && (
+          {activeAI?.id === 'openrouter' && (
+            <div className="ai-label" title={`Active AI: ${activeAI.id}`}>
+              <select
+                className="ai-select"
+                disabled={fetchingORModels || openRouterModels.length === 0}
+                onChange={(e) => switchOpenRouterModel(e.target.value)}
+              >
+                {openRouterModels.map((m) => (
+                  <option key={m.id} value={m.id}>{m.name}</option>
+                ))}
+              </select>
+            </div>
+          )}
+          {activeAI?.id && activeAI.id !== 'openrouter' && (
             <span className="ai-label" title={`Active AI: ${activeAI.id}`}>{activeAI.id}</span>
           )}
           <button className="icon-btn" onClick={toggle} aria-label={theme === 'light' ? 'Switch to dark theme' : 'Switch to light theme'} title="Switch theme"><Icon name={theme === 'light' ? 'moon' : 'sun'} /></button>
