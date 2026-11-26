@@ -3,21 +3,6 @@ import { LLMProviderError } from './types.ts';
 
 const BASE_URL = 'https://openrouter.ai/api/v1';
 
-const FREE_MODELS: Array<{ id: string; name: string }> = [
-  { id: 'baidu/ernie-5.5-flash-preview:free', name: 'ERNIE 5.5 Flash Preview' },
-  { id: 'recursive/flint-v1.0:free', name: 'Flint' },
-  { id: 'liquid/lfm-3-1.7b:free', name: 'LFM3-1.7B' },
-  { id: 'inclusionai/ling-3.2-flash:free', name: 'Ling 3.2 Flash' },
-  { id: 'nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free', name: 'Nemotron 3 Nano Omni' },
-  { id: 'nvidia/nemotron-3-ultra-550b-a55b:free', name: 'Nemotron 3 Ultra' },
-  { id: 'nvidia/nemotron-3.5-lightning:free', name: 'Nemotron 3.5 Lightning' },
-  { id: 'nvidia/nemotron-3.5-super-vl:free', name: 'Nemotron 3.5 Super VL' },
-  { id: 'google/gemma-4-26b-a4b-it:free', name: 'Gemma 4 26B A4B' },
-  { id: 'google/gemma-4-31b-it:free', name: 'Gemma 4 31B' },
-  { id: 'openrouter/free', name: 'OpenRouter Free Models Router' },
-  { id: 'particle-ai/particle-1:free', name: 'Particle-1' },
-];
-
 interface OpenRouterOptions {
   apiKey?: string;
   model?: string;
@@ -101,25 +86,23 @@ export function openRouterProvider(opts: OpenRouterOptions): TextLLMProvider {
       return health();
     },
     async listModels() {
-      // Try to fetch live free models from OpenRouter API.
-      if (opts.apiKey) {
-        try {
-          const f: typeof fetch = opts.fetchFn ?? (fetch as typeof fetch);
-          const res = await f(`${base}/models`, {
-            method: 'GET',
-            headers: { authorization: `Bearer ${opts.apiKey}` },
-          });
-          if (res.ok) {
-            const j = await res.json() as { data?: Array<{ id?: string; name?: string; pricing?: { prompt?: number; completion?: number } }> };
-            const free = (j.data ?? [])
-              .filter((m) => m.pricing?.prompt === 0 && m.pricing?.completion === 0)
-              .map((m) => ({ id: m.id ?? '', name: m.name ?? m.id ?? '' }))
-              .filter((m) => m.id);
-            if (free.length > 0) return free;
-          }
-        } catch { /* fall back to static list below */ }
+      // Only return live free models from OpenRouter API. No static fallback.
+      if (!opts.apiKey) return [];
+      try {
+        const f: typeof fetch = opts.fetchFn ?? (fetch as typeof fetch);
+        const res = await f(`${base}/models`, {
+          method: 'GET',
+          headers: { authorization: `Bearer ${opts.apiKey}` },
+        });
+        if (!res.ok) return [];
+        const j = await res.json() as { data?: Array<{ id?: string; name?: string; pricing?: { prompt?: number; completion?: number } }> };
+        return (j.data ?? [])
+          .filter((m) => m.pricing?.prompt === 0 && m.pricing?.completion === 0)
+          .map((m) => ({ id: m.id ?? '', name: m.name ?? m.id ?? '' }))
+          .filter((m) => m.id);
+      } catch {
+        return [];
       }
-      return FREE_MODELS;
     },
     async generateText({ prompt, model, temperature, signal, onChunk }) {
       const usedModel = model ?? opts.model;
