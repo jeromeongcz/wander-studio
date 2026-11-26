@@ -368,6 +368,15 @@ export function buildApi(engine: Engine, config: Partial<AppConfig> = {}, llm?: 
     await p.pullModel({ model: b.model.trim() });
     return { ok: true, model: b.model.trim() };
   });
+  app.delete('/llm/providers/:id/delete', async (req) => {
+    if (!llm) throw new EngineError('NOT_READY', 'LLM provider registry is not configured');
+    const p = llm.get((req.params as { id: string }).id);
+    if (p.kind !== 'ollama' || typeof p.deleteModel !== 'function') throw new EngineError('NOT_READY', `Provider "${p.id}" does not support model deletes`);
+    const { model } = req.query as { model?: string };
+    if (typeof model !== 'string' || !model.trim()) throw new EngineError('VALIDATION', 'model is required');
+    await p.deleteModel({ model: model.trim() });
+    return { ok: true, model: model.trim() };
+  });
   app.get('/llm/active', async () => {
     if (!llm) throw new EngineError('NOT_READY', 'LLM provider registry is not configured');
     return {

@@ -130,6 +130,21 @@ export function ollamaProvider(fetchFn: typeof fetch = fetch, host = DEFAULT_HOS
         reader.releaseLock();
       }
     },
+
+    /** Delete a model from Ollama's local library. */
+    async deleteModel({ model }: { model: string }): Promise<void> {
+      if (!model) throw new LLMProviderError('VALIDATION', 'A model name is required to delete');
+      const res = await fetchFn(`${baseUrl(host)}/api/delete`, {
+        method: 'DELETE',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ name: model }),
+      });
+      if (!res.ok) {
+        let detail = `Ollama delete returned HTTP ${res.status}`;
+        try { const j = await res.json() as { error?: string }; if (j.error) detail = j.error; } catch { /* ignore */ }
+        throw new LLMProviderError('PROVIDER_ERROR', detail);
+      }
+    },
   };
 }
 

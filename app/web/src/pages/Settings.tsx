@@ -145,6 +145,38 @@ export function SettingsPage() {
     }
   };
 
+  // Delete a model from Ollama (always requires confirmation)
+  const [deleteInput, setDeleteInput] = useState('');
+  const [deleting, setDeleting] = useState(false);
+  const [deleteConfirmModel, setDeleteConfirmModel] = useState<string | null>(null);
+
+  const requestDeleteOllamaModel = (model: string) => {
+    setDeleteConfirmModel(model);
+  };
+
+  const cancelDeleteOllamaModel = () => {
+    setDeleteConfirmModel(null);
+  };
+
+  const confirmDeleteOllamaModel = async () => {
+    const model = deleteConfirmModel;
+    if (!model) return;
+    setDeleteConfirmModel(null);
+    setDeleting(true);
+    try {
+      await api.del(`/llm/providers/ollama/delete?model=${encodeURIComponent(model)}`);
+      setDeleteInput('');
+      await loadOllamaModels();
+      await activeLLM.reload();
+      await llmProviders.reload();
+      push('ok', `Model "${model}" deleted`);
+    } catch (e) {
+      push('error', `Delete failed: ${(e as Error).message}`);
+    } finally {
+      setDeleting(false);
+    }
+  };
+
   const switchProvider = async (p: { id: string; name: string }) => {
     setModalProvider(p);
     setModalOpen(true);
@@ -443,6 +475,19 @@ export function SettingsPage() {
                               <span className="muted small">Downloads the model from Ollama's library. Large models can take several minutes.</span>
                             </div>
                           )}
+                          {isOllama && ok && (
+                            <div className="form" style={{ marginTop: 10 }}>
+                              <Field label="Delete model">
+                                <input value={deleteInput} onChange={(e) => setDeleteInput(e.target.value)} placeholder="llama3.2" disabled={deleting} />
+                              </Field>
+                              <div className="row gap" style={{ marginTop: 6 }}>
+                                <Btn small kind="danger" disabled={deleting || !deleteInput.trim()} onClick={() => requestDeleteOllamaModel(deleteInput.trim())}>
+                                  {deleting ? 'Deleting…' : 'Delete model'}
+                                </Btn>
+                                <span className="muted small">Permanently removes the model from Ollama's local library.</span>
+                              </div>
+                            </div>
+                          )}
                           {isOpenAI && (
                             <div style={{ marginTop: 6 }}><Field label="Model (override)">
                               <input value={apiModelInput} onChange={(e) => setApiModelInput(e.target.value)} placeholder="qwen-2.5-coder-32b" />
@@ -541,6 +586,23 @@ export function SettingsPage() {
           <div className="row gap" style={{ marginTop: 16 }}>
             <Btn onClick={confirmSwitch} disabled={switching !== null}>Switch provider</Btn>
             <Btn kind="ghost" onClick={() => { setModalOpen(false); setModalProvider(null); }}>Cancel</Btn>
+          </div>
+        </Modal>
+      )}
+
+      {tab === 'ai-provider' && deleteConfirmModel && (
+        <Modal title={`Delete model "${deleteConfirmModel}"`} onClose={cancelDeleteOllamaModel}>
+          <p className="muted small" style={{ marginTop: 0 }}>
+            Permanently delete <strong>{deleteConfirmModel}</strong> from Ollama's local library. This cannot be undone.
+          </p>
+          <p className="muted small" style={{ marginTop: 8 }}>
+            If this model is the currently selected model, generations will fall back to the default until you pick another.
+          </p>
+          <div className="row gap" style={{ marginTop: 16 }}>
+            <Btn kind="danger" onClick={confirmDeleteOllamaModel} disabled={deleting}>
+              {deleting ? 'Deleting…' : 'Delete model'}
+            </Btn>
+            <Btn kind="ghost" onClick={cancelDeleteOllamaModel}>Cancel</Btn>
           </div>
         </Modal>
       )}
