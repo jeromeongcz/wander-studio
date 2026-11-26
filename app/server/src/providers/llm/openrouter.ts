@@ -12,6 +12,8 @@ const FREE_MODELS: Array<{ id: string; name: string }> = [
   { id: 'nvidia/nemotron-3-ultra-550b-a55b:free', name: 'Nemotron 3 Ultra' },
   { id: 'nvidia/nemotron-3.5-lightning:free', name: 'Nemotron 3.5 Lightning' },
   { id: 'nvidia/nemotron-3.5-super-vl:free', name: 'Nemotron 3.5 Super VL' },
+  { id: 'google/gemma-4-26b-a4b-it:free', name: 'Gemma 4 26B A4B' },
+  { id: 'google/gemma-4-31b-it:free', name: 'Gemma 4 31B' },
   { id: 'openrouter/free', name: 'OpenRouter Free Models Router' },
   { id: 'particle-ai/particle-1:free', name: 'Particle-1' },
 ];
