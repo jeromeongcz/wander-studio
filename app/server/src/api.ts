@@ -252,6 +252,18 @@ export function buildApi(engine: Engine, config: Partial<AppConfig> = {}): Fasti
   // ---- storyboard sketch pictures: drawn as a background job, approved by the person in Visuals ----
   app.get('/artifacts/:id/sketches', async (req) => studio.sketches.list((req.params as { id: string }).id));
   app.post('/artifacts/:id/sketches', async (req, reply) => reply.status(202).send(studio.sketches.start((req.params as { id: string }).id, { indexes: body(req).indexes, reopen: body(req).reopen === true, captionSpace: typeof body(req).captionSpace === 'boolean' ? (body(req).captionSpace as boolean) : undefined })));
+  app.get('/artifacts/:id/sketches/:index/prompt', async (req) => {
+    const p = req.params as { id: string; index: string };
+    const index = Number(p.index);
+    if (!Number.isInteger(index) || index < 0) throw new EngineError('VALIDATION', 'Unknown scene');
+    return { prompt: studio.sketches.promptFor(p.id, index) };
+  });
+  app.post('/artifacts/:id/sketches/:index/custom-svg', async (req) => {
+    const p = req.params as { id: string; index: string };
+    const index = Number(p.index);
+    if (!Number.isInteger(index) || index < 0) throw new EngineError('VALIDATION', 'Unknown scene');
+    return studio.sketches.importSvg(p.id, index, body(req).svg, { reopen: body(req).reopen === true });
+  });
   app.post('/artifacts/:id/seed-from-base', async (req, reply) => reply.status(201).send(studio.seedFromBase((req.params as { id: string }).id)));
   app.get('/artifacts/:id/adaptation-prompt', async (req) => {
     const q = req.query as { notes?: string };
@@ -499,6 +511,7 @@ export function buildApi(engine: Engine, config: Partial<AppConfig> = {}): Fasti
   app.get('/jobs/:id', async (req) => studio.jobs.get((req.params as { id: string }).id));
   app.post('/jobs/:id/cancel', async (req) => studio.jobs.cancel((req.params as { id: string }).id));
   app.post('/jobs/:id/retry', async (req, reply) => reply.status(202).send(studio.jobs.retry((req.params as { id: string }).id)));
+  app.delete('/jobs/:id', async (req) => studio.jobs.delete((req.params as { id: string }).id));
   app.get('/cache', async () => studio.cache.stats());
   app.post('/cache/prune', async (req) => {
     const b = body(req);

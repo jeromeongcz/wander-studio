@@ -13,7 +13,7 @@ export function StoryboardStage() {
   const { project, find, reload } = useProject();
   const art = find('storyboard')!;
   const base = find('script_base')!;
-  const { push } = useToast();
+  const { push, fail } = useToast();
   const loaded = useAsync(() => api.get<any>(`/artifacts/${art.id}`), [art.id, art.current_version_id]);
   const baseDoc = useAsync(() => api.get<any>(`/artifacts/${base.id}`), [base.id, base.current_version_id]);
   const [c, setC] = useState<any>(null);
@@ -22,17 +22,15 @@ export function StoryboardStage() {
   const [view, setView] = useState<'list' | 'grid'>(() => { try { return localStorage.getItem('wander-storyboard-view') === 'grid' ? 'grid' : 'list'; } catch { return 'list'; } });
   const layout = (v: 'list' | 'grid') => { setView(v); try { localStorage.setItem('wander-storyboard-view', v); } catch { /* storage unavailable */ } };
   const listClass = view === 'grid' ? 'board board-grid' : 'stack';
-  const [open, setOpen] = useState<number[]>([]);
   const [zoom, setZoom] = useState<number | null>(null);
+  // custom SVG: paste a drawing to use as a scene's picture instead of generating one
+  const [customSvg, setCustomSvg] = useState<number | null>(null);
+  const [svgText, setSvgText] = useState('');
   const cinematic = useCinematic();
   const moves = cinematic.data?.cameras ?? [];
   const transitions = cinematic.data?.transitions ?? [];
   const directions = (movement: string) => moves.find((m) => m.id === movement)?.directions ?? [];
-  const cardClass = (i: number) => (view === 'grid' ? 'scene-card tall' : `scene-card wide${open.includes(i) ? ' open' : ''}`);
-  // horizontal cards do not scroll inside (that traps the page's scroll): they open to full height instead
-  const more = (i: number) => view === 'list' && (
-    <button type="button" className="show-more" aria-expanded={open.includes(i)} onClick={() => setOpen(open.includes(i) ? open.filter((x) => x !== i) : [...open, i])}>{open.includes(i) ? 'Show less' : 'Show full details'}</button>
-  );
+  const cardClass = (i: number) => (view === 'grid' ? 'scene-card tall' : 'scene-card wide');
   const sketches = useAsync(() => api.get<any[]>(`/artifacts/${art.id}/sketches`), [art.id, art.current_version_id, project.artifacts.map((a) => a.current_version_id).join()]);
   const jobs = useAsync(() => api.get<any[]>(`/jobs?project_id=${project.id}`), [project.id]);
   const drawing = (jobs.data ?? []).find((j) => j.kind === 'sketch_scenes' && (j.state === 'queued' || j.state === 'running'));
@@ -140,6 +138,33 @@ export function StoryboardStage() {
     sketches.reload();
     done();
   };
+  /** Copy the exact art-direction prompt for a scene, to run in any model. */
+  const copyPrompt = async (i: number) => {
+    try {
+      const r = await api.get<{ prompt: string }>(`/artifacts/${art.id}/sketches/${i}/prompt`);
+      await navigator.clipboard.writeText(r.prompt);
+      push('ok', `Scene ${i + 1} prompt copied`);
+    } catch (e) {
+      fail(e);
+    }
+  };
+  /** Turn a pasted SVG into this scene's picture (no model is called). */
+  const generateSvg = async () => {
+    if (customSvg === null) return;
+    const i = customSvg;
+    const approved = sketches.data?.[i]?.state === 'approved';
+    if (approved && !confirm('This scene is approved. Replace its picture with your SVG?\n\nIt will need your approval again.')) return;
+    try {
+      await api.post(`/artifacts/${art.id}/sketches/${i}/custom-svg`, { svg: svgText, reopen: approved });
+      push('ok', `Scene ${i + 1} picture set from your SVG`);
+      setCustomSvg(null);
+      setSvgText('');
+      sketches.reload();
+      done();
+    } catch (e) {
+      fail(e);
+    }
+  };
   const picture = (i: number) => {
     const row = sketches.data?.[i];
     return (
@@ -149,6 +174,10 @@ export function StoryboardStage() {
         {row?.asset_id && (row.state === 'approved'
           ? <span className="approved-mark"><Icon name="check" small /> Approved</span>
           : <Btn small kind="primary" disabled={!!drawing} onClick={() => approveScene(i)}><Icon name="check" small /> Approve</Btn>)}
+        <div className="row gap" style={{ flexWrap: 'wrap' }}>
+          <Btn small onClick={() => copyPrompt(i)} title="Copy this scene's art-direction prompt">Copy prompt</Btn>
+          <Btn small onClick={() => { setCustomSvg(i); setSvgText(''); }} title="Use your own SVG as this scene's picture">Custom SVG</Btn>
+        </div>
       </div>
     );
   };
@@ -193,7 +222,6 @@ export function StoryboardStage() {
                   <div className="row gap"><span className="scene-n">{i + 1}</span><strong className="grow">{s.kind}</strong></div>
                   <p className="quote">“{s.text}”</p>
                   <dl className="scene-facts small scene-text">{['setting', 'characters', 'action', 'shot', 'mood', 'props'].filter((k) => s.visual?.[k]).map((k) => <div key={k}><dt>{k}</dt><dd>{s.visual[k]}</dd></div>)}</dl>
-                  {more(i)}
                 </div>
               </article>
             ))}
@@ -209,7 +237,7 @@ export function StoryboardStage() {
                     <span className="scene-n">{i + 1}</span>
                     <span>
                       <b>Scene {i + 1}</b>
-                      {s.draft && <span className="draft-note" title="Written automatically from the script. Edit the description under Edit details to mark it as yours.">Draft: not edited by you yet</span>}
+                      {s.draft && <span className="draft-note" title="Written automatically from the script. Edit the description to mark it as yours.">Draft: not edited by you yet</span>}
                       {dirty && <span className="draft-note">Changes are not saved: press Save storyboard at the top.</span>}
                     </span>
                   </span>
@@ -221,16 +249,14 @@ export function StoryboardStage() {
                 </header>
                 {picture(i)}
                 <div className="scene-body">
-                <div className="row gap wrap">
-                  <input aria-label="Scene title" value={s.title} onChange={(e) => setScene(i, { title: e.target.value })} />
-                </div>
                 {s.segment_text && <p className="quote">“{s.segment_text}”</p>}
                 <div className="scene-text">
                 <p className="visual-text">{s.visual_description}</p>
                 {s.look && <p className="visual-text">{directionSummary({ look: s.look })}</p>}
-                <details>
-                <summary className="muted small">Edit details</summary>
                 <Field label="What the viewer sees" wide><textarea style={{ marginTop: 6 }} value={s.visual_description} onChange={(e) => setScene(i, { visual_description: e.target.value, draft: false })} /></Field>
+                <div className="row gap wrap">
+                  <input aria-label="Scene title" value={s.title} onChange={(e) => setScene(i, { title: e.target.value })} />
+                </div>
                 <div className="form" style={{ marginTop: 8 }}>
                   <Field label="Script section"><select value={s.script_segment_id} onChange={(e) => setScene(i, { script_segment_id: e.target.value })}>{sections.map((x) => <option key={x.id} value={x.id}>{x.kind}: {x.text.slice(0, 28)}</option>)}</select></Field>
                   <Field label="Duration (s)"><input type="number" step={0.1} min={0.5} value={s.target_duration} onChange={(e) => setScene(i, { target_duration: Number(e.target.value) })} /></Field>
@@ -242,9 +268,7 @@ export function StoryboardStage() {
                   <Field label="Transition in"><select value={s.transition_in ?? 'cut'} onChange={(e) => setScene(i, { transition_in: e.target.value, transition_settings: undefined })}>{transitions.map((t) => <option key={t.id} value={t.id}>{t.label}</option>)}</select></Field>
                   <Field label="Sound effects (comma separated)"><input value={(s.sfx_cues ?? []).join(', ')} onChange={(e) => setScene(i, { sfx_cues: e.target.value.split(',').map((x) => x.trim()).filter(Boolean) })} /></Field>
                 </div>
-                </details>
                 </div>
-                {more(i)}
                 <div className="row gap wrap scene-actions">
                   <Pill>{fmtSec(s.target_duration)}</Pill><Pill>{words(s.camera.movement)}</Pill><Pill>{words(s.transition_in ?? 'cut')} in</Pill>
                   {sketches.data?.[i] && <StateBadge state={sketches.data[i].state} />}
@@ -256,6 +280,18 @@ export function StoryboardStage() {
             {c.scenes.length === 0 && <Empty>No scenes.</Empty>}
           </div>
         </>
+      )}
+      {customSvg !== null && (
+        <Modal title={`Custom SVG — scene ${customSvg + 1}`} wide onClose={() => setCustomSvg(null)}>
+          <p className="muted small" style={{ marginTop: 0 }}>Paste a complete <code>&lt;svg&gt;…&lt;/svg&gt;</code>. It is checked for safety, turned into a PNG at the video size, and set as this scene’s picture. No model is called.</p>
+          <Field label="SVG" wide>
+            <textarea style={{ minHeight: 200, fontFamily: 'monospace', fontSize: 12 }} value={svgText} onChange={(e) => setSvgText(e.target.value)} placeholder={'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1080 1920">…</svg>'} />
+          </Field>
+          <div className="row gap" style={{ marginTop: 10 }}>
+            <Btn kind="primary" disabled={!svgText.trim()} onClick={generateSvg}><Icon name="spark" small /> Generate image</Btn>
+            <Btn onClick={() => setCustomSvg(null)}>Cancel</Btn>
+          </div>
+        </Modal>
       )}
       {zoom !== null && sketches.data?.[zoom]?.asset_id && (
         <PicturePopup
