@@ -1,4 +1,5 @@
 import { spawn } from 'node:child_process';
+import { existsSync } from 'node:fs';
 import { findTool } from '../../platform.ts';
 
 const DEFAULT_HOST = 'http://localhost:11434';
@@ -48,4 +49,29 @@ export function stopOllama(): void {
     ollamaProc.kill('SIGTERM');
   }
   ollamaProc = null;
+}
+
+/** Is the ollama binary installed on this machine? */
+export function isOllamaInstalled(binOverride?: string): boolean {
+  try {
+    return existsSync(resolveOllamaBin(binOverride));
+  } catch {
+    return false;
+  }
+}
+
+/** Install ollama using the official install script. Returns when the install process is spawned. */
+export function installOllama(): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const child = spawn('sh', ['-c', 'curl -fsSL https://ollama.com/install.sh | sh'], { stdio: 'pipe' });
+    let stdout = '';
+    let stderr = '';
+    child.stdout?.on('data', (d) => { stdout += d; });
+    child.stderr?.on('data', (d) => { stderr += d; });
+    child.on('close', (code) => {
+      if (code === 0) resolve();
+      else reject(new Error(`Install failed (exit ${code}): ${stderr.trim() || stdout.trim()}`));
+    });
+    child.on('error', (err) => reject(err));
+  });
 }

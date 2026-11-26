@@ -19,19 +19,19 @@ export function SettingsPage() {
   useInterval(jobs.reload, 2500);
 
   // Ollama process status
-  const [ollamaStatus, setOllamaStatus] = useState<{ running: boolean; pid?: number } | null>(null);
+  const [ollamaStatus, setOllamaStatus] = useState<{ running: boolean; installed: boolean; pid?: number } | null>(null);
 
   const checkOllamaStatus = async () => {
     try {
-      const s = await api.get<{ running: boolean; pid?: number; health?: any }>('/llm/providers/ollama/status');
-      setOllamaStatus({ running: s.running, pid: s.pid });
-    } catch { setOllamaStatus({ running: false }); }
+      const s = await api.get<{ running: boolean; installed: boolean; pid?: number; health?: any }>('/llm/providers/ollama/status');
+      setOllamaStatus({ running: s.running, installed: s.installed, pid: s.pid });
+    } catch { setOllamaStatus({ running: false, installed: false }); }
   };
 
   const startOllama = async () => {
     try {
       const s = await api.post<{ running: boolean; pid?: number; warning?: string }>('/llm/providers/ollama/start');
-      setOllamaStatus({ running: s.running, pid: s.pid });
+      setOllamaStatus({ running: s.running, installed: true, pid: s.pid });
       await llmProviders.reload();
       await activeLLM.reload();
       push('ok', 'Ollama started');
@@ -43,11 +43,23 @@ export function SettingsPage() {
   const stopOllama = async () => {
     try {
       await api.post('/llm/providers/ollama/stop');
-      setOllamaStatus({ running: false });
+      setOllamaStatus({ running: false, installed: true });
       await llmProviders.reload();
       push('ok', 'Ollama stopped');
     } catch (e) {
       push('error', `Stop failed: ${(e as Error).message}`);
+    }
+  };
+
+  const installOllama = async () => {
+    try {
+      const s = await api.post<{ installed: boolean }>('/llm/providers/ollama/install');
+      setOllamaStatus({ running: false, installed: s.installed });
+      await llmProviders.reload();
+      await activeLLM.reload();
+      push('ok', 'Ollama installed');
+    } catch (e) {
+      push('error', `Install failed: ${(e as Error).message}`);
     }
   };
 
@@ -417,16 +429,22 @@ export function SettingsPage() {
                           <div className="muted small" style={{ marginTop: 2 }}>{h?.detail ?? 'Not checked'}</div>
                           {isOllama && (
                             <div className="row gap" style={{ marginTop: 6 }}>
-                              {ollamaStatus?.running ? (
-                                <>
-                                  <Btn small kind="danger" onClick={stopOllama} disabled={switching !== null}>
-                                    Stop Ollama
+                              {ollamaStatus?.installed ? (
+                                ollamaStatus?.running ? (
+                                  <>
+                                    <Btn small kind="danger" onClick={stopOllama} disabled={switching !== null}>
+                                      Stop Ollama
+                                    </Btn>
+                                    <span className="muted small" style={{ fontSize: 11 }}>PID {ollamaStatus.pid}</span>
+                                  </>
+                                ) : (
+                                  <Btn small onClick={startOllama} disabled={switching !== null}>
+                                    Start Ollama
                                   </Btn>
-                                  <span className="muted small" style={{ fontSize: 11 }}>PID {ollamaStatus.pid}</span>
-                                </>
+                                )
                               ) : (
-                                <Btn small onClick={startOllama} disabled={switching !== null}>
-                                  Start Ollama
+                                <Btn small onClick={installOllama} disabled={switching !== null}>
+                                  Install Ollama
                                 </Btn>
                               )}
                             </div>

@@ -13,7 +13,7 @@ import { Studio } from './services.ts';
 import { LLMProviderRegistry } from './providers/llm/registry.ts';
 import { claudeProvider } from './providers/llm/claude.ts';
 import { ollamaProvider } from './providers/llm/ollama.ts';
-import { startOllama, stopOllama, ollamaProcessRunning, ollamaProcPid, resolveOllamaBin } from './providers/llm/ollama-process.ts';
+import { startOllama, stopOllama, ollamaProcessRunning, ollamaProcPid, isOllamaInstalled, installOllama, resolveOllamaBin } from './providers/llm/ollama-process.ts';
 import { openAICompatibleProvider } from './providers/llm/openai-compatible.ts';
 import { readLLMSettings, writeLLMSettings } from './llm-settings.ts';
 import type { LLMSettings } from './providers/llm/types.ts';
@@ -451,6 +451,7 @@ export function buildApi(engine: Engine, config: Partial<AppConfig> = {}, llm?: 
   });
   app.get('/llm/providers/ollama/status', async () => {
     const running = ollamaProcessRunning();
+    const installed = isOllamaInstalled();
     let health;
     if (running && llm) {
       try {
@@ -459,7 +460,7 @@ export function buildApi(engine: Engine, config: Partial<AppConfig> = {}, llm?: 
         llm.setHealth('ollama', health);
       } catch { health = { ok: false, detail: 'Ollama process running but not responding' }; }
     }
-    return { running, pid: ollamaProcPid(), health };
+    return { running, installed, pid: ollamaProcPid(), health };
   });
   app.post('/llm/providers/ollama/start', async (req) => {
     if (!llm) throw new EngineError('NOT_READY', 'LLM provider registry is not configured');
@@ -477,6 +478,11 @@ export function buildApi(engine: Engine, config: Partial<AppConfig> = {}, llm?: 
       } catch { /* keep waiting */ }
     }
     return { running: ollamaProcessRunning(), pid: ollamaProcPid(), warning: 'Ollama started but not yet responding' };
+  });
+  app.post('/llm/providers/ollama/install', async () => {
+    if (isOllamaInstalled()) return { installed: true };
+    await installOllama();
+    return { installed: true };
   });
   app.post('/llm/providers/ollama/stop', async () => {
     stopOllama();
