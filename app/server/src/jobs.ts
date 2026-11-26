@@ -107,6 +107,14 @@ export class JobRunner {
     return this.enqueue(j.kind, { projectId: j.project_id, artifactId: j.artifact_id ?? undefined, params: j.params, retryOf: j.id });
   }
 
+  /** Remove a job's history. Running or queued jobs must be cancelled first. */
+  delete(id: string): { deleted: true } {
+    const j = this.get(id);
+    if (j.state === 'queued' || j.state === 'running') throw new EngineError('BAD_TRANSITION', `Cancel the job before deleting it (it is ${j.state})`);
+    this.engine.db.prepare('DELETE FROM jobs WHERE id = ?').run(id);
+    return { deleted: true };
+  }
+
   /** Resolves when nothing is queued or running (used by tests and graceful shutdown). */
   idle(): Promise<void> {
     const busy = this.pumping || (this.engine.db.prepare("SELECT COUNT(*) AS n FROM jobs WHERE state = 'queued'").get() as { n: number }).n > 0;

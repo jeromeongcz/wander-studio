@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { api } from '../api';
 import { useAsync, useInterval } from '../hooks';
-import { Btn, Card, Empty, ErrorBox, Field, Loading, Pill, fmtBytes, useToast } from '../ui';
+import { Btn, Card, Empty, ErrorBox, Field, Loading, Pill, Tabs, fmtBytes, useToast } from '../ui';
 
 export function SettingsPage() {
   const { push } = useToast();
@@ -16,20 +16,48 @@ export function SettingsPage() {
   const templates = useAsync(() => api.get<any[]>('/templates'), []);
   useInterval(jobs.reload, 2500);
   const [loc, setLoc] = useState({ code: '', name: '', bcp47: '', default_wpm: 140 });
+  const [tab, setTab] = useState<'jobs' | 'system' | 'voices' | 'languages' | 'providers' | 'templates'>('jobs');
+  const [sel, setSel] = useState<string[]>([]);
+  const selectable = (jobs.data ?? []).filter((j: any) => j.state !== 'queued' && j.state !== 'running');
+  const allSel = selectable.length > 0 && selectable.every((j: any) => sel.includes(j.id));
+  const toggleAll = () => setSel(allSel ? [] : selectable.map((j: any) => j.id));
+  const toggle = (id: string) => setSel(sel.includes(id) ? sel.filter((x) => x !== id) : [...sel, id]);
+  const deleteSelected = async () => {
+    if (!sel.length) return;
+    if (!confirm(`Delete ${sel.length} job${sel.length === 1 ? '' : 's'}? This cannot be undone.`)) return;
+    for (const id of sel) await api.del(`/jobs/${id}`);
+    setSel([]);
+    jobs.reload();
+  };
 
   return (
     <div className="stack">
       <h1>Settings</h1>
 
-      <Card title="Background jobs" actions={<Btn small onClick={jobs.reload}>Refresh</Btn>}>
+      <Tabs
+        value={tab}
+        onChange={setTab}
+        items={[
+          { id: 'jobs', label: 'Background jobs' },
+          { id: 'system', label: 'System' },
+          { id: 'voices', label: 'Voices' },
+          { id: 'languages', label: 'Languages' },
+          { id: 'providers', label: 'Providers' },
+          { id: 'templates', label: 'Templates' },
+        ]}
+      />
+
+      {tab === 'jobs' && <Card title="Background jobs" actions={<div className="row gap"><Btn small onClick={jobs.reload}>Refresh</Btn><Btn small kind="danger" disabled={!sel.length} onClick={deleteSelected}>Delete selected{sel.length ? ` (${sel.length})` : ''}</Btn></div>}>
         {jobs.loading && !jobs.data && <Loading />}
         {jobs.data && jobs.data.length === 0 && <Empty>No jobs yet. Renders and batch work started from the Compose stage show up here.</Empty>}
         {jobs.data && jobs.data.length > 0 && (
+          <div className="jobs-scroll">
           <table>
-            <thead><tr><th>Job</th><th>State</th><th>Progress</th><th>Details</th><th /></tr></thead>
+            <thead><tr><th style={{ width: 28 }}><input type="checkbox" aria-label="Select all jobs" checked={allSel} onChange={toggleAll} /></th><th>Job</th><th>State</th><th>Progress</th><th>Details</th><th /></tr></thead>
             <tbody>
               {jobs.data.slice(0, 25).map((j) => (
                 <tr key={j.id}>
+                  <td><input type="checkbox" aria-label={`Select job ${j.id}`} disabled={j.state === 'queued' || j.state === 'running'} checked={sel.includes(j.id)} onChange={() => toggle(j.id)} /></td>
                   <td>{j.kind.replace(/_/g, ' ')}<div className="muted small mono">{new Date(j.created_at).toLocaleTimeString()}{j.attempts > 1 ? ` · attempt ${j.attempts}` : ''}</div></td>
                   <td><Pill tone={j.state === 'succeeded' ? 'good' : j.state === 'failed' ? 'bad' : j.state === 'cancelled' ? 'neutral' : 'info'}>{j.state}</Pill></td>
                   <td style={{ minWidth: 120 }}><div className="bar-prog"><i style={{ width: `${Math.round(j.progress * 100)}%` }} /></div></td>
@@ -37,18 +65,22 @@ export function SettingsPage() {
                     {j.message && <div className="muted">{j.message}</div>}
                     {j.error && <div style={{ color: 'var(--bad)' }}>{j.error.message}{j.error.recovery && <div className="muted">Fix: {j.error.recovery}</div>}</div>}
                   </td>
-                  <td className="row gap">
-                    {(j.state === 'queued' || j.state === 'running') && <Btn small kind="danger" onClick={async () => { await api.post(`/jobs/${j.id}/cancel`); jobs.reload(); }}>Cancel</Btn>}
-                    {(j.state === 'failed' || j.state === 'cancelled') && <Btn small onClick={async () => { await api.post(`/jobs/${j.id}/retry`); jobs.reload(); }}>Retry</Btn>}
+                  <td>
+                    <div className="row gap">
+                      {(j.state === 'queued' || j.state === 'running') && <Btn small kind="danger" onClick={async () => { await api.post(`/jobs/${j.id}/cancel`); jobs.reload(); }}>Cancel</Btn>}
+                      {(j.state === 'failed' || j.state === 'cancelled') && <Btn small onClick={async () => { await api.post(`/jobs/${j.id}/retry`); jobs.reload(); }}>Retry</Btn>}
+                      {j.state !== 'queued' && j.state !== 'running' && <Btn small kind="danger" onClick={async () => { if (!confirm('Delete this job from the list? This cannot be undone.')) return; await api.del(`/jobs/${j.id}`); jobs.reload(); }}>Delete</Btn>}
+                    </div>
                   </td>
                 </tr>
               ))}
             </tbody>
           </table>
+          </div>
         )}
-      </Card>
+      </Card>}
 
-      <div className="grid g2">
+      {tab === 'system' && <div className="grid g2">
         <Card title="Environment check" actions={<Btn small onClick={pf.reload}>Re-check</Btn>}>
           {pf.loading && !pf.data && <Loading />}
           {pf.error && <ErrorBox error={pf.error} />}
@@ -76,9 +108,9 @@ export function SettingsPage() {
             </>
           )}
         </Card>
-      </div>
+      </div>}
 
-      <Card title="Voices (text-to-speech)">
+      {tab === 'voices' && <Card title="Voices (text-to-speech)">
         <p className="muted" style={{ marginTop: 0 }}>Providers are always chosen explicitly. Nothing falls back to another provider on its own, and nothing is downloaded without you.</p>
         <table>
           <thead><tr><th>Provider</th><th>Status</th><th>Languages</th><th>Terms</th></tr></thead>
@@ -100,9 +132,9 @@ export function SettingsPage() {
             <span className="small">{whisper.data.models[0]?.license}. Caption spelling always stays anchored to your approved script.</span>
           </div>
         )}
-      </Card>
+      </Card>}
 
-      <div className="grid g2">
+      {tab === 'languages' && <div className="grid g2">
         <Card title="Languages">
           <table><tbody>{(locales.data ?? []).map((l) => <tr key={l.code}><td><strong>{l.name}</strong> <span className="muted mono">{l.code}</span></td><td>{l.bcp47}</td><td>{l.default_wpm} wpm</td><td>{l.builtin ? <Pill>built in</Pill> : <Pill tone="info">custom</Pill>}</td></tr>)}</tbody></table>
           <h4 style={{ margin: '14px 0 8px' }}>Add a language</h4>
@@ -114,7 +146,9 @@ export function SettingsPage() {
           </div>
           <div style={{ marginTop: 10 }}><Btn disabled={!loc.code || !loc.name || !loc.bcp47} onClick={async () => { await api.post('/locales', loc); push('ok', `${loc.name} added`); setLoc({ code: '', name: '', bcp47: '', default_wpm: 140 }); locales.reload(); }}>Add language</Btn></div>
         </Card>
+      </div>}
 
+      {tab === 'providers' && <div className="grid g2">
         <Card title="Sources and providers">
           <table><tbody>
             {(stock.data ?? []).map((p) => <tr key={p.id}><td><strong>{p.name}</strong><div className="muted small">{p.terms.freeTier}</div></td><td className="small">{p.terms.commercialUse}<div className="muted">Privacy: {p.terms.privacy}</div></td></tr>)}
@@ -122,9 +156,9 @@ export function SettingsPage() {
           </tbody></table>
           <p className="muted small">AI image-to-video models and cloud GPU services are not bundled: they need an endpoint or a large model download that you should approve first.</p>
         </Card>
-      </div>
+      </div>}
 
-      <Card title="Templates">
+      {tab === 'templates' && <Card title="Templates">
         <div className="grid g3">
           {(templates.data ?? []).map((t) => (
             <div key={t.id} className="scene">
@@ -134,7 +168,7 @@ export function SettingsPage() {
             </div>
           ))}
         </div>
-      </Card>
+      </Card>}
     </div>
   );
 }

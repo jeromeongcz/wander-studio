@@ -20,7 +20,6 @@ export function Stepper({ items, current, title, blurb }: { items: StepItem[]; c
         <div className="step-title">
           <h2>{title}</h2>
           {blurb && <p className="muted">{blurb}</p>}
-          <span className="step-num">STEP {current + 1} OF {items.length}</span>
         </div>
       )}
       <nav className="stepper" aria-label="Production steps">

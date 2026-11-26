@@ -493,3 +493,17 @@ textarea.vis { min-height: 0; field-sizing: content; }
 .finished { margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--line); } .finished h4 { margin-bottom: 10px; }
 .finished-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 180px), 1fr)); gap: 14px; }
 .finished-grid video { width: 100%; } .finished-grid > .stack { min-width: 0; }
+
+/* Storyboard scenes size to their content (no fixed height); the whole card is visible */
+.scene-card.wide, .scene-card.tall,
+.scene-card.wide:has(.scene-top), .scene-card.tall:has(.scene-top) { height: auto; }
+.scene-card.wide .scene-body, .scene-card.tall .scene-body { overflow: visible; }
+.scene-card.wide .scene-body > .scene-text, .scene-card.tall .scene-body > .scene-text { flex: 0 0 auto; overflow: visible; -webkit-mask-image: none; mask-image: none; }
+
+/* Storyboard: hide the visual description text (the picture and controls remain) */
+.scene-card .visual-text { display: none; }
+
+/* Settings: background jobs list scrolls inside a fixed height */
+.jobs-scroll { max-height: 420px; overflow: auto; border: 1px solid var(--line); border-radius: var(--radius-sm); }
+.jobs-scroll table { margin: 0; }
+.jobs-scroll thead th { position: sticky; top: 0; background: var(--panel); z-index: 1; }

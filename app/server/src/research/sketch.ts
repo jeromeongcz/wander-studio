@@ -202,14 +202,52 @@ export class SketchArtist {
     return { drawn };
   }
 
-  private async draw(projectId: string, sb: StoryboardContent, index: number, o: { reopen?: boolean; captionSpace?: boolean; signal?: AbortSignal }) {
+  /** The exact art-direction prompt for one scene, so it can be copied and run in any model. */
+  promptFor(storyboardId: string, index: number) {
+    let { a, content } = this.storyboard(storyboardId);
+    if (!content) {
+      this.s.seedStoryboard(storyboardId);
+      ({ a, content } = this.storyboard(storyboardId));
+    }
+    const scene = content?.scenes[index];
+    if (!scene) throw new EngineError('VALIDATION', 'Unknown scene');
+    const project = this.s.engine.getProject(a.project_id);
+    const format = (project.settings.formats as string[] | undefined)?.[0] ?? 'vertical_9x16';
+    const size = FRAME[format] ?? FRAME.vertical_9x16;
+    const captionSpace = project.settings.reserve_caption_space === true;
+    return buildSketchPrompt(scene, { size, category: project.category ?? undefined, number: index + 1, total: content!.scenes.length, styleNotes: content!.style_notes, captionSpace });
+  }
+
+  /**
+   * Use a person-supplied SVG as a scene's picture: it is checked like model output, turned into a PNG and linked to the
+   * scene. No model is called. Approved scenes are protected unless `reopen` is set.
+   */
+  async importSvg(storyboardId: string, index: number, svgText: unknown, o: { reopen?: boolean } = {}) {
+    let { a, content } = this.storyboard(storyboardId);
+    if (!content) {
+      this.s.seedStoryboard(storyboardId);
+      ({ a, content } = this.storyboard(storyboardId));
+    }
+    const scene = content?.scenes[index];
+    if (!scene) throw new EngineError('VALIDATION', 'Unknown scene');
+    if (typeof svgText !== 'string' || !svgText.trim()) throw new EngineError('VALIDATION', 'Paste an SVG to use as the picture');
+    const project = this.s.engine.getProject(a.project_id);
+    const format = (project.settings.formats as string[] | undefined)?.[0] ?? 'vertical_9x16';
+    const size = FRAME[format] ?? FRAME.vertical_9x16;
+    const svg = checkSvg(svgText, size);
+    const row = this.list(storyboardId)[index];
+    if (row?.state === 'approved' && !o.reopen) throw new EngineError('PROTECTED', `Scene ${index + 1} is approved; reopen it to replace its picture`);
+    const asset = await this.attach(a.project_id, content!, index, svg, o, 'custom-svg');
+    return { asset_id: asset.id };
+  }
+
+  /** Rasterize a checked drawing and make it the scene's picture. Shared by model drawing and pasted SVG. */
+  private async attach(projectId: string, sb: StoryboardContent, index: number, svg: string, o: { reopen?: boolean; captionSpace?: boolean }, provider: string) {
     const project = this.s.engine.getProject(projectId);
     const format = (project.settings.formats as string[] | undefined)?.[0] ?? 'vertical_9x16';
     const size = FRAME[format] ?? FRAME.vertical_9x16;
     const scene = sb.scenes[index];
     const captionSpace = o.captionSpace ?? project.settings.reserve_caption_space === true;
-    const prompt = buildSketchPrompt(scene, { size, category: project.category ?? undefined, number: index + 1, total: sb.scenes.length, styleNotes: sb.style_notes, captionSpace });
-    const svg = checkSvg(await this.s.research.bridge.ask(prompt, { noTools: true, signal: o.signal }), size);
     const dir = join(this.s.config.root, 'cache', `sketch_${ulid()}`);
     await mkdir(dir, { recursive: true });
     try {
@@ -220,16 +258,28 @@ export class SketchArtist {
       const asset = await this.s.assets.importLocal(projectId, png, {
         type: 'illustration',
         name: `Sketch: scene ${index + 1}`,
-        license: { type: 'ai-generated', commercial_use: 'unknown', notes: 'Storyboard sketch drawn by Claude from your script. Check your Claude plan terms before commercial use.' },
-        provider: 'claude-sketch',
+        license: { type: 'ai-generated', commercial_use: 'unknown', notes: 'Storyboard sketch from your script. Check the source model or your own drawing terms before commercial use.' },
+        provider,
         prompt: scene.visual_description,
         tags: ['storyboard-sketch'],
         params: { scene_id: scene.scene_id, prompt_version: 2, caption_space: captionSpace },
       });
       const art = this.s.engine.list(projectId, { kind: 'scene_asset' }).find((x) => x.scene_id === scene.scene_id)!;
       this.s.save(art.id, { assets: [{ asset_id: asset.id, role: 'primary' }], primary_asset_id: asset.id }, { actor: 'ai', reopen: o.reopen });
+      return asset;
     } finally {
       await rm(dir, { recursive: true, force: true }).catch(() => {});
     }
+  }
+
+  private async draw(projectId: string, sb: StoryboardContent, index: number, o: { reopen?: boolean; captionSpace?: boolean; signal?: AbortSignal }) {
+    const project = this.s.engine.getProject(projectId);
+    const format = (project.settings.formats as string[] | undefined)?.[0] ?? 'vertical_9x16';
+    const size = FRAME[format] ?? FRAME.vertical_9x16;
+    const scene = sb.scenes[index];
+    const captionSpace = o.captionSpace ?? project.settings.reserve_caption_space === true;
+    const prompt = buildSketchPrompt(scene, { size, category: project.category ?? undefined, number: index + 1, total: sb.scenes.length, styleNotes: sb.style_notes, captionSpace });
+    const svg = checkSvg(await this.s.research.bridge.ask(prompt, { noTools: true, signal: o.signal }), size);
+    await this.attach(projectId, sb, index, svg, o, 'claude-sketch');
   }
 }
