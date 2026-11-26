@@ -35,6 +35,8 @@ export function App() {
   const [activeAI, setActiveAI] = useState<{ id: string | null; name?: string } | null>(null);
   const [openRouterModels, setOpenRouterModels] = useState<Array<{ id: string; name: string }>>([]);
   const [fetchingORModels, setFetchingORModels] = useState(false);
+  const [ollamaModels, setOllamaModels] = useState<Array<{ id: string; name: string }>>([]);
+  const [fetchingOllamaModels, setFetchingOllamaModels] = useState(false);
 
   useEffect(() => {
     setMenu(false);
@@ -67,6 +69,22 @@ export function App() {
     return () => { cancelled = true; };
   }, [activeAI?.id]);
 
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      if (activeAI?.id !== 'ollama') return;
+      try {
+        setFetchingOllamaModels(true);
+        const models = await api.get<Array<{ id: string; name: string }>>('/llm/providers/ollama/models');
+        if (!cancelled) setOllamaModels(models);
+      } catch { /* ollama models unavailable */ }
+      finally {
+        if (!cancelled) setFetchingOllamaModels(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [activeAI?.id]);
+
   const switchOpenRouterModel = async (modelId: string) => {
     try {
       await api.put('/llm/active', { providerId: 'openrouter', selectedModel: modelId });
@@ -77,6 +95,19 @@ export function App() {
       const models = await api.get<Array<{ id: string; name: string }>>('/llm/providers/openrouter/models');
       setOpenRouterModels(models);
       setFetchingORModels(false);
+    } catch { /* switch failed */ }
+  };
+
+  const switchOllamaModel = async (modelId: string) => {
+    try {
+      await api.put('/llm/active', { providerId: 'ollama', selectedModel: modelId });
+      setOllamaModels([]);
+      const data = await api.get<{ active: string | null; fallback: string | null; defaultToFreeFirst: boolean; selectedModel: string | null }>('/llm/active');
+      setActiveAI({ id: data.active });
+      setFetchingOllamaModels(true);
+      const models = await api.get<Array<{ id: string; name: string }>>('/llm/providers/ollama/models');
+      setOllamaModels(models);
+      setFetchingOllamaModels(false);
     } catch { /* switch failed */ }
   };
 
@@ -113,7 +144,20 @@ export function App() {
               </select>
             </div>
           )}
-          {activeAI?.id && activeAI.id !== 'openrouter' && (
+          {activeAI?.id === 'ollama' && (
+            <div className="ai-label" title={`Active AI: ${activeAI.id}`}>
+              <select
+                className="ai-select"
+                disabled={fetchingOllamaModels || ollamaModels.length === 0}
+                onChange={(e) => switchOllamaModel(e.target.value)}
+              >
+                {ollamaModels.map((m) => (
+                  <option key={m.id} value={m.id}>{m.name}</option>
+                ))}
+              </select>
+            </div>
+          )}
+          {activeAI?.id && activeAI.id !== 'openrouter' && activeAI.id !== 'ollama' && (
             <span className="ai-label" title={`Active AI: ${activeAI.id}`}>{activeAI.id}</span>
           )}
           <button className="icon-btn" onClick={toggle} aria-label={theme === 'light' ? 'Switch to dark theme' : 'Switch to light theme'} title="Switch theme"><Icon name={theme === 'light' ? 'moon' : 'sun'} /></button>
