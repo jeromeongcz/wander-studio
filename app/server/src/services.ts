@@ -47,6 +47,8 @@ import { mkdir, writeFile, rename, rm, readdir, stat } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import type { AppConfig } from './config.ts';
+import { LLMProviderRegistry } from './providers/llm/registry.ts';
+import type { TextLLMProvider } from './providers/llm/types.ts';
 import type { AssetType } from './studios/storyboard.ts';
 
 const LOCALE_CODE = /^[a-z][a-z0-9_-]{1,15}$/;
@@ -93,9 +95,11 @@ export class Studio {
   research: ResearchService;
   writer: ScriptWriter;
   sketches: SketchArtist;
-  constructor(engine: Engine, config: Partial<AppConfig> = {}) {
+  llm: LLMProviderRegistry;
+  constructor(engine: Engine, config: Partial<AppConfig> = {}, llm?: LLMProviderRegistry) {
     this.engine = engine;
     this.config = resolveConfig(config);
+    this.llm = llm ?? new LLMProviderRegistry();
     this.assets = new AssetService(engine, this.config);
     this.audio = new AudioService(engine, this.config);
     this.render = new RenderService(engine, this.assets, this.audio, this.config);

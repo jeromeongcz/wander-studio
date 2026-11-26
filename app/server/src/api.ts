@@ -10,6 +10,13 @@ import type { AppConfig } from './config.ts';
 import type { FastifyInstance } from 'fastify';
 import { Engine, EngineError } from './engine.ts';
 import { Studio } from './services.ts';
+import { LLMProviderRegistry } from './providers/llm/registry.ts';
+import { claudeProvider } from './providers/llm/claude.ts';
+import { ollamaProvider } from './providers/llm/ollama.ts';
+import { startOllama, stopOllama, ollamaProcessRunning, ollamaProcPid, resolveOllamaBin } from './providers/llm/ollama-process.ts';
+import { openAICompatibleProvider } from './providers/llm/openai-compatible.ts';
+import { readLLMSettings, writeLLMSettings } from './llm-settings.ts';
+import type { LLMSettings } from './providers/llm/types.ts';
 import { addFormat, addLanguage, createProject, removeFormat, removeLanguage } from './pipeline.ts';
 import { estimate, isPreset, PRESETS } from './studios/estimator.ts';
 import { newResearchContent } from './studios/research.ts';
@@ -50,8 +57,16 @@ const body = (req: { body: unknown }): Record<string, any> => (req.body && typeo
  * created by internal provider code calling the service layer with actor 'ai', never via
  * these routes, so approval can never be performed by a provider.
  */
-export function buildApi(engine: Engine, config: Partial<AppConfig> = {}): FastifyInstance {
-  const studio = new Studio(engine, config);
+export function buildApi(engine: Engine, config: Partial<AppConfig> = {}, llm?: LLMProviderRegistry): FastifyInstance {
+  // Backward compatibility: when no registry is supplied (e.g. tests), default to Claude
+  // so research/script/storyboard keep working through your own sign-in.
+  const registry = llm ?? (() => {
+    const r = new LLMProviderRegistry();
+    r.register(claudeProvider(config.llm?.claudeBin));
+    r.setActive('claude');
+    return r;
+  })();
+  const studio = new Studio(engine, config, registry);
   const assets = studio.assets;
   // The UI calls /api/...; strip the prefix so every route works with or without it.
   const app = Fastify({ logger: false, rewriteUrl: (req) => (req.url?.startsWith('/api/') ? req.url.slice(4) : (req.url ?? '/')) });
@@ -313,6 +328,150 @@ export function buildApi(engine: Engine, config: Partial<AppConfig> = {}): Fasti
   app.get('/providers/:id/search', async (req) => {
     const q = req.query as { q?: string; page?: string; restricted?: string };
     return assets.providers.stock((req.params as { id: string }).id).search({ query: q.q ?? '', page: Number(q.page ?? 1), includeRestricted: q.restricted === 'true' });
+  });
+
+  // ---- LLM providers (Global AI Switcher) ----
+  app.get('/llm/providers', async () => {
+    if (!llm) throw new EngineError('NOT_READY', 'LLM provider registry is not configured');
+    return llm.list().map((p) => {
+      const h = llm.healthStatus(p.id);
+      return {
+        id: p.id,
+        kind: p.kind,
+        name: p.name,
+        terms: p.terms,
+        active: p.id === llm.activeIdOrNull(),
+        fallback: p.id === llm.fallbackIdOrNull(),
+        canListModels: typeof p.listModels === 'function',
+        health: h ? { ok: h.ok, detail: h.detail, latencyMs: h.latencyMs, lastError: h.lastError } : undefined,
+      };
+    });
+  });
+  app.post('/llm/providers/:id/health', async (req) => {
+    if (!llm) throw new EngineError('NOT_READY', 'LLM provider registry is not configured');
+    const h = await llm.get((req.params as { id: string }).id).healthCheck();
+    llm.setHealth((req.params as { id: string }).id, h);
+    return h;
+  });
+  app.get('/llm/providers/:id/models', async (req) => {
+    if (!llm) throw new EngineError('NOT_READY', 'LLM provider registry is not configured');
+    const p = llm.get((req.params as { id: string }).id);
+    if (!('listModels' in p)) throw new EngineError('NOT_READY', `Provider "${p.id}" does not list models`);
+    return p.listModels!();
+  });
+  app.post('/llm/providers/:id/pull', async (req) => {
+    if (!llm) throw new EngineError('NOT_READY', 'LLM provider registry is not configured');
+    const p = llm.get((req.params as { id: string }).id);
+    if (p.kind !== 'ollama' || typeof p.pullModel !== 'function') throw new EngineError('NOT_READY', `Provider "${p.id}" does not support model pulls`);
+    const b = body(req);
+    if (typeof b.model !== 'string' || !b.model.trim()) throw new EngineError('VALIDATION', 'model is required');
+    await p.pullModel({ model: b.model.trim() });
+    return { ok: true, model: b.model.trim() };
+  });
+  app.get('/llm/active', async () => {
+    if (!llm) throw new EngineError('NOT_READY', 'LLM provider registry is not configured');
+    return {
+      active: llm.activeIdOrNull(),
+      fallback: llm.fallbackIdOrNull(),
+      defaultToFreeFirst: config.defaultToFreeFirst ?? false,
+      selectedModel: config.selectedLLMModel ?? null,
+    };
+  });
+  app.put('/llm/active', async (req) => {
+    if (!llm) throw new EngineError('NOT_READY', 'LLM provider registry is not configured');
+    const b = body(req);
+    if (b.providerId !== undefined && typeof b.providerId !== 'string') throw new EngineError('VALIDATION', 'providerId must be a string');
+    if (b.fallbackProviderId !== undefined && typeof b.fallbackProviderId !== 'string') throw new EngineError('VALIDATION', 'fallbackProviderId must be a string');
+    if (b.selectedModel !== undefined && typeof b.selectedModel !== 'string' && b.selectedModel !== null) throw new EngineError('VALIDATION', 'selectedModel must be a string or null');
+    if (b.defaultToFreeFirst !== undefined && typeof b.defaultToFreeFirst !== 'boolean') throw new EngineError('VALIDATION', 'defaultToFreeFirst must be a boolean');
+
+    const settings: Partial<LLMSettings> = {};
+    if (b.providerId !== undefined) settings.activeProvider = b.providerId;
+    if (b.fallbackProviderId !== undefined) settings.fallbackProvider = b.fallbackProviderId;
+    if (b.selectedModel !== undefined) settings.selectedModel = b.selectedModel;
+    if (b.defaultToFreeFirst !== undefined) settings.defaultToFreeFirst = b.defaultToFreeFirst;
+
+    llm.applySettings(settings);
+    await writeLLMSettings({
+      activeProvider: llm.activeIdOrNull(),
+      fallbackProvider: llm.fallbackIdOrNull(),
+      defaultToFreeFirst: settings.defaultToFreeFirst ?? config.defaultToFreeFirst ?? false,
+      selectedModel: settings.selectedModel ?? config.selectedLLMModel ?? undefined,
+      ollamaHost: config.ollamaHost,
+      openaiCompatible: config.openaiCompatible,
+    });
+    return {
+      active: llm.activeIdOrNull(),
+      fallback: llm.fallbackIdOrNull(),
+      defaultToFreeFirst: settings.defaultToFreeFirst ?? config.defaultToFreeFirst ?? false,
+      selectedModel: settings.selectedModel ?? config.selectedLLMModel ?? undefined,
+    };
+  });
+  app.put('/llm/config', async (req) => {
+    if (!llm) throw new EngineError('NOT_READY', 'LLM provider registry is not configured');
+    const b = body(req);
+    const settings: Partial<LLMSettings> = {};
+    if (b.ollamaHost !== undefined) {
+      if (typeof b.ollamaHost !== 'string') throw new EngineError('VALIDATION', 'ollamaHost must be a string');
+      settings.ollamaHost = b.ollamaHost;
+      llm.replace('ollama', ollamaProvider(fetch, b.ollamaHost));
+    }
+    if (b.openaiCompatible !== undefined) {
+      const oc = b.openaiCompatible;
+      if (typeof oc.baseUrl !== 'string' || !oc.baseUrl.trim()) throw new EngineError('VALIDATION', 'openaiCompatible.baseUrl is required');
+      settings.openaiCompatible = { baseUrl: oc.baseUrl.trim(), apiKey: oc.apiKey ?? undefined, model: oc.model ?? '' };
+      llm.replace('openai-compatible', openAICompatibleProvider({
+        baseUrl: settings.openaiCompatible.baseUrl,
+        apiKey: settings.openaiCompatible.apiKey,
+        model: settings.openaiCompatible.model,
+        fetchFn: fetch,
+      }));
+    }
+    await writeLLMSettings({
+      activeProvider: llm.activeIdOrNull(),
+      fallbackProvider: llm.fallbackIdOrNull(),
+      defaultToFreeFirst: settings.defaultToFreeFirst ?? config.defaultToFreeFirst ?? false,
+      selectedModel: settings.selectedModel ?? config.selectedLLMModel ?? undefined,
+      ollamaHost: settings.ollamaHost ?? config.ollamaHost,
+      openaiCompatible: settings.openaiCompatible ?? config.openaiCompatible,
+    });
+    return {
+      ollamaHost: settings.ollamaHost ?? config.ollamaHost,
+      openaiCompatible: settings.openaiCompatible ?? config.openaiCompatible,
+    };
+  });
+  app.get('/llm/providers/ollama/status', async () => {
+    const running = ollamaProcessRunning();
+    let health;
+    if (running && llm) {
+      try {
+        const p = llm.get('ollama');
+        health = await p.healthCheck();
+        llm.setHealth('ollama', health);
+      } catch { health = { ok: false, detail: 'Ollama process running but not responding' }; }
+    }
+    return { running, pid: ollamaProcPid(), health };
+  });
+  app.post('/llm/providers/ollama/start', async (req) => {
+    if (!llm) throw new EngineError('NOT_READY', 'LLM provider registry is not configured');
+    if (ollamaProcessRunning()) return { running: true, pid: ollamaProcPid() };
+    const host = config.ollamaHost ?? 'http://localhost:11434';
+    await startOllama(host);
+    // wait up to ~10s for ollama to become healthy
+    for (let i = 0; i < 50; i++) {
+      await new Promise((r) => setTimeout(r, 200));
+      try {
+        const p = llm.get('ollama');
+        const h = await p.healthCheck();
+        llm.setHealth('ollama', h);
+        if (h.ok) return { running: true, pid: ollamaProcPid() };
+      } catch { /* keep waiting */ }
+    }
+    return { running: ollamaProcessRunning(), pid: ollamaProcPid(), warning: 'Ollama started but not yet responding' };
+  });
+  app.post('/llm/providers/ollama/stop', async () => {
+    stopOllama();
+    return { running: false };
   });
 
   // ---- assets ----

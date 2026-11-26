@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { api } from '../api';
 import { useAsync, useInterval } from '../hooks';
-import { Btn, Card, Empty, ErrorBox, Field, Loading, Pill, Tabs, fmtBytes, useToast } from '../ui';
+import { Btn, Card, Empty, ErrorBox, Field, Icon, Loading, Modal, Pill, Tabs, fmtBytes, useToast } from '../ui';
 
 export function SettingsPage() {
   const { push } = useToast();
@@ -13,11 +13,79 @@ export function SettingsPage() {
   const locales = useAsync(() => api.get<any[]>('/locales'), []);
   const i2v = useAsync(() => api.get<any[]>('/providers/image-to-video'), []);
   const stock = useAsync(() => api.get<any[]>('/providers'), []);
+  const llmProviders = useAsync(() => api.get<any[]>('/llm/providers'), []);
+  const activeLLM = useAsync(() => api.get<any>('/llm/active'), []);
   const templates = useAsync(() => api.get<any[]>('/templates'), []);
   useInterval(jobs.reload, 2500);
+
+  // Ollama process status
+  const [ollamaStatus, setOllamaStatus] = useState<{ running: boolean; pid?: number } | null>(null);
+
+  const checkOllamaStatus = async () => {
+    try {
+      const s = await api.get<{ running: boolean; pid?: number; health?: any }>('/llm/providers/ollama/status');
+      setOllamaStatus({ running: s.running, pid: s.pid });
+    } catch { setOllamaStatus({ running: false }); }
+  };
+
+  const startOllama = async () => {
+    try {
+      const s = await api.post<{ running: boolean; pid?: number; warning?: string }>('/llm/providers/ollama/start');
+      setOllamaStatus({ running: s.running, pid: s.pid });
+      await llmProviders.reload();
+      await activeLLM.reload();
+      push('ok', 'Ollama started');
+    } catch (e) {
+      push('error', `Start failed: ${(e as Error).message}`);
+    }
+  };
+
+  const stopOllama = async () => {
+    try {
+      await api.post('/llm/providers/ollama/stop');
+      setOllamaStatus({ running: false });
+      await llmProviders.reload();
+      push('ok', 'Ollama stopped');
+    } catch (e) {
+      push('error', `Stop failed: ${(e as Error).message}`);
+    }
+  };
+
+  // Live health polling for the active provider (every 30s)
+  useInterval(async () => {
+    const active = activeLLM.data?.active;
+    if (!active) return;
+    try {
+      await api.post(`/llm/providers/${active}/health`);
+      activeLLM.reload();
+      llmProviders.reload();
+    } catch { /* silent: health poll failures are shown in the card */ }
+    try {
+      await checkOllamaStatus();
+    } catch { /* silent */ }
+  }, 30000);
+
+  // Initial ollama status check
+  checkOllamaStatus();
+
   const [loc, setLoc] = useState({ code: '', name: '', bcp47: '', default_wpm: 140 });
-  const [tab, setTab] = useState<'jobs' | 'system' | 'voices' | 'languages' | 'providers' | 'templates'>('jobs');
+  const [tab, setTab] = useState<'jobs' | 'system' | 'voices' | 'languages' | 'providers' | 'templates' | 'ai-provider' | 'terminal'>('jobs');
   const [sel, setSel] = useState<string[]>([]);
+
+  // AI Provider state
+  const [ollamaModels, setOllamaModels] = useState<Array<{ id: string; name: string }>>([]);
+  const [selectedModel, setSelectedModel] = useState<string | null>(activeLLM.data?.selectedModel ?? null);
+  const [switching, setSwitching] = useState<string | null>(null);
+  const [modalOpen, setModalOpen] = useState(false);
+  const [modalProvider, setModalProvider] = useState<{ id: string; name: string } | null>(null);
+  const [configOpen, setConfigOpen] = useState(false);
+  const [ollamaHostInput, setOllamaHostInput] = useState(activeLLM.data?.active === 'ollama' ? '' : '');
+  const [apiBaseUrlInput, setApiBaseUrlInput] = useState('');
+  const [apiKeyInput, setApiKeyInput] = useState('');
+  const [apiModelInput, setApiModelInput] = useState(activeLLM.data?.selectedModel ?? '');
+  const [defaultToFreeFirst, setDefaultToFreeFirst] = useState(activeLLM.data?.defaultToFreeFirst ?? false);
+  const [fallbackProviderId, setFallbackProviderId] = useState(activeLLM.data?.fallback ?? null);
+
   const selectable = (jobs.data ?? []).filter((j: any) => j.state !== 'queued' && j.state !== 'running');
   const allSel = selectable.length > 0 && selectable.every((j: any) => sel.includes(j.id));
   const toggleAll = () => setSel(allSel ? [] : selectable.map((j: any) => j.id));
@@ -28,6 +96,95 @@ export function SettingsPage() {
     for (const id of sel) await api.del(`/jobs/${id}`);
     setSel([]);
     jobs.reload();
+  };
+
+  // Helpers
+  const activeId = activeLLM.data?.active ?? null;
+  const providers = llmProviders.data ?? [];
+  const isActive = (id: string) => id === activeId;
+  const providerHealth = (id: string) => {
+    const p = providers.find((x: any) => x.id === id);
+    return p?.health;
+  };
+  const providerStatusColor = (p: any) => {
+    const h = p.health;
+    if (!h) return 'neutral';
+    return h.ok ? 'good' : 'bad';
+  };
+
+  const loadOllamaModels = async () => {
+    try {
+      const models = await api.get<Array<{ id: string; name: string }>>('/llm/providers/ollama/models');
+      setOllamaModels(models);
+    } catch { /* ollama not reachable */ }
+  };
+
+  // Pull/download a model from Ollama
+  const [pullInput, setPullInput] = useState('');
+  const [pulling, setPulling] = useState(false);
+  const [pullProgress, setPullProgress] = useState<{ status: string; completed?: number; total?: number; percent?: number } | null>(null);
+
+  const pullOllamaModel = async () => {
+    const model = pullInput.trim();
+    if (!model) return;
+    setPulling(true);
+    setPullProgress({ status: 'starting' });
+    try {
+      await api.post('/llm/providers/ollama/pull', { model });
+      setPullProgress({ status: 'success' });
+      setPullInput('');
+      await loadOllamaModels();
+      await activeLLM.reload();
+      await llmProviders.reload();
+      push('ok', `Model "${model}" downloaded`);
+    } catch (e) {
+      setPullProgress({ status: 'error' });
+      push('error', `Pull failed: ${(e as Error).message}`);
+    } finally {
+      setPulling(false);
+    }
+  };
+
+  const switchProvider = async (p: { id: string; name: string }) => {
+    setModalProvider(p);
+    setModalOpen(true);
+  };
+
+  const confirmSwitch = async () => {
+    if (!modalProvider) return;
+    setSwitching(modalProvider.id);
+    setModalOpen(false);
+    try {
+      await api.put('/llm/active', { providerId: modalProvider.id, selectedModel: selectedModel ?? undefined });
+      await activeLLM.reload();
+      await llmProviders.reload();
+      setSelectedModel(activeLLM.data?.selectedModel ?? null);
+      push('ok', `Global AI provider switched to ${modalProvider.name}`);
+    } catch (e) {
+      push('error', `Switch failed: ${(e as Error).message}`);
+    } finally {
+      setSwitching(null);
+      setModalProvider(null);
+    }
+  };
+
+  const saveConfig = async () => {
+    try {
+      const body: any = {};
+      if (ollamaHostInput) body.ollamaHost = ollamaHostInput;
+      if (apiBaseUrlInput) {
+        body.openaiCompatible = { baseUrl: apiBaseUrlInput, apiKey: apiKeyInput || undefined, model: apiModelInput || '' };
+      }
+      if (apiModelInput) body.selectedModel = apiModelInput;
+      if (defaultToFreeFirst !== undefined) body.defaultToFreeFirst = defaultToFreeFirst;
+      await api.put('/llm/config', body);
+      await activeLLM.reload();
+      await llmProviders.reload();
+      setConfigOpen(false);
+      push('ok', 'AI provider configuration saved');
+    } catch (e) {
+      push('error', `Save failed: ${(e as Error).message}`);
+    }
   };
 
   return (
@@ -43,6 +200,8 @@ export function SettingsPage() {
           { id: 'voices', label: 'Voices' },
           { id: 'languages', label: 'Languages' },
           { id: 'providers', label: 'Providers' },
+          { id: 'ai-provider', label: 'AI Provider' },
+          { id: 'terminal', label: 'Terminal' },
           { id: 'templates', label: 'Templates' },
         ]}
       />
@@ -169,6 +328,264 @@ export function SettingsPage() {
           ))}
         </div>
       </Card>}
+
+      {tab === 'ai-provider' && (
+        <>
+          {/* Warning banner when no provider is selected */}
+          {!activeId && (
+            <div className="notice bad" style={{ marginBottom: 12 }}>
+              <strong>No AI provider selected.</strong> Script writing, research, and storyboard drawing are disabled until you choose a provider below.{' '}
+              <Btn small onClick={() => setConfigOpen(true)}>Configure</Btn>
+            </div>
+          )}
+
+          <Card title="Global AI Provider">
+            <p className="muted" style={{ marginTop: 0 }}>
+              One AI selection powers the whole app — Research Studio, script writing, and storyboard drawing. Switching providers never touches your existing projects or data. Nothing is automatic: you choose the provider, and nothing falls back to a paid service on its own.
+            </p>
+
+            <div className="row gap" style={{ marginTop: 12, marginBottom: 12 }}>
+              <label style={{ fontWeight: 600, fontSize: 14 }}>Free-first default</label>
+              <Btn small kind={defaultToFreeFirst ? 'primary' : 'default'} onClick={() => setDefaultToFreeFirst(!defaultToFreeFirst)}>
+                {defaultToFreeFirst ? 'On' : 'Off'}
+              </Btn>
+              <span className="muted small" style={{ marginLeft: 8 }}>
+                When on, Ollama (local, free) is preferred if no provider is explicitly chosen.
+              </span>
+            </div>
+
+            <h4 style={{ margin: '14px 0 8px' }}>Providers</h4>
+            {llmProviders.loading && !llmProviders.data && <Loading />}
+            {llmProviders.error && <ErrorBox error={llmProviders.error} />}
+            {providers.length === 0 && <Empty>No providers registered.</Empty>}
+            {providers.length > 0 && (
+              <div className="grid g2" style={{ marginTop: 8 }}>
+                {providers.map((p: any) => {
+                  const active = isActive(p.id);
+                  const h = p.health;
+                  const ok = h?.ok ?? false;
+                  const latency = h?.latencyMs !== undefined ? ` · ${h.latencyMs}ms` : '';
+                  const isOllama = p.kind === 'ollama';
+                  const isOpenAI = p.kind === 'openai-compatible';
+
+                  return (
+                    <div key={p.id} className="scene" style={{ border: active ? '2px solid var(--good)' : '1px solid var(--muted)', borderRadius: 8, padding: 12, background: active ? 'rgba(34,197,94,0.05)' : 'transparent' }}>
+                      <div className="row gap" style={{ marginBottom: 6 }}>
+                        <div>
+                          <div className="row gap" style={{ alignItems: 'baseline' }}>
+                            <strong style={{ fontSize: 15 }}>{p.name}</strong>
+                            {active && <span style={{ color: 'var(--good)', fontWeight: 600, fontSize: 12 }}>● ACTIVE</span>}
+                            {p.fallback && <span style={{ color: 'var(--warn)', fontWeight: 600, fontSize: 12 }}>● FALLBACK</span>}
+                          </div>
+                          <div className="muted small">{p.kind}{latency}</div>
+                          {h?.lastError && <div className="notice bad" style={{ marginTop: 6, fontSize: 12 }}>{h.lastError}</div>}
+                        </div>
+                        <div style={{ textAlign: 'right' }}>
+                          <Pill tone={providerStatusColor(p)}>{ok ? 'Available' : 'Not available'}</Pill>
+                          <div className="muted small" style={{ marginTop: 2 }}>{h?.detail ?? 'Not checked'}</div>
+                          {isOllama && (
+                            <div className="row gap" style={{ marginTop: 6 }}>
+                              {ollamaStatus?.running ? (
+                                <>
+                                  <Btn small kind="danger" onClick={stopOllama} disabled={switching !== null}>
+                                    Stop Ollama
+                                  </Btn>
+                                  <span className="muted small" style={{ fontSize: 11 }}>PID {ollamaStatus.pid}</span>
+                                </>
+                              ) : (
+                                <Btn small onClick={startOllama} disabled={switching !== null}>
+                                  Start Ollama
+                                </Btn>
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                      <div className="muted small" style={{ marginBottom: 8 }}>{p.terms.freeTier}</div>
+                      <div className="row gap" style={{ marginBottom: 8 }}>
+                        <span className="muted small">Key: {p.terms.requiresKey ? 'Required' : 'None'}</span>
+                        <span className="muted small">· {p.terms.commercialUse}</span>
+                      </div>
+
+                      {/* Model selector (Ollama and OpenAI-compatible) */}
+                      {(isOllama || isOpenAI) && (
+                        <div className="form" style={{ marginTop: 8 }}>
+                          <Field label="Model">
+                            <select
+                              value={selectedModel ?? (isOllama ? '' : '')}
+                              onChange={(e) => setSelectedModel(e.target.value)}
+                              disabled={switching !== null || !ok}
+                            >
+                              <option value="">Default</option>
+                              {isOllama && ollamaModels.map((m) => (
+                                <option key={m.id} value={m.id}>{m.name}</option>
+                              ))}
+                            </select>
+                          </Field>
+                          {isOllama && ok && (
+                            <div style={{ marginTop: 6 }}><Btn small onClick={loadOllamaModels}>
+                              <Icon name="refresh" small /> Refresh models
+                            </Btn></div>
+                          )}
+                          {isOllama && ok && (
+                            <div className="form" style={{ marginTop: 10 }}>
+                              <Field label="Download model">
+                                <input value={pullInput} onChange={(e) => setPullInput(e.target.value)} placeholder="llama3.2" disabled={pulling} />
+                              </Field>
+                              <div className="row gap" style={{ marginTop: 6 }}>
+                                <Btn small disabled={pulling || !pullInput.trim()} onClick={pullOllamaModel}>
+                                  {pulling ? 'Pulling…' : 'Pull model'}
+                                </Btn>
+                                {pullProgress && (
+                                  <span className="muted small">{pullProgress.status}{pullProgress.percent !== undefined ? ` (${pullProgress.percent}%)` : ''}</span>
+                                )}
+                              </div>
+                              <span className="muted small">Downloads the model from Ollama's library. Large models can take several minutes.</span>
+                            </div>
+                          )}
+                          {isOpenAI && (
+                            <div style={{ marginTop: 6 }}><Field label="Model (override)">
+                              <input value={apiModelInput} onChange={(e) => setApiModelInput(e.target.value)} placeholder="qwen-2.5-coder-32b" />
+                            </Field></div>
+                          )}
+                        </div>
+                      )}
+
+                      <div className="row gap" style={{ marginTop: 10 }}>
+                        <Btn small
+                          disabled={switching !== null || active || !ok}
+                          onClick={() => switchProvider({ id: p.id, name: p.name })}
+                        >
+                          {switching === p.id ? 'Switching…' : active ? 'Active' : 'Switch to'}
+                        </Btn>
+                        {isOllama && ok && (
+                          <div style={{ fontSize: 12 }}><Btn small onClick={loadOllamaModels}>
+                            <Icon name="refresh" small />
+                          </Btn></div>
+                        )}
+                        {p.id === 'openai-compatible' && (
+                          <div style={{ fontSize: 12 }}><Btn small kind="ghost" onClick={() => setConfigOpen(true)}>
+                            Configure
+                          </Btn></div>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+
+            {/* Fallback provider selection */}
+            {providers.length > 1 && (
+              <div className="form" style={{ marginTop: 16 }}>
+                <Field label="Fallback provider (manual retry only)">
+                  <select value={fallbackProviderId ?? ''} onChange={(e) => setFallbackProviderId(e.target.value || null)}>
+                    <option value="">None</option>
+                    {providers.map((p: any) => (
+                      <option key={p.id} value={p.id}>{p.name}</option>
+                    ))}
+                  </select>
+                  <span className="muted small">If the active provider fails, you can manually retry with the fallback. No automatic fallback is ever used.</span>
+                </Field>
+              </div>
+            )}
+          </Card>
+
+          {/* Configuration panel */}
+          <Card title="Provider Configuration">
+            <Btn small onClick={() => setConfigOpen(!configOpen)}>
+              {configOpen ? 'Hide' : 'Show'} configuration
+            </Btn>
+            {configOpen && (
+              <div className="form" style={{ marginTop: 12 }}>
+                <Field label="Ollama host">
+                  <input value={ollamaHostInput || 'http://localhost:11434'} onChange={(e) => setOllamaHostInput(e.target.value)} placeholder="http://localhost:11434" />
+                  <span className="muted small">Ollama runs fully on your machine; no key or network needed.</span>
+                </Field>
+                <Field label="OpenAI-compatible base URL">
+                  <input value={apiBaseUrlInput} onChange={(e) => setApiBaseUrlInput(e.target.value)} placeholder="https://api.example.com/v1" />
+                  <span className="muted small">For Qwen, DeepSeek, Gemini, or any OpenAI-compatible endpoint you control.</span>
+                </Field>
+                <Field label="API key (optional)">
+                  <input type="password" value={apiKeyInput} onChange={(e) => setApiKeyInput(e.target.value)} placeholder="sk-…" />
+                  <span className="muted small">Stored in data/llm-settings.json. For better security, set WANDER_LLM_API_KEY instead.</span>
+                </Field>
+                <div className="row gap" style={{ marginTop: 10 }}>
+                  <Btn onClick={saveConfig} disabled={switching !== null}>Save configuration</Btn>
+                  <Btn kind="ghost" onClick={() => setConfigOpen(false)}>Cancel</Btn>
+                </div>
+              </div>
+            )}
+          </Card>
+
+          {/* Warning banner when switching away from Claude */}
+          {activeId && activeId !== 'claude' && providers.some((p: any) => p.id === 'claude') && (
+            <div className="notice warn" style={{ marginTop: 12 }}>
+              <strong>You are not using Claude.</strong> Script writing, research, and storyboard drawing use <strong>{providers.find((p: any) => p.id === activeId)?.name}</strong>. Your Claude plan is not touched. Switch back to Claude anytime in this panel.
+            </div>
+          )}
+        </>
+      )}
+
+      {tab === 'ai-provider' && modalOpen && (
+        <Modal title={`Switch AI provider to ${modalProvider?.name}`} onClose={() => { setModalOpen(false); setModalProvider(null); }}>
+          <p className="muted small" style={{ marginTop: 0 }}>
+            Switching the global AI provider to <strong>{modalProvider?.name}</strong> affects script writing, research, and storyboard drawing across every project.
+          </p>
+          <p className="muted small" style={{ marginTop: 8 }}>
+            Existing projects and data are preserved. In-progress generations keep using the current provider; new generations use the new one.
+          </p>
+          {selectedModel !== null && (
+            <p className="muted small" style={{ marginTop: 8 }}>Selected model: <strong>{selectedModel}</strong></p>
+          )}
+          <div className="row gap" style={{ marginTop: 16 }}>
+            <Btn onClick={confirmSwitch} disabled={switching !== null}>Switch provider</Btn>
+            <Btn kind="ghost" onClick={() => { setModalOpen(false); setModalProvider(null); }}>Cancel</Btn>
+          </div>
+        </Modal>
+      )}
+
+      {tab === 'terminal' && (
+        <Card title="Terminal — what's running">
+          <p className="muted" style={{ marginTop: 0 }}>
+            Shows jobs currently queued, running, or recently finished. Use Cancel to stop a running job.
+          </p>
+          <div className="row gap" style={{ marginBottom: 10 }}>
+            <Btn small onClick={jobs.reload}>Refresh</Btn>
+            <span className="muted small">Job list refreshes automatically every 2.5s.</span>
+          </div>
+          {jobs.loading && !jobs.data && <Loading />}
+          {jobs.error && <ErrorBox error={jobs.error} />}
+          {jobs.data && jobs.data.length === 0 && <Empty>No jobs yet.</Empty>}
+          {jobs.data && jobs.data.length > 0 && (
+            <div className="jobs-scroll">
+              <table>
+                <thead><tr><th>Job</th><th>State</th><th>Progress</th><th>Details</th><th /></tr></thead>
+                <tbody>
+                  {jobs.data.map((j) => (
+                    <tr key={j.id}>
+                      <td>{j.kind.replace(/_/g, ' ')}<div className="muted small mono">{new Date(j.created_at).toLocaleTimeString()}{j.attempts > 1 ? ` · attempt ${j.attempts}` : ''}</div></td>
+                      <td><Pill tone={j.state === 'succeeded' ? 'good' : j.state === 'failed' ? 'bad' : j.state === 'cancelled' ? 'neutral' : 'info'}>{j.state}</Pill></td>
+                      <td style={{ minWidth: 120 }}><div className="bar-prog"><i style={{ width: `${Math.round(j.progress * 100)}%` }} /></div></td>
+                      <td className="small">
+                        {j.message && <div className="muted">{j.message}</div>}
+                        {j.error && <div style={{ color: 'var(--bad)' }}>{j.error.message}{j.error.recovery && <div className="muted">Fix: {j.error.recovery}</div>}</div>}
+                      </td>
+                      <td>
+                        <div className="row gap">
+                          {(j.state === 'queued' || j.state === 'running') && <Btn small kind="danger" onClick={async () => { await api.post(`/jobs/${j.id}/cancel`); jobs.reload(); }}>Cancel</Btn>}
+                          {(j.state === 'failed' || j.state === 'cancelled') && <Btn small onClick={async () => { await api.post(`/jobs/${j.id}/retry`); jobs.reload(); }}>Retry</Btn>}
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </Card>
+      )}
+
     </div>
   );
 }

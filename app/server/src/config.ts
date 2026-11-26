@@ -15,6 +15,18 @@ export interface AppConfig {
   whisper?: { bin?: string; model?: string };
   /** Optional AI research bridge: path to the Claude Code command (default: found automatically). */
   llm?: { claudeBin?: string };
+  /** Persisted global LLM provider selection (active provider id). */
+  activeLLMProvider?: string | null;
+  /** Fallback provider used only on explicit retry after the active provider fails. */
+  fallbackLLMProvider?: string | null;
+  /** When no provider is explicitly chosen, prefer a free/local one (Ollama) over Claude. */
+  defaultToFreeFirst?: boolean;
+  /** Ollama host override (default: http://localhost:11434). */
+  ollamaHost?: string;
+  /** OpenAI-compatible endpoint configuration. */
+  openaiCompatible?: { baseUrl: string; apiKey?: string; model: string };
+  /** Model selected for the active provider (Ollama / OpenAI-compatible). */
+  selectedLLMModel?: string | null;
   /** Directories scanned for caption fonts (TTF/OTF). */
   fontDirs?: string[];
   maxImportBytes: number;
@@ -26,5 +38,5 @@ export function defaultRoot(): string {
 }
 
 export function resolveConfig(c: Partial<AppConfig> = {}): AppConfig {
-  return { root: c.root ?? defaultRoot(), ffprobePath: c.ffprobePath, fetchFn: c.fetchFn, tts: c.tts, whisper: c.whisper, llm: c.llm, fontDirs: c.fontDirs, maxImportBytes: c.maxImportBytes ?? 2 * 1024 ** 3, maxRemoteBytes: c.maxRemoteBytes ?? 25 * 1024 ** 2 };
+  return { root: c.root ?? defaultRoot(), ffprobePath: c.ffprobePath, fetchFn: c.fetchFn, tts: c.tts, whisper: c.whisper, llm: c.llm, activeLLMProvider: c.activeLLMProvider ?? null, fallbackLLMProvider: c.fallbackLLMProvider ?? null, defaultToFreeFirst: c.defaultToFreeFirst ?? false, ollamaHost: c.ollamaHost, openaiCompatible: c.openaiCompatible, selectedLLMModel: c.selectedLLMModel ?? null, fontDirs: c.fontDirs, maxImportBytes: c.maxImportBytes ?? 2 * 1024 ** 3, maxRemoteBytes: c.maxRemoteBytes ?? 25 * 1024 ** 2 };
 }

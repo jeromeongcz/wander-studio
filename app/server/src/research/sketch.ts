@@ -179,8 +179,10 @@ export class SketchArtist {
 
   async run(ctx: JobCtx) {
     const { storyboardId, sceneIds, reopen, captionSpace } = ctx.params as { storyboardId: string; sceneIds: string[]; reopen?: boolean; captionSpace?: boolean };
-    const st = await this.s.research.bridge.status();
-    if (!st.installed || !st.loggedIn) throw bad(`${st.detail}. ${st.fix ?? ''}`.trim());
+    const active = this.s.llm.active();
+    if (!active) throw bad('No AI provider selected. Choose one in Settings → AI Provider before drawing scenes.');
+    const st = await active.healthCheck();
+    if (!st.ok) throw bad(`${st.detail}. Select a working AI provider in Settings → AI Provider.`);
     let drawn = 0;
     const failed: string[] = [];
     for (const [n, sceneId] of sceneIds.entries()) {
@@ -279,7 +281,9 @@ export class SketchArtist {
     const scene = sb.scenes[index];
     const captionSpace = o.captionSpace ?? project.settings.reserve_caption_space === true;
     const prompt = buildSketchPrompt(scene, { size, category: project.category ?? undefined, number: index + 1, total: sb.scenes.length, styleNotes: sb.style_notes, captionSpace });
-    const svg = checkSvg(await this.s.research.bridge.ask(prompt, { noTools: true, signal: o.signal }), size);
-    await this.attach(projectId, sb, index, svg, o, 'claude-sketch');
+    const active = this.s.llm.active();
+    if (!active) throw bad('No AI provider selected. Choose one in Settings → AI Provider before drawing scenes.');
+    const svg = checkSvg(await this.s.llm.generateText({ prompt, model: this.s.config.selectedLLMModel ?? undefined, signal: o.signal }), size);
+    await this.attach(projectId, sb, index, svg, o, `${active.id}-sketch`);
   }
 }
