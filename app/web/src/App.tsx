@@ -7,6 +7,7 @@ import { ProjectPage } from './pages/Project';
 import { SettingsPage } from './pages/Settings';
 import { Notifications } from './Notifications';
 import { Icon } from './ui';
+import { api } from './api';
 
 function useTheme() {
   const [theme, setTheme] = useState<'light' | 'dark'>(() => { try { return localStorage.getItem('wander-theme') === 'dark' ? 'dark' : 'light'; } catch { return 'light'; } });
@@ -31,7 +32,23 @@ export function App() {
   const [menu, setMenu] = useState(false);
   const [, , projectId, stageId] = hash.split('/'); // "/p/<id>/<stage>"
   const route = hash.startsWith('/p/') || hash.startsWith('/projects') ? 'production' : hash.startsWith('/research') ? 'research' : hash.startsWith('/assets') ? 'assets' : hash.startsWith('/settings') ? 'settings' : 'dashboard';
-  useEffect(() => setMenu(false), [hash]);
+  const [activeAI, setActiveAI] = useState<{ id: string | null; name?: string } | null>(null);
+
+  useEffect(() => {
+    setMenu(false);
+  }, [hash]);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const data = await api.get<{ active: string | null; fallback: string | null; defaultToFreeFirst: boolean; selectedModel: string | null }>('/llm/active');
+        if (!cancelled) setActiveAI({ id: data.active });
+      } catch { /* server may not be running; label stays blank */ }
+    })();
+    return () => { cancelled = true; };
+  }, []);
+
   return (
     <div className="app">
       <aside className={`sidebar${menu ? ' open' : ''}`} aria-label="Main">
@@ -52,6 +69,9 @@ export function App() {
           <button className="icon-btn menu-btn" aria-label="Open menu" onClick={() => setMenu(true)}><Icon name="menu" /></button>
           <span className="grow" />
           <Notifications />
+          {activeAI?.id && (
+            <span className="ai-label" title={`Active AI: ${activeAI.id}`}>{activeAI.id}</span>
+          )}
           <button className="icon-btn" onClick={toggle} aria-label={theme === 'light' ? 'Switch to dark theme' : 'Switch to light theme'} title="Switch theme"><Icon name={theme === 'light' ? 'moon' : 'sun'} /></button>
         </div>
         <main className="content">
