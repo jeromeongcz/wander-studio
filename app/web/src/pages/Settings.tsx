@@ -672,19 +672,24 @@ export function SettingsPage() {
                   </Btn>
                   <span className="muted small">{openRouterModels.length} models loaded</span>
                 </div>
+                {openRouterModels.length === 0 && (
+                  <div className="notice muted" style={{ marginTop: 8 }}>
+                    No free models loaded. Click "Refresh model list" or "Fetch free models from OpenRouter" to load them.
+                  </div>
+                )}
                 <div className="grid g3" style={{ marginTop: 10 }}>
                   {openRouterModels.map((m) => (
-                    <div key={m.id} className="scene" style={{ padding: 10, border: '1px solid var(--muted)', borderRadius: 8 }}>
+                    <div key={m.id} className="scene" style={{ padding: 12, border: '1px solid var(--muted)', borderRadius: 8 }}>
                       <div className="row gap" style={{ marginBottom: 6 }}>
                         <strong style={{ fontSize: 14 }}>{m.name}</strong>
                         {isActive('openrouter') && selectedModel === m.id && <span style={{ color: 'var(--good)', fontWeight: 600, fontSize: 11 }}>● ACTIVE</span>}
                       </div>
-                      <div className="muted small mono" style={{ marginBottom: 8 }}>{m.id}</div>
-                      <Btn small
+                      <div className="muted small mono" style={{ marginBottom: 10 }}>{m.id}</div>
+                      <Btn
                         disabled={switching !== null || !openRouterApiKey.trim()}
                         onClick={() => selectOpenRouterModel(m.id)}
                       >
-                        {switching === 'openrouter' ? 'Switching…' : 'Select'}
+                        {switching === 'openrouter' ? 'Switching…' : 'Select model'}
                       </Btn>
                     </div>
                   ))}
