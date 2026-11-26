@@ -15,6 +15,7 @@ import { claudeProvider } from './providers/llm/claude.ts';
 import { ollamaProvider } from './providers/llm/ollama.ts';
 import { startOllama, stopOllama, ollamaProcessRunning, ollamaProcPid, isOllamaInstalled, installOllama, resolveOllamaBin } from './providers/llm/ollama-process.ts';
 import { openAICompatibleProvider } from './providers/llm/openai-compatible.ts';
+import { openRouterProvider } from './providers/llm/openrouter.ts';
 import { readLLMSettings, writeLLMSettings } from './llm-settings.ts';
 import type { LLMSettings } from './providers/llm/types.ts';
 import { addFormat, addLanguage, createProject, removeFormat, removeLanguage } from './pipeline.ts';
@@ -436,6 +437,17 @@ export function buildApi(engine: Engine, config: Partial<AppConfig> = {}, llm?: 
         fetchFn: fetch,
       }));
     }
+    if (b.openrouter !== undefined) {
+      const or = b.openrouter;
+      if (or.apiKey !== undefined && typeof or.apiKey !== 'string') throw new EngineError('VALIDATION', 'openrouter.apiKey must be a string');
+      if (or.model !== undefined && typeof or.model !== 'string') throw new EngineError('VALIDATION', 'openrouter.model must be a string');
+      settings.openrouter = { apiKey: or.apiKey ?? undefined, model: or.model ?? '' };
+      llm.replace('openrouter', openRouterProvider({
+        apiKey: settings.openrouter.apiKey,
+        model: settings.openrouter.model,
+        fetchFn: fetch,
+      }));
+    }
     await writeLLMSettings({
       activeProvider: llm.activeIdOrNull(),
       fallbackProvider: llm.fallbackIdOrNull(),
@@ -443,10 +455,12 @@ export function buildApi(engine: Engine, config: Partial<AppConfig> = {}, llm?: 
       selectedModel: settings.selectedModel ?? config.selectedLLMModel ?? undefined,
       ollamaHost: settings.ollamaHost ?? config.ollamaHost,
       openaiCompatible: settings.openaiCompatible ?? config.openaiCompatible,
+      openrouter: settings.openrouter ?? config.openrouter,
     });
     return {
       ollamaHost: settings.ollamaHost ?? config.ollamaHost,
       openaiCompatible: settings.openaiCompatible ?? config.openaiCompatible,
+      openrouter: settings.openrouter ?? config.openrouter,
     };
   });
   app.get('/llm/providers/ollama/status', async () => {

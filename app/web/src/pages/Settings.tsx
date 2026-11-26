@@ -98,6 +98,58 @@ export function SettingsPage() {
   const [defaultToFreeFirst, setDefaultToFreeFirst] = useState(activeLLM.data?.defaultToFreeFirst ?? false);
   const [fallbackProviderId, setFallbackProviderId] = useState(activeLLM.data?.fallback ?? null);
 
+  // OpenRouter free models state
+  const [openRouterModels, setOpenRouterModels] = useState<Array<{ id: string; name: string }>>([]);
+  const [openRouterApiKey, setOpenRouterApiKey] = useState('');
+  const [openRouterModelInput, setOpenRouterModelInput] = useState('');
+  const [savingOpenRouter, setSavingOpenRouter] = useState(false);
+
+  const loadOpenRouterModels = async () => {
+    try {
+      const models = await api.get<Array<{ id: string; name: string }>>('/llm/providers/openrouter/models');
+      setOpenRouterModels(models);
+    } catch { /* openrouter not configured yet */ }
+  };
+
+  const saveOpenRouterConfig = async () => {
+    const apiKey = openRouterApiKey.trim();
+    if (!apiKey) return;
+    const model = openRouterModelInput.trim();
+    setSavingOpenRouter(true);
+    try {
+      await api.put('/llm/config', { openrouter: { apiKey, model } });
+      await activeLLM.reload();
+      await llmProviders.reload();
+      await loadOpenRouterModels();
+      setSavingOpenRouter(false);
+      push('ok', 'OpenRouter configured');
+    } catch (e) {
+      setSavingOpenRouter(false);
+      push('error', `OpenRouter config failed: ${(e as Error).message}`);
+    }
+  };
+
+  const selectOpenRouterModel = async (modelId: string) => {
+    if (!openRouterApiKey.trim()) {
+      push('error', 'Please enter your OpenRouter API key first');
+      return;
+    }
+    setSwitching('openrouter');
+    try {
+      await api.put('/llm/config', { openrouter: { apiKey: openRouterApiKey.trim(), model: modelId } });
+      await api.put('/llm/active', { providerId: 'openrouter', selectedModel: modelId });
+      await activeLLM.reload();
+      await llmProviders.reload();
+      await loadOpenRouterModels();
+      setOpenRouterModelInput(modelId);
+      push('ok', `Switched to OpenRouter: ${modelId}`);
+    } catch (e) {
+      push('error', `Switch failed: ${(e as Error).message}`);
+    } finally {
+      setSwitching(null);
+    }
+  };
+
   const selectable = (jobs.data ?? []).filter((j: any) => j.state !== 'queued' && j.state !== 'running');
   const allSel = selectable.length > 0 && selectable.every((j: any) => sel.includes(j.id));
   const toggleAll = () => setSel(allSel ? [] : selectable.map((j: any) => j.id));
@@ -569,15 +621,58 @@ export function SettingsPage() {
                   <input value={apiBaseUrlInput} onChange={(e) => setApiBaseUrlInput(e.target.value)} placeholder="https://api.example.com/v1" />
                   <span className="muted small">For Qwen, DeepSeek, Gemini, or any OpenAI-compatible endpoint you control.</span>
                 </Field>
-                <Field label="API key (optional)">
-                  <input type="password" value={apiKeyInput} onChange={(e) => setApiKeyInput(e.target.value)} placeholder="sk-…" />
-                  <span className="muted small">Stored in data/llm-settings.json. For better security, set WANDER_LLM_API_KEY instead.</span>
+                <Field label="OpenRouter API key">
+                  <input type="password" value={openRouterApiKey} onChange={(e) => setOpenRouterApiKey(e.target.value)} placeholder="sk-or-…" />
+                  <span className="muted small">Get a free key at openrouter.ai. Used only for OpenRouter free models.</span>
+                </Field>
+                <Field label="OpenRouter default model">
+                  <input value={openRouterModelInput} onChange={(e) => setOpenRouterModelInput(e.target.value)} placeholder="openrouter/free" />
+                  <span className="muted small">Default model when using OpenRouter provider.</span>
                 </Field>
                 <div className="row gap" style={{ marginTop: 10 }}>
-                  <Btn onClick={saveConfig} disabled={switching !== null}>Save configuration</Btn>
+                  <Btn onClick={saveOpenRouterConfig} disabled={savingOpenRouter || !openRouterApiKey.trim()}>Save OpenRouter config</Btn>
                   <Btn kind="ghost" onClick={() => setConfigOpen(false)}>Cancel</Btn>
                 </div>
               </div>
+            )}
+          </Card>
+
+          {/* Free models (OpenRouter) */}
+          <Card title="Free AI Models (OpenRouter)">
+            <p className="muted" style={{ marginTop: 0 }}>
+              Free models hosted via OpenRouter. Switching to one makes it the global AI provider for the whole app. No per-model charges from this app — OpenRouter covers the cost.
+            </p>
+            {!openRouterApiKey.trim() && (
+              <div className="notice warn" style={{ marginTop: 10 }}>
+                <strong>API key required.</strong> Enter your OpenRouter API key in the Provider Configuration panel above, then save.
+              </div>
+            )}
+            {openRouterApiKey.trim() && (
+              <>
+                <div className="row gap" style={{ marginTop: 10 }}>
+                  <Btn small onClick={loadOpenRouterModels} disabled={savingOpenRouter}>
+                    <Icon name="refresh" small /> Refresh model list
+                  </Btn>
+                  <span className="muted small">{openRouterModels.length} models loaded</span>
+                </div>
+                <div className="grid g3" style={{ marginTop: 10 }}>
+                  {openRouterModels.map((m) => (
+                    <div key={m.id} className="scene" style={{ padding: 10, border: '1px solid var(--muted)', borderRadius: 8 }}>
+                      <div className="row gap" style={{ marginBottom: 6 }}>
+                        <strong style={{ fontSize: 14 }}>{m.name}</strong>
+                        {isActive('openrouter') && selectedModel === m.id && <span style={{ color: 'var(--good)', fontWeight: 600, fontSize: 11 }}>● ACTIVE</span>}
+                      </div>
+                      <div className="muted small mono" style={{ marginBottom: 8 }}>{m.id}</div>
+                      <Btn small
+                        disabled={switching !== null || !openRouterApiKey.trim()}
+                        onClick={() => selectOpenRouterModel(m.id)}
+                      >
+                        {switching === 'openrouter' ? 'Switching…' : 'Select'}
+                      </Btn>
+                    </div>
+                  ))}
+                </div>
+              </>
             )}
           </Card>
 

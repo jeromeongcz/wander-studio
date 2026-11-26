@@ -9,6 +9,7 @@ import { LLMProviderRegistry } from './providers/llm/registry.ts';
 import { claudeProvider } from './providers/llm/claude.ts';
 import { ollamaProvider } from './providers/llm/ollama.ts';
 import { openAICompatibleProvider } from './providers/llm/openai-compatible.ts';
+import { openRouterProvider } from './providers/llm/openrouter.ts';
 import { readLLMSettings, writeLLMSettings } from './llm-settings.ts';
 
 const appRoot = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
@@ -31,6 +32,14 @@ if (settings.openaiCompatible?.baseUrl) {
     baseUrl: settings.openaiCompatible.baseUrl,
     apiKey: settings.openaiCompatible.apiKey,
     model: settings.openaiCompatible.model,
+    fetchFn: fetch,
+  }));
+}
+// OpenRouter free models only when an API key is configured.
+if (settings.openrouter?.apiKey) {
+  llm.register(openRouterProvider({
+    apiKey: settings.openrouter.apiKey,
+    model: settings.openrouter.model,
     fetchFn: fetch,
   }));
 }
@@ -61,6 +70,7 @@ const config = {
   defaultToFreeFirst: settings.defaultToFreeFirst ?? false,
   ollamaHost: settings.ollamaHost ?? process.env.WANDER_OLLAMA_HOST,
   openaiCompatible: settings.openaiCompatible ?? undefined,
+  openrouter: settings.openrouter ?? undefined,
   selectedLLMModel: settings.selectedModel ?? null,
 };
 

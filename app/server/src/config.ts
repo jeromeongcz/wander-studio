@@ -25,7 +25,9 @@ export interface AppConfig {
   ollamaHost?: string;
   /** OpenAI-compatible endpoint configuration. */
   openaiCompatible?: { baseUrl: string; apiKey?: string; model: string };
-  /** Model selected for the active provider (Ollama / OpenAI-compatible). */
+  /** OpenRouter free models configuration. */
+  openrouter?: { apiKey?: string; model: string };
+  /** Model selected for the active provider (Ollama / OpenAI-compatible / OpenRouter). */
   selectedLLMModel?: string | null;
   /** Directories scanned for caption fonts (TTF/OTF). */
   fontDirs?: string[];
@@ -38,5 +40,5 @@ export function defaultRoot(): string {
 }
 
 export function resolveConfig(c: Partial<AppConfig> = {}): AppConfig {
-  return { root: c.root ?? defaultRoot(), ffprobePath: c.ffprobePath, fetchFn: c.fetchFn, tts: c.tts, whisper: c.whisper, llm: c.llm, activeLLMProvider: c.activeLLMProvider ?? null, fallbackLLMProvider: c.fallbackLLMProvider ?? null, defaultToFreeFirst: c.defaultToFreeFirst ?? false, ollamaHost: c.ollamaHost, openaiCompatible: c.openaiCompatible, selectedLLMModel: c.selectedLLMModel ?? null, fontDirs: c.fontDirs, maxImportBytes: c.maxImportBytes ?? 2 * 1024 ** 3, maxRemoteBytes: c.maxRemoteBytes ?? 25 * 1024 ** 2 };
+  return { root: c.root ?? defaultRoot(), ffprobePath: c.ffprobePath, fetchFn: c.fetchFn, tts: c.tts, whisper: c.whisper, llm: c.llm, activeLLMProvider: c.activeLLMProvider ?? null, fallbackLLMProvider: c.fallbackLLMProvider ?? null, defaultToFreeFirst: c.defaultToFreeFirst ?? false, ollamaHost: c.ollamaHost, openaiCompatible: c.openaiCompatible, openrouter: c.openrouter, selectedLLMModel: c.selectedLLMModel ?? null, fontDirs: c.fontDirs, maxImportBytes: c.maxImportBytes ?? 2 * 1024 ** 3, maxRemoteBytes: c.maxRemoteBytes ?? 25 * 1024 ** 2 };
 }

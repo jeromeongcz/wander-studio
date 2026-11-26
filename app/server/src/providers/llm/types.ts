@@ -1,6 +1,6 @@
 import type { EngineError } from '../../engine.ts';
 
-export type LLMKind = 'claude' | 'ollama' | 'openai-compatible';
+export type LLMKind = 'claude' | 'ollama' | 'openai-compatible' | 'openrouter';
 
 export interface LLMProviderTerms {
   freeTier: string;
@@ -68,5 +68,6 @@ export interface LLMSettings {
   ollamaHost?: string;
   defaultToFreeFirst?: boolean;
   openaiCompatible?: { baseUrl: string; apiKey?: string; model: string };
-  selectedModel?: string;        // model id for the active provider (Ollama / OpenAI-compatible)
+  openrouter?: { apiKey?: string; model: string };
+  selectedModel?: string;        // model id for the active provider (Ollama / OpenAI-compatible / OpenRouter)
 }
