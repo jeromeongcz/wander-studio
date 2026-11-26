@@ -77,9 +77,9 @@ export function Dashboard() {
           </div>
         </Card>
       )}
-      {needsYou.length > 0 && <><div className="section-h"><h2>Needs you</h2><span className="muted">Approvals and fixes waiting on you</span></div><div className="grid g2">{needsYou.map((r) => <ProjectCard key={r.p.id} {...r} />)}</div></>}
-      {inProgress.length > 0 && <><div className="section-h"><h2>In progress</h2></div><div className="grid g2">{inProgress.map((r) => <ProjectCard key={r.p.id} {...r} />)}</div></>}
-      {finished.length > 0 && <><div className="section-h"><h2>Ready to publish</h2></div><div className="grid g2">{finished.map((r) => <ProjectCard key={r.p.id} {...r} />)}</div></>}
+      {needsYou.length > 0 && <><div className="section-h"><h2>Needs you</h2><span className="muted">Approvals and fixes waiting on you</span></div><div className="stack">{needsYou.map((r) => <VideoCard key={r.p.id} {...r} />)}</div></>}
+      {inProgress.length > 0 && <><div className="section-h"><h2>In progress</h2></div><div className="stack">{inProgress.map((r) => <VideoCard key={r.p.id} {...r} />)}</div></>}
+      {finished.length > 0 && <><div className="section-h"><h2>Ready to publish</h2></div><div className="stack">{finished.map((r) => <VideoCard key={r.p.id} {...r} />)}</div></>}
       {projects.data && rows.length === 0 && <Empty>No videos yet. Go to the <a href="#/research">Research Studio</a> to search and approve a topic.</Empty>}
     </div>
   );
@@ -108,19 +108,32 @@ export function VideoProduction({ stepId }: { stepId?: string }) {
       {idx === 0 && <ResearchWorkspace />}
       {projects.loading && !projects.data && <Loading what="Loading videos" />}
       {idx === 0 && list.length > 0 && <h3>Videos at this step</h3>}
-      {list.length > 0 && <div className="grid g2">{list.map((r) => <ProjectCard key={r.p.id} {...r} />)}</div>}
+      {list.length > 0 && <div className="stack">{list.map((r) => <VideoCard key={r.p.id} {...r} />)}</div>}
       {idx > 0 && projects.data && list.length === 0 && <Empty>No videos at this step. Approve a topic in <a href="#/projects/topic">step 1</a> and start a video from it.</Empty>}
     </div>
   );
 }
 
-function ProjectCard({ p, flow }: { p: Project; flow: ReturnType<typeof analyze> }) {
+/** Video card (Dashboard and Video Production), in the same style as a Research Studio topic: state and the next action across the top. */
+function VideoCard({ p, flow }: { p: Project; flow: ReturnType<typeof analyze> }) {
   const cur = flow.steps[flow.current];
-  const first = cur.step.parts[0].id;
+  const href = `#/p/${p.id}/${cur.step.parts[0].id}`;
+  const state = flow.allDone ? { id: 'ready', icon: 'check', label: 'Ready to publish' }
+    : cur.attention ? { id: 'attention', icon: 'alert', label: 'Needs a fix' }
+    : cur.waiting ? { id: 'waiting', icon: 'clock', label: 'Waiting for your approval' }
+    : { id: 'progress', icon: 'film', label: 'In progress' };
   return (
-    <a href={`#/p/${p.id}/${first}`} className="pcard">
-      <div className="row gap wrap"><h3 className="grow">{p.name}</h3>{p.category && <Pill tone="info">{p.category}</Pill>}</div>
+    <section className={`card topic topic-video v-${state.id}`}>
+      <header className="topic-top">
+        <span className="topic-state">
+          <i><Icon name={state.icon} small /></i>
+          <span><b>{state.label}</b><span>{flow.allDone ? 'All steps approved' : `Step ${cur.step.n} of 6`}</span></span>
+        </span>
+        <a className="topic-go" href={href}>Open video <Icon name="arrow" small /></a>
+      </header>
+      <h3>{p.name}</h3>
       <div className="row gap wrap">
+        {p.category && <Pill tone="info">{p.category}</Pill>}
         {p.languages.map((l) => <Pill key={l}>{langName(l)}</Pill>)}
         {(p.settings.formats ?? []).map((f) => <Pill key={f}>{formatName(f)}</Pill>)}
       </div>
@@ -130,6 +143,6 @@ function ProjectCard({ p, flow }: { p: Project; flow: ReturnType<typeof analyze>
       <div className="next">
         {flow.allDone ? <><Icon name="check" small /><b>All steps approved</b></> : <><Icon name="arrow" small /><span>Step {cur.step.n} of 6 · <b>{cur.waiting ? `Approve ${cur.step.label.toLowerCase()}` : cur.attention ? `Fix ${cur.step.label.toLowerCase()}` : cur.step.action}</b></span></>}
       </div>
-    </a>
+    </section>
   );
 }

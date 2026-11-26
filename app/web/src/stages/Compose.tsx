@@ -1,12 +1,13 @@
 import { useEffect, useRef, useState } from 'react';
 import { api, url } from '../api';
-import { ArtifactBar } from '../actions';
+import { ArtifactBar, withReopen } from '../actions';
 import { useProject } from '../pages/Project';
 import { useAsync, useInterval } from '../hooks';
 import { Btn, Card, Empty, Icon, Loading, Modal, Pill, Tabs, fmtBytes, fmtSec, useToast } from '../ui';
 import { formatName, langName } from '../types';
 import type { Artifact } from '../types';
 import { TimelinePlayer } from './TimelinePlayer';
+import { CaptionSlider, DirectionCard, useCinematic } from './Direction';
 
 export function ComposeStage() {
   const { project } = useProject();
@@ -58,8 +59,8 @@ function Composition({ lang, format }: { lang: string; format: string }) {
     }
   }, job ? 600 : null);
 
-  const build = async (effects?: string) => {
-    const call = (reopen: boolean) => api.post(`/artifacts/${comp.id}/build-timeline`, { reopen, effects });
+  const build = async (effects?: string, look?: object | null) => {
+    const call = (reopen: boolean) => api.post(`/artifacts/${comp.id}/build-timeline`, { reopen, effects, look });
     try { await call(false); } catch (e: any) { if (e.code === 'PROTECTED' && confirm('This composition is approved. Rebuild it?\n\nIts final render will need revision.')) await call(true); else throw e; }
     push('ok', 'Timeline built from the current script, narration, captions and visuals');
     done();
@@ -78,84 +79,94 @@ function Composition({ lang, format }: { lang: string; format: string }) {
       <TimelineBuilder lang={lang} format={format} timeline={tl} built={!!st?.has_timeline} stale={!!st?.stale} onBuild={build} onPick={setT} at={t} />
       <ArtifactBar artifact={comp} onChanged={done} />
 
+      {(tl || (renders.data?.length ?? 0) > 0) && (
+        <div className="compose-wrap">
+          <div className="compose-top">
+            {tl && (
+              <Card title="Preview" actions={<><Pill>{tl.format.width}×{tl.format.height}</Pill><Pill>{fmtSec(tl.duration)}</Pill></>}>
+                <div className="stack">
+                  <TimelinePlayer key={comp.current_version_id ?? 'none'} timeline={tl} time={t} onTime={setT} captions={captions} onEnlarge={() => setPopup(true)}
+                    still={popup ? undefined : <PreviewFrame id={comp.id} version={comp.current_version_id ?? ''} t={t} captions={captions} stale={!!st?.stale} />} />
+                  <label className="row gap"><input type="checkbox" checked={captions} onChange={(e) => setCaptions(e.target.checked)} />Show captions</label>
+                  <p className="muted small" style={{ margin: 0 }}>Paused, you see an exact frame from the renderer. Playing is a quick check of pictures, voice, captions and a rough approximation of the camera and style: transitions, grain, atmosphere, sound effects, music and exact styling appear in the rendered video. The scene previews below show each transition.</p>
+                </div>
+              </Card>
+            )}
+            <Card title="Render & finished videos" actions={<span className="muted small">Final render: {fin.state.replace('_', ' ')}</span>}>
+              {tl && (
+                <>
+                  <div className="row gap wrap">
+                    <Btn kind="primary" disabled={running || st?.stale || comp.state !== 'approved'} title={comp.state !== 'approved' ? 'Approve the composition first' : ''} onClick={() => startRender(['captioned', 'clean'])}>Render captioned + clean</Btn>
+                    <Btn disabled={running || st?.stale || comp.state !== 'approved'} onClick={() => startRender(['captioned'])}>Captioned only</Btn>
+                    <Btn disabled={running || st?.stale || comp.state !== 'approved'} onClick={() => startRender(['clean'])}>Clean only (use with .srt/.vtt)</Btn>
+                  </div>
+                  {comp.state !== 'approved' && <p className="muted small">Approve the composition above to enable rendering.</p>}
+                  {job && (
+                    <div className="row gap" style={{ marginTop: 12 }}>
+                      <Pill tone={job.state === 'succeeded' ? 'good' : job.state === 'failed' ? 'bad' : 'info'}>{job.state}</Pill>
+                      <div className="bar-prog grow"><i style={{ width: `${Math.round(job.progress * 100)}%` }} /></div>
+                      <span className="muted small">{job.message}</span>
+                      {running && <Btn small kind="danger" onClick={async () => setJob(await api.post(`/jobs/${job.id}/cancel`))}>Cancel</Btn>}
+                    </div>
+                  )}
+                  {job?.state === 'failed' && <div className="notice bad" style={{ marginTop: 10 }}>{job.error?.message}{job.error?.recovery && <div>Fix: {job.error.recovery}</div>}</div>}
+                  <p className="muted small" style={{ marginBottom: 0 }}>Scenes that have not changed are reused from the cache, so small edits re-render quickly. A render only counts as done after it passes verification (codec, size, audio and length).</p>
+                </>
+              )}
+              {(renders.data?.length ?? 0) > 0 && (
+                <div className="finished">
+                  <h4>Finished videos</h4>
+                  <div className="finished-grid">
+                    {(['captioned', 'clean'] as const).map((v) => {
+                      const r = latest(v);
+                      if (!r) return null;
+                      return (
+                        <div key={v} className="stack">
+                          <div className="row gap wrap"><strong>{v === 'captioned' ? 'With captions' : 'Clean (no captions)'}</strong><span className="grow" /><span className="muted small">{fmtSec(r.duration_seconds)} · {fmtBytes(r.bytes)}</span></div>
+                          <video controls preload="metadata" src={url(`/renders/${r.id}/file`)} style={{ maxWidth: '100%', maxHeight: 420, background: '#000', borderRadius: 8 }} />
+                          <span className="muted small mono">sha256 {r.sha256.slice(0, 16)}…</span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+            </Card>
+          </div>
+        </div>
+      )}
+
       {tl && (
         <>
-          <Card title="Preview" actions={<><Pill>{tl.format.width}×{tl.format.height}</Pill><Pill>{fmtSec(tl.duration)}</Pill></>}>
-            <div className="stack">
-              <TimelinePlayer key={comp.current_version_id ?? 'none'} timeline={tl} time={t} onTime={setT} captions={captions} onEnlarge={() => setPopup(true)}
-                still={popup ? undefined : <PreviewFrame id={comp.id} version={comp.current_version_id ?? ''} t={t} captions={captions} stale={!!st?.stale} />} />
-              <label className="row gap"><input type="checkbox" checked={captions} onChange={(e) => setCaptions(e.target.checked)} />Show captions</label>
-              <p className="muted small" style={{ margin: 0 }}>Paused, you see an exact frame from the renderer. Playing is a quick check of pictures, voice, captions and an approximation of the camera and style: transitions, sound effects, music and exact styling appear in the rendered video.</p>
-            </div>
-          </Card>
           {popup && (
             <Modal title="Preview" wide onClose={() => setPopup(false)}>
               <TimelinePlayer timeline={tl} time={t} onTime={setT} captions={captions} autoPlay />
             </Modal>
           )}
 
-          <Card title="Scenes">
-            <table>
-              <thead><tr><th>#</th><th>Scene</th><th>Starts</th><th>Length</th><th>Timing</th><th>Caption position</th></tr></thead>
-              <tbody>
-                {tl.scenes.map((s: any) => {
-                  const y = tl.overrides?.[s.scene_id]?.caption_y_pct;
-                  return (
-                    <tr key={s.scene_id}>
-                      <td>{s.index + 1}</td><td>{s.title}</td><td>{fmtSec(s.start)}</td><td>{fmtSec(s.duration)}</td>
-                      <td><Pill tone={s.timing_source === 'audio' ? 'good' : 'warn'}>{s.timing_source === 'audio' ? 'from narration' : 'estimated'}</Pill></td>
-                      <td style={{ minWidth: 190 }}>
-                        <div className="row gap">
-                          <input type="range" min={0.3} max={0.95} step={0.01} value={y ?? defaultY} aria-label="Caption position" onChange={() => {}} onMouseUp={async (e) => { await api.put(`/artifacts/${comp.id}/scenes/${s.scene_id}/override`, { caption_y_pct: Number((e.target as HTMLInputElement).value), reopen: comp.state === 'approved' }); done(); }} onKeyUp={async (e) => { await api.put(`/artifacts/${comp.id}/scenes/${s.scene_id}/override`, { caption_y_pct: Number((e.target as HTMLInputElement).value), reopen: comp.state === 'approved' }); done(); }} />
-                          {y !== undefined && <Btn small kind="ghost" onClick={async () => { await api.put(`/artifacts/${comp.id}/scenes/${s.scene_id}/override`, { caption_y_pct: null, reopen: comp.state === 'approved' }); done(); }}>Reset</Btn>}
-                        </div>
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-            <p className="muted small" style={{ marginBottom: 0 }}>Moving a scene's captions overrides the format's safe-zone default for that scene only.</p>
-          </Card>
-
-          <Card title="Render" actions={<span className="muted small">Final render: {fin.state.replace('_', ' ')}</span>}>
-            <div className="row gap wrap">
-              <Btn kind="primary" disabled={running || st?.stale || comp.state !== 'approved'} title={comp.state !== 'approved' ? 'Approve the composition first' : ''} onClick={() => startRender(['captioned', 'clean'])}>Render captioned + clean</Btn>
-              <Btn disabled={running || st?.stale || comp.state !== 'approved'} onClick={() => startRender(['captioned'])}>Captioned only</Btn>
-              <Btn disabled={running || st?.stale || comp.state !== 'approved'} onClick={() => startRender(['clean'])}>Clean only (use with .srt/.vtt)</Btn>
-            </div>
-            {comp.state !== 'approved' && <p className="muted small">Approve the composition above to enable rendering.</p>}
-            {job && (
-              <div className="row gap" style={{ marginTop: 12 }}>
-                <Pill tone={job.state === 'succeeded' ? 'good' : job.state === 'failed' ? 'bad' : 'info'}>{job.state}</Pill>
-                <div className="bar-prog grow"><i style={{ width: `${Math.round(job.progress * 100)}%` }} /></div>
-                <span className="muted small">{job.message}</span>
-                {running && <Btn small kind="danger" onClick={async () => setJob(await api.post(`/jobs/${job.id}/cancel`))}>Cancel</Btn>}
-              </div>
-            )}
-            {job?.state === 'failed' && <div className="notice bad" style={{ marginTop: 10 }}>{job.error?.message}{job.error?.recovery && <div>Fix: {job.error.recovery}</div>}</div>}
-            <p className="muted small" style={{ marginBottom: 0 }}>Scenes that have not changed are reused from the cache, so small edits re-render quickly. A render only counts as done after it passes verification (codec, size, audio and length).</p>
-          </Card>
+          <DirectionCard artifact={comp} timeline={tl} onChanged={done} sceneDetails={(sceneId) => {
+            const x = tl.scenes.find((v: any) => v.scene_id === sceneId);
+            if (!x) return null;
+            const y = tl.overrides?.[sceneId]?.caption_y_pct;
+            // an approved composition is changed only after the person agrees
+            const caption = async (value: number | null) => { await withReopen((reopen) => api.put(`/artifacts/${comp.id}/scenes/${sceneId}/override`, { caption_y_pct: value, reopen })); done(); };
+            return (
+              <>
+                <div className="row gap wrap small">
+                  <span>Starts {fmtSec(x.start)}</span><span>Length {fmtSec(x.duration)}</span>
+                  <Pill tone={x.timing_source === 'audio' ? 'good' : 'warn'}>{x.timing_source === 'audio' ? 'from narration' : 'estimated'}</Pill>
+                </div>
+                <div className="row gap dir-caption">
+                  <span className="small">Caption position</span>
+                  <CaptionSlider value={y ?? defaultY} label={`Caption position, scene ${x.index + 1}`} onSave={caption} />
+                  {y !== undefined && <Btn small kind="ghost" onClick={() => caption(null)}>Reset</Btn>}
+                </div>
+              </>
+            );
+          }} />
         </>
       )}
 
-      {(renders.data?.length ?? 0) > 0 && (
-        <Card title="Finished videos">
-          <div className="grid g2">
-            {(['captioned', 'clean'] as const).map((v) => {
-              const r = latest(v);
-              if (!r) return null;
-              return (
-                <div key={v} className="stack">
-                  <div className="row gap"><strong>{v === 'captioned' ? 'With captions' : 'Clean (no captions)'}</strong><span className="grow" /><span className="muted small">{fmtSec(r.duration_seconds)} · {fmtBytes(r.bytes)}</span></div>
-                  <video controls preload="metadata" src={url(`/renders/${r.id}/file`)} style={{ maxWidth: '100%', maxHeight: 420, background: '#000', borderRadius: 8 }} />
-                  <span className="muted small mono">sha256 {r.sha256.slice(0, 16)}…</span>
-                </div>
-              );
-            })}
-          </div>
-        </Card>
-      )}
       <Card title="Final render approval"><ArtifactBar artifact={fin} onChanged={done} /><p className="muted small" style={{ marginBottom: 0 }}>Watch the finished video before approving. Approval is yours alone; only approved renders are included in the export package.</p></Card>
     </div>
   );
@@ -176,7 +187,7 @@ function PreviewFrame({ id, version, t, captions, stale }: { id: string; version
 }
 
 /** The timeline: what goes into it, one button to build it, and a strip of the scenes in order, sized by their length. */
-function TimelineBuilder({ lang, format, timeline, built, stale, onBuild, onPick, at }: { lang: string; format: string; timeline?: any; built: boolean; stale: boolean; onBuild: (effects: string) => Promise<void>; onPick: (t: number) => void; at: number }) {
+function TimelineBuilder({ lang, format, timeline, built, stale, onBuild, onPick, at }: { lang: string; format: string; timeline?: any; built: boolean; stale: boolean; onBuild: (effects: string, look?: object | null) => Promise<void>; onPick: (t: number) => void; at: number }) {
   const { project, find, all } = useProject();
   const storyboard = find('storyboard')!;
   const visuals = all('scene_asset');
@@ -190,12 +201,30 @@ function TimelineBuilder({ lang, format, timeline, built, stale, onBuild, onPick
     { label: 'Captions', ok: approved(find('caption', lang)), note: approved(find('caption', lang)) ? 'Approved' : 'Not approved', href: 'captions' },
   ];
   const all4 = parts.every((p) => p.ok);
-  const current: string = timeline?.effects ?? 'none';
-  // before the first build, suggest the folklore style for folklore-type videos
-  const suggested = /folklore|horror|superstition|myth/i.test(project.category ?? '') ? 'folklore' : 'none';
+  const options = useCinematic();
+  // the project's Cinematic Direction style, chosen in the Script step
+  const chosen = project.settings.cinematic?.style;
+  const direction = chosen && chosen !== 'automatic' ? chosen : undefined;
+  // 'folklore' is the classic effect; other values name a cinematic style
+  const asValue = (style?: string) => (!style || style === 'none' ? 'none' : `style:${style}`);
+  const current: string = !timeline ? 'none' : timeline.effects ? 'folklore' : asValue(timeline.look?.style);
+  // before the first build: the project's chosen style. A video that uses Cinematic Direction starts clean, because the
+  // classic effect would replace its directed camera moves; otherwise folklore-type videos suggest the classic style.
+  const suggested = project.settings.cinematic ? asValue(direction) : /folklore|horror|superstition|myth/i.test(project.category ?? '') ? 'folklore' : 'none';
+  const sceneStyles = !!timeline?.scenes.some((s: any) => s.look);
   const [picked, setPicked] = useState<string | null>(null);
   const effects = picked ?? (timeline ? current : suggested);
-  const changed = !!timeline && effects !== current;
+  const changed = !!timeline && (effects !== current || (picked === 'none' && sceneStyles));
+  const apply = () => {
+    if (effects === 'folklore') return onBuild('folklore');
+    // nothing picked: keep whatever the timeline already has
+    if (picked === null) return onBuild(timeline ? (timeline.effects ?? 'none') : 'none');
+    // "Clean" must also silence a style that comes from the project direction or from the storyboard
+    if (effects === 'none') return onBuild('none', direction || sceneStyles ? { style: 'none' } : null);
+    // a style that is simply the project's direction needs no override of its own
+    return onBuild('none', effects === asValue(direction) ? null : { style: effects.slice(6) });
+  };
+  const styleInfo = options.data?.styles.find((s) => `style:${s.id}` === effects);
   const state = !built ? (all4 ? 'ready' : 'waiting') : stale || changed ? 'stale' : 'built';
   const headline = changed ? 'Scene style changed' : { waiting: 'A few approvals to go', ready: 'Everything is ready', stale: 'The timeline is out of date', built: 'Timeline built' }[state];
   const detail = {
@@ -214,14 +243,18 @@ function TimelineBuilder({ lang, format, timeline, built, stale, onBuild, onPick
           <p className="muted small">{shownDetail}</p>
           {timeline && <div className="row gap wrap"><Pill tone="info">{timeline.scenes.length} scenes</Pill><Pill tone="info">{fmtSec(timeline.duration)}</Pill><Pill tone="info">{timeline.format.width}×{timeline.format.height}</Pill></div>}
         </div>
-        <Btn kind={state === 'built' ? 'default' : 'primary'} onClick={async () => { await onBuild(effects); setPicked(null); }}><Icon name={built ? 'refresh' : 'spark'} small /> {changed ? 'Apply style & rebuild' : built ? 'Rebuild timeline' : 'Build timeline'}</Btn>
+        <Btn kind={state === 'built' ? 'default' : 'primary'} onClick={async () => { await apply(); setPicked(null); }}><Icon name={built ? 'refresh' : 'spark'} small /> {changed ? 'Apply style & rebuild' : built ? 'Rebuild timeline' : 'Build timeline'}</Btn>
       </div>
       <div className="tlb-style">
         <b>Scene style</b>
         <div className="seg" role="group" aria-label="Scene style">
-          {([['none', 'Clean'], ['folklore', 'Dark folklore']] as const).map(([v, label]) => <button key={v} type="button" className={effects === v ? 'on' : ''} aria-pressed={effects === v} onClick={() => setPicked(v)}>{label}</button>)}
+          {([['none', 'Clean'], ['folklore', 'Dark folklore (classic)']] as const).map(([v, label]) => <button key={v} type="button" className={effects === v ? 'on' : ''} aria-pressed={effects === v} onClick={() => setPicked(v)}>{label}</button>)}
         </div>
-        <span className="muted small">{effects === 'folklore' ? 'Like your reference videos: hard cuts, a new framing about every 3 seconds, dark grade with grain and flicker, one big word at a time (names and numbers in red), impact hits, a low drone when there is no music, and a glitch ending.' : 'Your storyboard camera moves and transitions, with normal captions.'}</span>
+        <select className="tlb-more" aria-label="Cinematic visual style" value={effects.startsWith('style:') ? effects : ''} onChange={(e) => e.target.value && setPicked(e.target.value)}>
+          <option value="">Cinematic styles…</option>
+          {(options.data?.styles ?? []).map((s) => <option key={s.id} value={`style:${s.id}`}>{s.label}</option>)}
+        </select>
+        <span className="muted small">{styleInfo ? `${styleInfo.summary} Your camera moves and transitions stay as set.` : effects === 'folklore' ? 'Like your reference videos: hard cuts, a new framing about every 3 seconds, dark grade with grain and flicker, one big word at a time (names and numbers in red), impact hits, a low drone when there is no music, and a glitch ending.' : current === 'none' && sceneStyles ? 'Your storyboard camera moves and transitions, with normal captions. Some scenes carry their own style: choose Clean and rebuild to remove it.' : 'Your storyboard camera moves and transitions, with normal captions.'}</span>
       </div>
       <ul className="tlb-parts">
         {parts.map((p) => (

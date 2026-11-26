@@ -1,16 +1,13 @@
+import { directionSummary, useCinematic, words } from './Direction';
 import { useEffect, useState } from 'react';
-import type { ReactNode } from 'react';
 import { api } from '../api';
-import { ArtifactBar, saveArtifact } from '../actions';
+import { ArtifactBar, saveArtifact, withReopen } from '../actions';
 import { useProject } from '../pages/Project';
 import { useAsync, useInterval } from '../hooks';
 import { Btn, Card, Empty, Field, Icon, Loading, Modal, Pill, StateBadge, fmtSec, useToast } from '../ui';
 import { url } from '../api';
 import { ASSET_TYPES } from '../types';
 
-const MOVES = ['static', 'pan', 'zoom', 'ken_burns', 'parallax'];
-const TRANS = ['cut', 'fade', 'dissolve', 'slide', 'zoom', 'wipe'];
-const DIRS: Record<string, string[]> = { pan: ['left_to_right', 'right_to_left', 'up', 'down'], zoom: ['in', 'out'], ken_burns: ['in', 'out'], parallax: [], static: [] };
 
 export function StoryboardStage() {
   const { project, find, reload } = useProject();
@@ -27,6 +24,10 @@ export function StoryboardStage() {
   const listClass = view === 'grid' ? 'board board-grid' : 'stack';
   const [open, setOpen] = useState<number[]>([]);
   const [zoom, setZoom] = useState<number | null>(null);
+  const cinematic = useCinematic();
+  const moves = cinematic.data?.cameras ?? [];
+  const transitions = cinematic.data?.transitions ?? [];
+  const directions = (movement: string) => moves.find((m) => m.id === movement)?.directions ?? [];
   const cardClass = (i: number) => (view === 'grid' ? 'scene-card tall' : `scene-card wide${open.includes(i) ? ' open' : ''}`);
   // horizontal cards do not scroll inside (that traps the page's scroll): they open to full height instead
   const more = (i: number) => view === 'list' && (
@@ -139,7 +140,7 @@ export function StoryboardStage() {
     sketches.reload();
     done();
   };
-  const picture = (i: number, tools?: ReactNode) => {
+  const picture = (i: number) => {
     const row = sketches.data?.[i];
     return (
       <div className="frame-col">
@@ -148,7 +149,6 @@ export function StoryboardStage() {
         {row?.asset_id && (row.state === 'approved'
           ? <span className="approved-mark"><Icon name="check" small /> Approved</span>
           : <Btn small kind="primary" disabled={!!drawing} onClick={() => approveScene(i)}><Icon name="check" small /> Approve</Btn>)}
-        {tools}
       </div>
     );
   };
@@ -169,6 +169,12 @@ export function StoryboardStage() {
           </div>
           <Btn kind="primary" disabled={!ready || !!drawing || !total || have === total} onClick={() => generate()}><Icon name="spark" small /> {drawing ? 'Drawing…' : have === total && total ? 'All drawn' : have ? `Generate ${total - have} remaining` : `Generate all ${total}`}</Btn>
           {c && <>
+            {baseDoc.data?.content?.sections?.some((x: any) => x.cinematic) && <Btn disabled={dirty || !!drawing} title={dirty ? 'Save your changes first' : "Use the script's camera, transition and style directions on these scenes"} onClick={async () => {
+              if (!confirm("Use the script's camera, transition and style directions on this storyboard?\n\nScenes you set yourself are kept. Changing the storyboard means scene visuals and videos need your approval again. To change only one finished video, use Compose & render instead.")) return;
+              const r: any = await withReopen((reopen) => api.post(`/artifacts/${art.id}/apply-directions`, { reopen }));
+              push('ok', r.changed ? `Directions applied${r.kept ? `; ${r.kept} of your own settings kept` : ''}` : 'The storyboard already follows the script directions');
+              done();
+            }}>Apply script directions</Btn>}
             <span className="vsep" role="separator" aria-orientation="vertical" />
             <Btn kind="primary" disabled={!dirty} title={dirty ? 'Save your changes' : 'No changes to save'} onClick={async () => { const r = await saveArtifact(art.id, c); push('ok', r.changed ? 'Storyboard saved' : 'No changes'); done(); }}>Save storyboard</Btn>
           </>}
@@ -198,25 +204,30 @@ export function StoryboardStage() {
           <div className={listClass}>
             {c.scenes.map((s: any, i: number) => (
               <div key={s.scene_id ?? i} className={cardClass(i)}>
-                {picture(i, (
-                  <div className="scene-tools" role="group" aria-label={`Scene ${i + 1} order and removal`}>
-                    {s.draft && <span className="draft-note" title="Written automatically from the script. Edit the description under Edit details to mark it as yours.">Draft: not edited by you yet</span>}
-                    <div className="tool-row">
-                      <Btn small title="Show this scene one place earlier" onClick={() => move(i, -1)} disabled={i === 0}>↑ Earlier</Btn>
-                      <Btn small title="Show this scene one place later" onClick={() => move(i, 1)} disabled={i === c.scenes.length - 1}>↓ Later</Btn>
-                      <Btn small kind="danger" title="Delete this scene from the storyboard" onClick={() => { if (confirm(`Delete scene ${i + 1} from the storyboard?\n\nIt is removed when you press Save storyboard.`)) edit({ scenes: c.scenes.filter((_: any, k: number) => k !== i) }); }}><Icon name="trash" small /> Delete</Btn>
-                    </div>
-                    {dirty && <span className="draft-note">Changes are not saved: press Save storyboard at the top.</span>}
+                <header className="topic-top scene-top" role="group" aria-label={`Scene ${i + 1} order and removal`}>
+                  <span className="topic-state">
+                    <span className="scene-n">{i + 1}</span>
+                    <span>
+                      <b>Scene {i + 1}</b>
+                      {s.draft && <span className="draft-note" title="Written automatically from the script. Edit the description under Edit details to mark it as yours.">Draft: not edited by you yet</span>}
+                      {dirty && <span className="draft-note">Changes are not saved: press Save storyboard at the top.</span>}
+                    </span>
+                  </span>
+                  <div className="tool-row">
+                    <Btn small title="Show this scene one place earlier" onClick={() => move(i, -1)} disabled={i === 0}>↑ Earlier</Btn>
+                    <Btn small title="Show this scene one place later" onClick={() => move(i, 1)} disabled={i === c.scenes.length - 1}>↓ Later</Btn>
+                    <Btn small kind="danger" title="Delete this scene from the storyboard" onClick={() => { if (confirm(`Delete scene ${i + 1} from the storyboard?\n\nIt is removed when you press Save storyboard.`)) edit({ scenes: c.scenes.filter((_: any, k: number) => k !== i) }); }}><Icon name="trash" small /> Delete</Btn>
                   </div>
-                ))}
+                </header>
+                {picture(i)}
                 <div className="scene-body">
                 <div className="row gap wrap">
-                  <span className="scene-n">{i + 1}</span>
                   <input aria-label="Scene title" value={s.title} onChange={(e) => setScene(i, { title: e.target.value })} />
                 </div>
                 {s.segment_text && <p className="quote">“{s.segment_text}”</p>}
                 <div className="scene-text">
                 <p className="visual-text">{s.visual_description}</p>
+                {s.look && <p className="visual-text">{directionSummary({ look: s.look })}</p>}
                 <details>
                 <summary className="muted small">Edit details</summary>
                 <Field label="What the viewer sees" wide><textarea style={{ marginTop: 6 }} value={s.visual_description} onChange={(e) => setScene(i, { visual_description: e.target.value, draft: false })} /></Field>
@@ -225,17 +236,17 @@ export function StoryboardStage() {
                   <Field label="Duration (s)"><input type="number" step={0.1} min={0.5} value={s.target_duration} onChange={(e) => setScene(i, { target_duration: Number(e.target.value) })} /></Field>
                   <Field label="Visual type"><select value={s.asset_type} onChange={(e) => setScene(i, { asset_type: e.target.value })}>{ASSET_TYPES.map((t) => <option key={t} value={t}>{t.replace(/_/g, ' ')}</option>)}</select></Field>
                   <Field label="Look"><input value={s.visual_style ?? ''} onChange={(e) => setScene(i, { visual_style: e.target.value })} /></Field>
-                  <Field label="Camera"><select value={s.camera.movement} onChange={(e) => setScene(i, { camera: { ...s.camera, movement: e.target.value, direction: DIRS[e.target.value]?.[0] } })}>{MOVES.map((m) => <option key={m} value={m}>{m.replace('_', ' ')}</option>)}</select></Field>
-                  {(DIRS[s.camera.movement]?.length ?? 0) > 0 && <Field label="Direction"><select value={s.camera.direction ?? ''} onChange={(e) => setScene(i, { camera: { ...s.camera, direction: e.target.value } })}>{DIRS[s.camera.movement].map((d) => <option key={d}>{d}</option>)}</select></Field>}
+                  <Field label="Camera"><select value={s.camera.movement} onChange={(e) => setScene(i, { camera: { ...s.camera, movement: e.target.value, direction: directions(e.target.value)[0] } })}>{moves.map((m) => <option key={m.id} value={m.id}>{m.label}</option>)}</select></Field>
+                  {directions(s.camera.movement).length > 0 && <Field label="Direction"><select value={s.camera.direction ?? ''} onChange={(e) => setScene(i, { camera: { ...s.camera, direction: e.target.value } })}>{directions(s.camera.movement).map((d) => <option key={d}>{d}</option>)}</select></Field>}
                   <Field label="Intensity"><select value={s.camera.intensity ?? 'subtle'} onChange={(e) => setScene(i, { camera: { ...s.camera, intensity: e.target.value } })}>{['subtle', 'medium', 'strong'].map((d) => <option key={d}>{d}</option>)}</select></Field>
-                  <Field label="Transition in"><select value={s.transition_in ?? 'cut'} onChange={(e) => setScene(i, { transition_in: e.target.value })}>{TRANS.map((t) => <option key={t}>{t}</option>)}</select></Field>
+                  <Field label="Transition in"><select value={s.transition_in ?? 'cut'} onChange={(e) => setScene(i, { transition_in: e.target.value, transition_settings: undefined })}>{transitions.map((t) => <option key={t.id} value={t.id}>{t.label}</option>)}</select></Field>
                   <Field label="Sound effects (comma separated)"><input value={(s.sfx_cues ?? []).join(', ')} onChange={(e) => setScene(i, { sfx_cues: e.target.value.split(',').map((x) => x.trim()).filter(Boolean) })} /></Field>
                 </div>
                 </details>
                 </div>
                 {more(i)}
                 <div className="row gap wrap scene-actions">
-                  <Pill>{fmtSec(s.target_duration)}</Pill><Pill>{s.camera.movement.replace('_', ' ')}</Pill><Pill>{(s.transition_in ?? 'cut')} in</Pill>
+                  <Pill>{fmtSec(s.target_duration)}</Pill><Pill>{words(s.camera.movement)}</Pill><Pill>{words(s.transition_in ?? 'cut')} in</Pill>
                   {sketches.data?.[i] && <StateBadge state={sketches.data[i].state} />}
                   <span className="grow" />
                 </div>

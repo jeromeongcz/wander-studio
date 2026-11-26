@@ -1,5 +1,9 @@
 import { createHash } from 'node:crypto';
 import { LOOK_FILTERS, SHOT_SECONDS, glitchFilters } from './effects.ts';
+import { cinematicFilters, isClassicCamera, strength } from './camera.ts';
+import type { Easing, Intensity, Movement } from './camera.ts';
+import { withLook } from './styles.ts';
+import type { ResolvedLook } from './styles.ts';
 
 export interface Rect {
   x: number;
@@ -8,9 +12,23 @@ export interface Rect {
   h: number;
 }
 export interface Camera {
-  movement: 'static' | 'pan' | 'zoom' | 'ken_burns' | 'parallax';
+  movement: Movement;
   direction?: string;
-  intensity?: 'subtle' | 'medium' | 'strong';
+  intensity?: Intensity;
+  // everything below belongs to the cinematic camera (camera.ts)
+  easing?: Easing;
+  amount?: number;
+  curve?: number;
+  start_zoom?: number;
+  end_zoom?: number;
+  start?: { x: number; y: number };
+  end?: { x: number; y: number };
+  focal?: { x: number; y: number };
+  move_seconds?: number;
+  rotation?: number;
+  shake?: number;
+  smoothness?: number;
+  motion_blur?: number;
 }
 
 const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v));
@@ -46,11 +64,9 @@ export interface MotionPlan {
   cy1: number;
 }
 
-const K = { subtle: 0.6, medium: 1, strong: 1.6 } as const;
-
 /** Camera movement as zoom and centre keyframes (centre is relative to the cropped window). */
 export function motionPlan(cam: Camera, focalRel: { x: number; y: number }): MotionPlan {
-  const k = K[cam.intensity ?? 'subtle'];
+  const k = strength(cam);
   const amt = 0.1 * k;
   const still: MotionPlan = { z0: 1, z1: 1, cx0: 0.5, cy0: 0.5, cx1: 0.5, cy1: 0.5 };
   const rev = (p: MotionPlan): MotionPlan => ({ z0: p.z1, z1: p.z0, cx0: p.cx1, cy0: p.cy1, cx1: p.cx0, cy1: p.cy0 });
@@ -78,6 +94,8 @@ export function motionPlan(cam: Camera, focalRel: { x: number; y: number }): Mot
       const pm = 0.45 * ((1 - 1 / z) / 2);
       return { z0: 1, z1: z, cx0: 0.5 - pm, cy0: 0.5, cx1: 0.5 + pm, cy1: 0.5 };
     }
+    default:
+      throw new Error(`"${cam.movement}" is not one of the classic camera movements`);
   }
 }
 
@@ -128,12 +146,14 @@ export interface SceneClipSpec {
   fps: number;
   effects?: 'folklore';
   glitch?: boolean; // the final shot of a folklore video
+  hold?: boolean; // one continuous camera move, even in a style that cuts between framings
+  look?: ResolvedLook; // cinematic visual style; replaces the classic folklore grade
 }
 
 /** Cache key: any input that changes the pixels changes the key; anything else (captions, audio, other scenes) does not. */
 export function sceneClipKey(s: SceneClipSpec): string {
   const { path: _p, ...asset } = s.asset;
-  return createHash('sha256').update(JSON.stringify({ v: 1, asset, focal: s.focal, camera: s.camera, crop: s.crop ?? null, d: Math.round(s.duration * 1000), w: s.width, h: s.height, fps: s.fps, effects: s.effects, glitch: s.glitch })).digest('hex').slice(0, 32);
+  return createHash('sha256').update(JSON.stringify({ v: 1, asset, focal: s.focal, camera: s.camera, crop: s.crop ?? null, d: Math.round(s.duration * 1000), w: s.width, h: s.height, fps: s.fps, effects: s.effects, glitch: s.glitch, hold: s.hold, look: s.look })).digest('hex').slice(0, 32);
 }
 
 export function sceneClipArgs(s: SceneClipSpec, out: string): string[] {
@@ -143,15 +163,23 @@ export function sceneClipArgs(s: SceneClipSpec, out: string): string[] {
   const enc = ['-an', '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '18', '-pix_fmt', 'yuv420p', '-r', String(s.fps), out];
   if (s.asset.kind === 'video') {
     // v1: stock video plays as-is (looped or trimmed); camera moves apply to stills only.
-    return ['-stream_loop', '-1', '-i', s.asset.path, '-t', s.duration.toFixed(3), '-vf', `${cropF},scale=${s.width}:${s.height}:flags=lanczos,fps=${s.fps},setsar=1,format=yuv420p`, ...enc];
+    const plain = [cropF, `scale=${s.width}:${s.height}:flags=lanczos`, `fps=${s.fps}`, 'setsar=1'];
+    const vf = s.look ? withLook(plain, s.look, { w: s.width, h: s.height }, s.fps, s.duration) : [...plain, 'format=yuv420p'].join(',');
+    return ['-stream_loop', '-1', '-i', s.asset.path, '-t', s.duration.toFixed(3), '-vf', vf, ...enc];
   }
   const focalRel = { x: clamp((s.focal.x * s.asset.width - crop.x) / crop.w, 0, 1), y: clamp((s.focal.y * s.asset.height - crop.y) / crop.h, 0, 1) };
-  const plan = motionPlan(s.camera, focalRel);
+  const classic = isClassicCamera(s.camera);
   const over = 2; // oversample before zoompan to avoid integer-pixel jitter
   const size = { w: s.width, h: s.height };
-  const shots = s.effects ? Math.max(1, Math.ceil(s.duration / SHOT_SECONDS - 0.25)) : 1;
-  const camera = shots > 1 ? shotsFilter(plan, shots, frames, size, s.fps, focalRel) : zoompanFilter(plan, frames, size, s.fps);
-  const look = s.effects ? [...LOOK_FILTERS, ...(s.glitch ? glitchFilters(frames / s.fps) : [])] : [];
-  const chain = [cropF, `scale=${s.width * over}:${s.height * over}:flags=lanczos`, camera, 'setsar=1', ...look, 'format=yuv420p'];
-  return ['-i', s.asset.path, '-vf', chain.join(','), '-frames:v', String(frames), ...enc];
+  const shots = s.effects && !s.hold ? Math.max(1, Math.ceil(s.duration / SHOT_SECONDS - 0.25)) : 1;
+  // a style that cuts between framings starts from a classic move; otherwise the camera plays as chosen
+  const camera = shots > 1
+    ? [shotsFilter(motionPlan(classic ? s.camera : { movement: 'static' }, focalRel), shots, frames, size, s.fps, focalRel)]
+    : classic ? [zoompanFilter(motionPlan(s.camera, focalRel), frames, size, s.fps)] : cinematicFilters(s.camera, frames, size, s.fps, focalRel, motionPlan);
+  const glitch = s.effects && s.glitch ? glitchFilters(frames / s.fps) : [];
+  const moved = [cropF, `scale=${s.width * over}:${s.height * over}:flags=lanczos`, ...camera, 'setsar=1'];
+  const vf = s.look
+    ? withLook(moved, s.look, size, s.fps, frames / s.fps, glitch)
+    : [...moved, ...(s.effects ? LOOK_FILTERS : []), ...glitch, 'format=yuv420p'].join(',');
+  return ['-i', s.asset.path, '-vf', vf, '-frames:v', String(frames), ...enc];
 }

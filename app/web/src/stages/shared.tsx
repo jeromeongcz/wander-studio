@@ -2,10 +2,11 @@ import { useEffect, useState } from 'react';
 import { api } from '../api';
 import { Btn, Field, Pill, fmtSec, useToast } from '../ui';
 import { SECTION_KINDS } from '../types';
+import { directionSummary } from './Direction';
 
 export const sid = () => `s${Math.random().toString(36).slice(2, 7)}`;
 
-export interface Section { id: string; kind: string; text: string; delivery_note?: string; tts_text?: string; visual?: Record<string, string> }
+export interface Section { id: string; kind: string; text: string; delivery_note?: string; tts_text?: string; visual?: Record<string, string>; cinematic?: Record<string, any> }
 
 const VISUALS: [string, string, string][] = [
   ['setting', 'Setting / environment', 'Place, time of day, weather, foreground and background'],
@@ -55,6 +56,7 @@ export function SectionsEditor({ sections, onChange, withTts, lockKinds, withVis
               </div>
             </div>
           )}
+          {withVisual && s.cinematic && <p className="muted small" style={{ marginBottom: 0 }}><b>Cinematic direction</b> (never narrated): {directionSummary(s.cinematic)}</p>}
           <div className="form" style={{ marginTop: 8 }}>
             <Field label="Delivery note"><input value={s.delivery_note ?? ''} onChange={(e) => set(i, { delivery_note: e.target.value })} placeholder="e.g. slow, curious" /></Field>
             {withTts && <Field label="Pronunciation text (voice only)" hint="Phonetic respelling for the voice. Never shown in captions."><input value={s.tts_text ?? ''} onChange={(e) => set(i, { tts_text: e.target.value })} /></Field>}

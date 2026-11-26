@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { api } from '../api';
 import { useAsync, useInterval } from '../hooks';
-import { Btn, Card, CopyBtn, Empty, Field, Icon, Loading, Modal, Pill, useToast } from '../ui';
+import { Btn, Card, CopyBtn, Empty, Field, Icon, Loading, Modal, Pill, Tabs, useToast } from '../ui';
 import { CategoryPicker } from '../stages/shared';
 import { useTopicFilter } from './TopicFilters';
 import { ProgressFooter } from '../progress';
@@ -21,7 +21,7 @@ const LINK: Record<string, { mark: string; tone: string; help: string }> = {
 const host = (u: string) => { try { return new URL(u).hostname.replace(/^www\./, ''); } catch { return u; } };
 
 
-/** Research workspace: approved topics (with the rest below) on the left, the research form on the right. No project is needed. */
+/** Research workspace: topics in tabs (video started, approved, not approved) on the left, the research form on the right. No project is needed. */
 export function ResearchWorkspace() {
   const { push, fail } = useToast();
   const status = useAsync(() => api.get<any>('/research/status'), []);
@@ -36,6 +36,7 @@ export function ResearchWorkspace() {
   const [manual, setManual] = useState(false);
   const [approving, setApproving] = useState<any>(null);
   const [starting, setStarting] = useState<any>(null);
+  const [tab, setTab] = useState<'started' | 'approved' | 'review'>('started');
 
   const batches: any[] = data.data?.batches ?? [];
   const ideas: any[] = data.data?.ideas ?? [];
@@ -45,10 +46,11 @@ export function ResearchWorkspace() {
   const cc = status.data;
   const ready = !!cc?.loggedIn;
   const by = (s: string) => ideas.filter((i) => i.status === s);
-  const started = by('used'), approved = [...by('approved'), ...started], toReview = by('new'), dismissed = by('dismissed');
+  const started = by('used'), approved = by('approved'), toReview = by('new'), dismissed = by('dismissed');
   // the approved list is dated by approval, the others by when they were researched
   const approvedList = useTopicFilter(approved, (t) => t.approved_at ?? t.created_at, 'approved topics');
   const reviewList = useTopicFilter(toReview, (t) => t.created_at, 'topics not approved yet');
+  const startedList = useTopicFilter(started, (t) => t.approved_at ?? t.created_at, 'topics with a video started');
 
   const start = async () => {
     if (!sessionStorage.getItem('wander-cc-research-ok')) {
@@ -57,6 +59,7 @@ export function ResearchWorkspace() {
     }
     await api.post('/studio/research/batches', { count, focus, notes, category });
     push('ok', `Researching ${count} topic${count === 1 ? '' : 's'}…`);
+    setTab('review');
     data.reload();
   };
 
@@ -153,24 +156,38 @@ export function ResearchWorkspace() {
           </Card>
         </div>
 
-        <div className="ws-topics stack">
-          <div>
-            <div className="section-h" id="approved-topics" style={{ marginTop: 0 }}><h2>Approved topics</h2><span className="muted">{approved.length - started.length} ready to become a video{started.length ? ` · ${started.length} started` : ''}</span></div>
-            {data.loading && !data.data && <Loading />}
-            {approved.length === 0 && !(data.loading && !data.data) && <Empty>Nothing approved yet. Approve a topic from the list below.</Empty>}
-            {approvedList.bar}
-            {approvedList.empty && <Empty>No approved topics match these filters.</Empty>}
-            <div className="stack">{approvedList.shown.map(card)}</div>
-          </div>
-          <div>
-            <div className="section-h"><h2>Not approved yet</h2><span className="muted">{toReview.length} to review. Read the facts and open the sources first.</span></div>
-            <div className="notice small" style={{ marginBottom: 12 }}>AI research can be wrong. <strong>Nothing here is verified.</strong> A ✓ only means the link loads. Approving a topic means you want to make a video about it; you still verify the facts in the video.</div>
-            {toReview.length === 0 && <Empty>No topics to review. Fill in the form and press Research.</Empty>}
-            {reviewList.bar}
-            {reviewList.empty && <Empty>No topics match these filters.</Empty>}
-            <div className="stack">{reviewList.shown.map(card)}</div>
-          </div>
-          {dismissed.length > 0 && <details><summary className="muted">Dismissed ({dismissed.length})</summary><div className="stack" style={{ marginTop: 10 }}>{dismissed.map(card)}</div></details>}
+        <div className="ws-topics" id="research-topics">
+          <Tabs value={tab} onChange={setTab} items={[
+            { id: 'started', label: `Video started (${started.length})` },
+            { id: 'approved', label: `Approved (${approved.length})` },
+            { id: 'review', label: `Not approved (${toReview.length})` },
+          ]} />
+          {data.loading && !data.data ? <Loading /> : tab === 'approved' ? (
+            <div role="tabpanel">
+              {approved.length === 0 && <Empty>No approved topics waiting for a video. Approve one in the Not approved tab.</Empty>}
+              {approvedList.bar}
+              {approvedList.empty && <Empty>No approved topics match these filters.</Empty>}
+              <div className="stack">{approvedList.shown.map(card)}</div>
+            </div>
+          ) : tab === 'review' ? (
+            <div role="tabpanel" className="stack">
+              <div className="notice small">AI research can be wrong. <strong>Nothing here is verified.</strong> Read the facts and open the sources first. A ✓ only means the link loads. Approving a topic means you want to make a video about it; you still verify the facts in the video.</div>
+              <div>
+                {toReview.length === 0 && <Empty>No topics to review. Fill in the form and press Research.</Empty>}
+                {reviewList.bar}
+                {reviewList.empty && <Empty>No topics match these filters.</Empty>}
+                <div className="stack">{reviewList.shown.map(card)}</div>
+              </div>
+              {dismissed.length > 0 && <details><summary className="muted">Dismissed ({dismissed.length})</summary><div className="stack" style={{ marginTop: 10 }}>{dismissed.map(card)}</div></details>}
+            </div>
+          ) : (
+            <div role="tabpanel">
+              {started.length === 0 && <Empty>No videos started yet. Start one from an approved topic.</Empty>}
+              {startedList.bar}
+              {startedList.empty && <Empty>No started videos match these filters.</Empty>}
+              <div className="stack">{startedList.shown.map(card)}</div>
+            </div>
+          )}
         </div>
       </div>
 
@@ -183,12 +200,12 @@ export function ResearchWorkspace() {
             <div className="row gap wrap"><Pill tone="info">{approving.facts.length} facts</Pill><Pill tone={approving.links.dead ? 'bad' : approving.links.reachable === approving.facts.length ? 'good' : 'warn'}>{approving.links.reachable} of {approving.facts.length} links load</Pill><Pill tone="warn">none verified</Pill></div>
             {approving.links.dead > 0 && <div className="notice bad">{approving.links.dead} source link(s) did not load. You can still approve the topic, but find real sources before using those facts.</div>}
             <div className="row gap"><span className="grow" /><Btn onClick={() => setApproving(null)}>Not yet</Btn>
-              <Btn kind="primary" onClick={async () => { await api.post(`/topic-ideas/${approving.id}/approve`); push('ok', 'Topic approved. It is now under Approved topics.'); setApproving(null); data.reload(); setTimeout(() => document.getElementById('approved-topics')?.scrollIntoView({ behavior: 'smooth' }), 300); }}>Approve topic</Btn></div>
+              <Btn kind="primary" onClick={async () => { await api.post(`/topic-ideas/${approving.id}/approve`); push('ok', 'Topic approved. It is now in the Approved tab.'); setApproving(null); setTab('approved'); data.reload(); setTimeout(() => document.getElementById('research-topics')?.scrollIntoView({ behavior: 'smooth' }), 300); }}>Approve topic</Btn></div>
           </div>
         </Modal>
       )}
       {starting && <StartVideo idea={starting} onClose={() => setStarting(null)} />}
-      {manual && <ManualResearch count={count} focus={focus} notes={notes} category={category} onClose={() => setManual(false)} onDone={() => { setManual(false); data.reload(); }} fail={fail} />}
+      {manual && <ManualResearch count={count} focus={focus} notes={notes} category={category} onClose={() => setManual(false)} onDone={() => { setManual(false); setTab('review'); data.reload(); }} fail={fail} />}
     </>
   );
 }

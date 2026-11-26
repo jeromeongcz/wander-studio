@@ -17,11 +17,14 @@ import type { ScriptContent } from '../studios/script.ts';
 import type { StoryboardContent } from '../studios/storyboard.ts';
 import { ulid } from '../../../shared/src/index.ts';
 import { parseFormat, safeZoneFor } from './formats.ts';
+import { videoGraph } from './compose.ts';
 import type { SceneClipSpec } from './motion.ts';
 import { sceneClipArgs, sceneClipKey } from './motion.ts';
 import { EFFECT_STYLES, applyEffects, impactTimes } from './effects.ts';
 import type { EffectStyle } from './effects.ts';
-import { buildTimeline, timelineHash, validateTimelineShape } from './timeline.ts';
+import { isStyle } from './styles.ts';
+import type { LookChoice } from './styles.ts';
+import { buildTimeline, direct, timelineHash, validateTimelineShape } from './timeline.ts';
 import type { Timeline, TimelineScene } from './timeline.ts';
 
 export interface RenderRow {
@@ -42,7 +45,6 @@ export interface RenderRow {
   created_at: string;
 }
 
-const XFADE: Record<string, string> = { cut: 'fade', fade: 'fade', dissolve: 'dissolve', slide: 'slideleft', wipe: 'wipeleft', zoom: 'zoomin' };
 const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, '');
 const q = filterPath; // quote a path inside an ffmpeg filter option
 
@@ -152,7 +154,7 @@ export class RenderService {
   }
 
   /** `effects`: a style, 'none' to clear it, or left out to keep what the timeline already has. */
-  build(compId: string, effects?: string): Timeline {
+  build(compId: string, effects?: string, change: Partial<Pick<Timeline, 'overrides' | 'overrides_all'>> = {}): Timeline {
     const { comp, sbc, audio, caption, source } = this.currentSource(compId);
     if (comp.kind !== 'composition' || !comp.lang_code || !comp.format) throw new EngineError('VALIDATION', 'Not a composition artifact');
     if (!sbc?.scenes.length) throw new EngineError('NO_VERSION', 'The storyboard has no scenes yet');
@@ -176,11 +178,15 @@ export class RenderService {
     }
     const clipRel = (id: string) => ({ clip_id: id, rel_path: this.audio.get(id).rel_path });
     if (effects !== undefined && effects !== 'none' && !(EFFECT_STYLES as readonly string[]).includes(effects)) throw new EngineError('VALIDATION', `Unknown effect style "${effects}"`);
-    const style = effects === undefined ? prev?.effects : effects === 'none' ? undefined : (effects as EffectStyle);
+    // the classic effect and a video-wide cinematic style replace each other: whichever was chosen last stays
+    let all = change.overrides_all ?? prev?.overrides_all;
+    if (effects === 'folklore' && all?.look) { const { look: _l, ...rest } = all; all = rest; }
+    const choseLook = effects === undefined && !!change.overrides_all?.look;
+    const style = choseLook ? undefined : effects === undefined ? prev?.effects : effects === 'none' ? undefined : (effects as EffectStyle);
     return applyEffects(buildTimeline({
       lang: comp.lang_code,
       format: parseFormat(comp.format),
-      scenes: sbc.scenes.map((s) => ({ scene_id: s.scene_id!, script_segment_id: s.script_segment_id, segment_text: s.segment_text, target_duration: s.target_duration, title: s.title, camera: s.camera, transition_in: s.transition_in })),
+      scenes: sbc.scenes.map((s) => ({ scene_id: s.scene_id!, script_segment_id: s.script_segment_id, segment_text: s.segment_text, target_duration: s.target_duration, title: s.title, camera: s.camera, transition_in: s.transition_in, transition_settings: s.transition_settings, look: s.look, origin: s.origin, draft: s.draft })),
       assets,
       timelineWords: track?.words.length ? track.words.map((w) => ({ section_id: w.section_id, start: w.start, end: w.end })) : this.estimatedWords(layout, script),
       narration: {
@@ -192,9 +198,100 @@ export class RenderService {
       },
       captionWords: track?.words ?? [],
       style: track?.style ?? DEFAULT_STYLE,
-      overrides: prev?.overrides ?? {},
+      overrides: change.overrides ?? prev?.overrides ?? {},
+      overrides_all: all,
+      direction_look: this.directionLook(comp.project_id),
       source,
     }), style);
+  }
+
+  /** What each scene of a built composition will use, and which setting decided it. */
+  directions(compId: string) {
+    const tl = validateTimelineShape(this.engine.getContent(compId));
+    const { comp, sbc } = this.currentSource(compId);
+    const input = { overrides: tl.overrides, overrides_all: tl.overrides_all, direction_look: this.directionLook(comp.project_id) };
+    return {
+      classic: !!tl.effects,
+      overrides: tl.overrides,
+      overrides_all: tl.overrides_all ?? {},
+      scenes: tl.scenes.map((s) => {
+        const source = sbc?.scenes.find((x) => x.scene_id === s.scene_id);
+        const from = source ? direct(input as never, source as never) : null;
+        // the classic effect decides everything the person did not override for the scene
+        const name = (field: 'camera' | 'transition' | 'look', found: string | undefined) => (tl.effects && !s.sources?.[field] ? 'classic' : found ?? 'default');
+        return {
+          scene_id: s.scene_id,
+          index: s.index,
+          title: s.title,
+          camera: { value: s.camera, source: name('camera', from?.camera.source) },
+          transition: { value: s.transition_in, source: s.index === 0 ? 'default' : name('transition', from?.transition.source) },
+          look: { value: s.look ?? null, source: name('look', from?.look?.source) },
+        };
+      }),
+    };
+  }
+
+  private directionLook(projectId: string): LookChoice | undefined {
+    const style = (this.engine.getProject(projectId).settings.cinematic as { style?: string } | undefined)?.style;
+    return style && isStyle(style) ? { style } : undefined;
+  }
+
+  private previews: Promise<unknown> = Promise.resolve();
+
+  /** A short, small video of the change into one scene and the start of its movement. Silent; not a finished render. */
+  previewScene(compId: string, sceneId: string, withCaptions = true): Promise<Buffer> {
+    // one at a time: the screen asks for many, and each one uses every processor core
+    const next = this.previews.then(() => this.drawPreview(compId, sceneId, withCaptions));
+    this.previews = next.catch(() => {});
+    return next;
+  }
+
+  private async drawPreview(compId: string, sceneId: string, withCaptions: boolean): Promise<Buffer> {
+    const tl = validateTimelineShape(this.engine.getContent(compId));
+    const k = tl.scenes.findIndex((s) => s.scene_id === sceneId);
+    if (k < 0) throw new EngineError('NOT_FOUND', `Scene ${sceneId} is not in this timeline`);
+    const cur = tl.scenes[k];
+    const prev = tl.scenes[k - 1];
+    const lead = prev ? Math.min(1.2, prev.duration) : 0;
+    const seconds = lead + Math.min(2.5, cur.duration);
+    const inputs: string[] = [];
+    if (prev) {
+      const clip = await this.ensureSceneClip(tl, prev);
+      const length = prev.duration + this.preroll(tl, prev);
+      inputs.push('-ss', Math.max(0, length - lead).toFixed(3), '-i', clip.path);
+    }
+    inputs.push('-i', (await this.ensureSceneClip(tl, cur)).path);
+    // clip paths are content hashes, so the same pictures, settings and transition give the same preview
+    const pair: Timeline = prev ? { ...tl, scenes: [{ ...prev, start: 0 }, { ...cur, start: lead }] } : { ...tl, scenes: [{ ...cur, start: 0 }] };
+    const graph = videoGraph(pair);
+    // captions are drawn at full size, as in the final render; the preview starts `lead` seconds before this scene.
+    // Only this scene's own captions are shown, so moving another scene's captions leaves this preview as it is.
+    const picture: string[] = [];
+    if (withCaptions && tl.captions.enabled) {
+      const words = tl.captions.words.filter((w) => w.start >= cur.start - 0.05 && w.start < cur.start + cur.duration - 0.05);
+      const placement = tl.captions.placement.filter((p) => Math.abs(p.from - cur.start) < 0.001);
+      const ass = await this.assFile({ ...tl, captions: { ...tl.captions, words, placement } }, cur.start - lead);
+      picture.push(`ass=filename=${q(ass.path)}:fontsdir=${q(ass.fontsDir)}`);
+    }
+    picture.push('scale=360:-2', 'format=yuv420p');
+    const args = [...inputs, '-filter_complex', [...graph.filters, `[${graph.out}]${picture.join(',')}[v]`].join(';'), '-map', '[v]', '-t', seconds.toFixed(3), '-an', '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '24', '-movflags', '+faststart'];
+    const out = this.cache('preview', `scene_${createHash('sha256').update(JSON.stringify(args)).digest('hex').slice(0, 32)}.mp4`);
+    if (existsSync(out)) return readFile(out);
+    await mkdir(dirname(out), { recursive: true });
+    const tmp = `${out}.${ulid()}.tmp.mp4`;
+    try {
+      await run(this.ffmpeg, ['-hide_banner', '-nostats', '-y', ...args, tmp], { timeout: 180_000 });
+      await rename(tmp, out);
+    } catch (e) {
+      await unlink(tmp).catch(() => {});
+      throw e;
+    }
+    return readFile(out);
+  }
+
+  /** The extra frames a scene clip starts with, which its incoming transition plays over. */
+  private preroll(tl: Timeline, s: TimelineScene) {
+    return s.index === 0 ? 0 : s.transition_in.duration > 0 ? s.transition_in.duration : 1 / tl.format.fps;
   }
 
   // ---- rendering ----
@@ -202,7 +299,7 @@ export class RenderService {
     if (!s.asset) throw new EngineError('RENDER_INPUT', `Scene "${s.title}" has no asset`);
     const src = join(this.config.root, s.asset.rel_path);
     if (!existsSync(src)) throw new EngineError('RENDER_INPUT', `Asset file for scene "${s.title}" is missing`);
-    const tIn = s.index === 0 ? 0 : s.transition_in.duration > 0 ? s.transition_in.duration : 1 / tl.format.fps;
+    const tIn = this.preroll(tl, s);
     const spec: SceneClipSpec = {
       asset: { path: src, kind: s.asset.kind, width: s.asset.width, height: s.asset.height, sha256: s.asset.sha256 },
       focal: s.focal,
@@ -213,6 +310,9 @@ export class RenderService {
       height: tl.format.height,
       fps: tl.format.fps,
       ...(tl.effects ? { effects: tl.effects, ...(s.index === tl.scenes.length - 1 ? { glitch: true } : {}) } : {}),
+      // a camera the person chose is played as chosen: the style adds no extra framings to it
+      ...(tl.effects && s.sources?.camera ? { hold: true } : {}),
+      ...(s.look ? { look: s.look } : {}),
     };
     const out = this.cache('scene_clips', `${sceneClipKey(spec)}.mp4`);
     if (existsSync(out) && (await stat(out)).size > 0) return { path: out, cached: true };
@@ -232,7 +332,7 @@ export class RenderService {
     const abs = (rel: string) => join(this.config.root, rel);
     const byId = (list: { clip_id: string; rel_path: string }[], id: string) => abs(list.find((x) => x.clip_id === id)!.rel_path);
     // generated here, so the project's own audio and licences are untouched
-    const fx = tl.effects ? await this.effectSounds(tl, signal) : [];
+    const fx = tl.effects || tl.look?.ambience || tl.scenes.some((s) => s.transition_in.sound) ? await this.effectSounds(tl, signal) : [];
     const graph = buildMixGraph({
       narration: tl.audio.chunks.map((c) => ({ path: abs(c.rel_path), start: c.start })),
       music: (tl.audio.mix.music ?? []).map((m) => ({ path: byId(tl.audio.music, m.clip_id), spec: m })),
@@ -273,9 +373,26 @@ export class RenderService {
       return out;
     };
     const hit = await make('hit_v1.wav', ['-f', 'lavfi', '-i', 'sine=frequency=52:duration=0.6', '-f', 'lavfi', '-i', 'anoisesrc=color=brown:amplitude=0.9:duration=0.18:seed=7', '-filter_complex', '[0:a]volume=3,afade=t=out:st=0.03:d=0.57:curve=exp[a];[1:a]afade=t=out:st=0.01:d=0.17[b];[a][b]amix=inputs=2:normalize=0:duration=longest']);
-    const sounds = impactTimes(tl).map((at) => ({ path: hit, spec: { clip_id: 'effect-hit', at, gain_db: -7 } }));
-    if (!(tl.audio.mix.music ?? []).length) {
-      const seconds = Math.ceil(tl.duration);
+    const sounds = (tl.effects ? impactTimes(tl) : []).map((at) => ({ path: hit, spec: { clip_id: 'effect-hit', at, gain_db: -7 } }));
+    // sounds the person (or the script direction) attached to single transitions
+    for (const s of tl.scenes) {
+      const { sound, duration } = s.transition_in;
+      if (!sound || s.index === 0) continue;
+      const at = Math.max(0, Math.round((s.start - Math.max(duration, 0.2)) * 1000) / 1000);
+      if (sound === 'impact') sounds.push({ path: hit, spec: { clip_id: 'effect-hit', at: s.start, gain_db: -8 } });
+      else {
+        const whoosh = await make('whoosh_v1.wav', ['-f', 'lavfi', '-i', 'anoisesrc=color=pink:amplitude=0.8:duration=0.55:seed=5', '-af', 'highpass=f=300,lowpass=f=3500,afade=t=in:d=0.3:curve=qsin,afade=t=out:st=0.3:d=0.25']);
+        sounds.push({ path: whoosh, spec: { clip_id: 'effect-whoosh', at, gain_db: -12 } });
+      }
+    }
+    // generated beds only where the person has not chosen music
+    const bed = (tl.audio.mix.music ?? []).length ? '' : tl.effects ? 'drone' : tl.look?.ambience ?? '';
+    const seconds = Math.ceil(tl.duration);
+    if (bed.includes('wind')) {
+      const wind = await make(`wind_v1_${seconds}.wav`, ['-f', 'lavfi', '-i', `anoisesrc=color=pink:amplitude=0.7:duration=${seconds}:seed=23`, '-af', `highpass=f=120,lowpass=f=620,tremolo=f=0.13:d=0.75,afade=t=in:d=1.5,afade=t=out:st=${Math.max(0, seconds - 1.5)}:d=1.5`]);
+      sounds.push({ path: wind, spec: { clip_id: 'effect-wind', at: 0, gain_db: -22 } });
+    }
+    if (bed.includes('drone')) {
       const drone = await make(`drone_v1_${seconds}.wav`, ['-f', 'lavfi', '-i', `sine=frequency=55:duration=${seconds}`, '-f', 'lavfi', '-i', `anoisesrc=color=brown:amplitude=0.6:duration=${seconds}:seed=11`, '-filter_complex', `[0:a]volume=0.6,tremolo=f=0.2:d=0.6[a];[1:a]lowpass=f=160[b];[a][b]amix=inputs=2:normalize=0:duration=longest,afade=t=in:d=1.5,afade=t=out:st=${Math.max(0, seconds - 1.5)}:d=1.5`]);
       sounds.push({ path: drone, spec: { clip_id: 'effect-drone', at: 0, gain_db: -20 } });
     }
@@ -293,15 +410,9 @@ export class RenderService {
 
   private async compose(tl: Timeline, clips: string[], mix: string, variant: 'captioned' | 'clean', out: string, signal?: AbortSignal) {
     const { fps } = tl.format;
-    const filters: string[] = clips.map((_, i) => `[${i}:v]settb=AVTB,fps=${fps},setpts=PTS-STARTPTS,setsar=1[s${i}]`);
-    let last = 's0';
-    for (let i = 1; i < clips.length; i++) {
-      const s = tl.scenes[i];
-      const t = s.transition_in.duration > 0 ? s.transition_in.duration : 1 / fps;
-      const offset = Math.max(0, s.start - t);
-      filters.push(`[${last}][s${i}]xfade=transition=${XFADE[s.transition_in.type] ?? 'fade'}:duration=${t.toFixed(4)}:offset=${offset.toFixed(4)}[x${i}]`);
-      last = `x${i}`;
-    }
+    const graph = videoGraph(tl);
+    const filters = graph.filters;
+    let last = graph.out;
     if (variant === 'captioned' && tl.captions.enabled) {
       const ass = await this.assFile(tl);
       filters.push(`[${last}]ass=filename=${q(ass.path)}:fontsdir=${q(ass.fontsDir)}[cap]`);
@@ -399,8 +510,7 @@ export class RenderService {
     if (!(t >= 0 && t <= tl.duration)) throw new EngineError('VALIDATION', `t must be between 0 and ${tl.duration}`);
     const s = [...tl.scenes].reverse().find((x) => x.start <= t) ?? tl.scenes[0];
     const clip = await this.ensureSceneClip(tl, s);
-    const preroll = s.index === 0 ? 0 : s.transition_in.duration > 0 ? s.transition_in.duration : 1 / tl.format.fps;
-    const local = Math.max(0, t - s.start + preroll);
+    const local = Math.max(0, t - s.start + this.preroll(tl, s));
     const out = this.cache('preview', `${ulid()}.png`);
     await mkdir(dirname(out), { recursive: true });
     const vf: string[] = [];

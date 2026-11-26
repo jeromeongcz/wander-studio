@@ -1,5 +1,14 @@
 import { EngineError } from '../engine.ts';
 import { estimate, PRESETS } from './estimator.ts';
+import { MOVEMENTS, validateCamera } from '../render/camera.ts';
+import type { Movement } from '../render/camera.ts';
+import type { Camera } from '../render/motion.ts';
+import { TRANSITIONS, validateTransition } from '../render/transitions.ts';
+import type { Transition, TransitionSpec } from '../render/transitions.ts';
+import { STYLES, isStyle, validateLookParams } from '../render/styles.ts';
+import { CAMERA_CHOICES, TRANSITION_CHOICES } from './direction.ts';
+import type { CinematicSettings } from './direction.ts';
+import type { LookParams, StyleId } from '../render/styles.ts';
 import type { CalibrationSample } from './estimator.ts';
 import type { ScriptContent, SceneVisual, ScriptCharacter } from './script.ts';
 
@@ -19,11 +28,16 @@ export const ASSET_TYPES = [
 ] as const;
 export type AssetType = (typeof ASSET_TYPES)[number];
 
-export const MOVEMENTS = ['static', 'pan', 'zoom', 'ken_burns', 'parallax'] as const;
-export type Movement = (typeof MOVEMENTS)[number];
-export const TRANSITIONS = ['cut', 'fade', 'dissolve', 'slide', 'zoom', 'wipe'] as const;
-export type Transition = (typeof TRANSITIONS)[number];
-export const INTENSITIES = ['subtle', 'medium', 'strong'] as const;
+export { MOVEMENTS };
+export type { Movement };
+export { TRANSITIONS };
+export type { Transition };
+export const ORIGINS = ['ai', 'draft', 'user'] as const;
+export type Origin = (typeof ORIGINS)[number];
+
+/** A scene's visual direction: what the renderer applies (style, params) and notes for whoever makes the picture. */
+export const LOOK_NOTES = ['lighting', 'color', 'atmosphere', 'composition', 'shot'] as const;
+export type SceneLook = { style?: StyleId | 'none'; params?: LookParams } & Partial<Record<(typeof LOOK_NOTES)[number], string>>;
 
 export interface Scene {
   scene_id?: string; // assigned by the server on first save; immutable afterwards
@@ -35,12 +49,15 @@ export interface Scene {
   visual_description: string;
   visual_style?: string;
   asset_type: AssetType;
-  camera: { movement: Movement; direction?: string; intensity?: (typeof INTENSITIES)[number] };
+  camera: Camera;
   transition_in?: Transition;
-  transition_out?: Transition;
+  transition_settings?: Omit<TransitionSpec, 'type'>; // how transition_in plays
+  transition_out?: Transition; // kept for older storyboards; the renderer uses transition_in only
   sfx_cues?: string[];
   notes?: string;
   draft?: boolean; // true for auto-generated skeletons that still need a creative pass
+  look?: SceneLook;
+  origin?: { camera?: Origin; transition?: Origin; look?: Origin }; // who last set these; kept by the server
 }
 export interface StoryboardContent {
   category?: string;
@@ -101,10 +118,24 @@ export function validateStoryboardShape(content: unknown): StoryboardContent {
     if (typeof s.visual_description !== 'string') throw bad(`${at} needs visual_description`);
     if (!ASSET_TYPES.includes(s.asset_type as AssetType)) throw bad(`${at} has invalid asset_type`);
     if (!isObj(s.camera) || !MOVEMENTS.includes(s.camera.movement as Movement)) throw bad(`${at} has invalid camera.movement`);
-    if (s.camera.intensity !== undefined && !INTENSITIES.includes(s.camera.intensity as never)) throw bad(`${at} has invalid camera.intensity`);
+    // direction is checked loosely here so storyboards saved before stricter checks keep loading
+    const { direction: _d, ...camera } = s.camera as Record<string, unknown>;
+    validateCamera(camera, `${at}: camera`);
     for (const k of ['transition_in', 'transition_out'] as const) {
       if (s[k] !== undefined && !TRANSITIONS.includes(s[k] as Transition)) throw bad(`${at} has invalid ${k}`);
     }
+    if (s.transition_settings !== undefined) {
+      if (!isObj(s.transition_settings)) throw bad(`${at} has invalid transition_settings`);
+      validateTransition({ ...s.transition_settings, type: s.transition_in ?? 'cut' }, `${at}: transition`);
+    }
+    if (s.look !== undefined) {
+      const l = s.look;
+      if (!isObj(l) || !Object.keys(l).every((k) => ['style', 'params', ...LOOK_NOTES].includes(k))) throw bad(`${at} has an invalid look`);
+      if (l.style !== undefined && !isStyle(l.style)) throw bad(`${at} has an unknown visual style`);
+      if (l.params !== undefined) validateLookParams(l.params, `${at}: look.params`);
+      if (!LOOK_NOTES.every((k) => l[k] === undefined || typeof l[k] === 'string')) throw bad(`${at} look notes must be text`);
+    }
+    if (s.origin !== undefined && !(isObj(s.origin) && Object.entries(s.origin).every(([k, v]) => ['camera', 'transition', 'look'].includes(k) && ORIGINS.includes(v as Origin)))) throw bad(`${at} has invalid origin`);
     if (s.sfx_cues !== undefined && !(Array.isArray(s.sfx_cues) && s.sfx_cues.every((x) => typeof x === 'string'))) throw bad(`${at} sfx_cues must be strings`);
     if (s.scene_id !== undefined) {
       if (typeof s.scene_id !== 'string' || !s.scene_id) throw bad(`${at} has invalid scene_id`);
@@ -156,8 +187,13 @@ export function describeVisual(v: SceneVisual | undefined, cast: ScriptCharacter
   return [...parts, ...(looks.length ? [`Character looks: ${looks.join(' | ')}`] : [])].join('\n');
 }
 
-export function draftScenes(base: ScriptContent, category: string | undefined, opts: { samples: CalibrationSample[]; defaultWpm?: number; sceneSeconds?: number }): StoryboardContent {
+export function draftScenes(base: ScriptContent, category: string | undefined, opts: { samples: CalibrationSample[]; defaultWpm?: number; sceneSeconds?: number; direction?: CinematicSettings }): StoryboardContent {
   const { profile } = profileFor(category);
+  // a chosen Cinematic Direction fills in scenes the writer gave no instructions for; without one nothing changes
+  const chosen = opts.direction ?? base.cinematic_direction;
+  const style = chosen && chosen.style !== 'automatic' ? STYLES[chosen.style] : undefined;
+  const moves = chosen && CAMERA_CHOICES[chosen.camera].prefer.length ? CAMERA_CHOICES[chosen.camera].prefer : chosen?.camera === 'automatic' ? style?.cameras : undefined;
+  const changes = chosen && TRANSITION_CHOICES[chosen.transition].prefer.length ? TRANSITION_CHOICES[chosen.transition].prefer : chosen?.transition === 'automatic' ? style?.transitions : undefined;
   const goal = opts.sceneSeconds ?? 4;
   const scenes: Scene[] = [];
   let lastMove: Movement | null = null;
@@ -180,12 +216,17 @@ export function draftScenes(base: ScriptContent, category: string | undefined, o
     if (cur) chunks.push(cur);
     if (brief) chunks.splice(0, chunks.length, ...(sec.text.trim() ? [sec.text.trim()] : []));
 
-    for (const text of chunks) {
+    for (const [part, text] of chunks.entries()) {
       const idx = scenes.length;
       const asset: AssetType = sec.kind === 'cta' ? 'text_overlay' : sec.kind === 'hook' ? profile.assets[0] : profile.assets[idx % profile.assets.length];
-      const options = profile.cameras.filter((m) => m !== lastMove);
-      const movement: Movement = asset === 'text_overlay' ? 'static' : options[idx % options.length] ?? profile.cameras[0];
+      const pool = moves ?? profile.cameras;
+      const options = pool.filter((m) => m !== lastMove);
+      const directed = sec.cinematic;
+      const movement: Movement = directed?.camera?.movement ?? (asset === 'text_overlay' ? 'static' : options[idx % options.length] ?? pool[0]);
       lastMove = movement;
+      const arrive = part === 0 ? directed?.transition : undefined;
+      const origin: NonNullable<Scene['origin']> = { ...(directed?.camera ? { camera: 'ai' } : {}), ...(arrive && idx ? { transition: 'ai' } : {}), ...(directed?.look ? { look: 'ai' } : {}) };
+      const { type: arriveType, ...arriveSettings } = arrive ?? { type: undefined };
       flip++;
       const dur = Math.max(1.5, estimate({ sections: [{ text }], lang: base.lang, samples: opts.samples, defaultWpm: opts.defaultWpm }).seconds);
       const words = text.split(/\s+/).slice(0, 5).join(' ');
@@ -197,12 +238,15 @@ export function draftScenes(base: ScriptContent, category: string | undefined, o
         visual_description: brief || `${profile.hint}: ${text}`,
         visual_style: profile.styles[idx % profile.styles.length],
         asset_type: asset,
-        camera: {
+        camera: directed?.camera ? { ...directed.camera } : {
           movement,
           direction: movement === 'pan' ? (flip % 2 ? 'left_to_right' : 'right_to_left') : movement === 'zoom' ? (sec.kind === 'hook' || flip % 2 ? 'in' : 'out') : movement === 'ken_burns' ? 'in' : undefined,
           intensity: sec.kind === 'hook' ? 'medium' : 'subtle',
         },
-        transition_in: idx === 0 ? 'cut' : profile.transition,
+        transition_in: idx === 0 ? 'cut' : arriveType ?? changes?.[(idx - 1) % changes.length] ?? profile.transition,
+        ...(idx && arriveType && Object.keys(arriveSettings).length ? { transition_settings: arriveSettings } : {}),
+        ...(directed?.look ? { look: { ...directed.look } } : {}),
+        ...(Object.keys(origin).length ? { origin } : {}),
         sfx_cues: [],
         draft: true,
       });

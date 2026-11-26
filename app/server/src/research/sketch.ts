@@ -11,6 +11,7 @@ import type { JobCtx } from '../jobs.ts';
 import { ulid } from '../../../shared/src/index.ts';
 import type { Scene, StoryboardContent } from '../studios/storyboard.ts';
 import { profileFor } from '../studios/storyboard.ts';
+import { STYLES } from '../render/styles.ts';
 
 export const FRAME: Record<string, { w: number; h: number }> = { vertical_9x16: { w: 1080, h: 1920 }, horizontal_16x9: { w: 1920, h: 1080 }, square_1x1: { w: 1080, h: 1080 } };
 const MAX_SVG = 600_000; // detailed artwork is large; still bounded so a runaway answer cannot fill the disk
@@ -87,6 +88,7 @@ export function buildSketchPrompt(scene: Scene, o: SketchPromptOptions): string 
     '',
     'Scene to draw:',
     scene.visual_description,
+    ...lookNotes(scene),
     ...(o.captionSpace ? ['', 'Subtitles will be laid over the bottom fifth of this frame, so keep that area calm and free of important detail.'] : []),
     '',
     'Technical format (the file is checked before it is used):',
@@ -97,6 +99,18 @@ export function buildSketchPrompt(scene: Scene, o: SketchPromptOptions): string 
     '- Define repeated shapes once in defs and reuse them. Aim for roughly 40 to 250 kilobytes of SVG; spend the detail where the eye goes.',
     '- Answer with the SVG only.',
   ].join('\n');
+}
+
+/** The scene's visual direction, when it has one. Colour grade and effects are added later by the renderer. */
+function lookNotes(scene: Scene): string[] {
+  const l = scene.look;
+  if (!l) return [];
+  const style = l.style && l.style !== 'none' ? STYLES[l.style] : undefined;
+  const lines = [
+    style && `Visual style: ${style.label}. ${style.summary}${style.guidance ? ` ${style.guidance}` : ''}`,
+    ...(['shot', 'composition', 'lighting', 'color', 'atmosphere'] as const).map((k) => l[k] && `${k[0].toUpperCase()}${k.slice(1)}: ${l[k]}`),
+  ].filter((x): x is string => !!x);
+  return lines.length ? ['', 'Visual direction for this scene (draw the picture itself; do not add film grain, vignettes or fog layers, which are added later):', ...lines] : [];
 }
 
 /** Turn the checked drawing into a PNG with whatever this computer has (see rasterCommands). */

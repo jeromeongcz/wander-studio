@@ -2,7 +2,7 @@ import { createContext, useContext, useEffect, useMemo, useRef, useState } from 
 import { api } from '../api';
 import { useAsync, useInterval } from '../hooks';
 import { ProgressFooter, useTask } from '../progress';
-import { Btn, Card, ErrorBox, Icon, Loading, Modal, Pill, StateBadge, useToast } from '../ui';
+import { Btn, Card, CardIcon, ErrorBox, Icon, Loading, Modal, Pill, StateBadge, useToast } from '../ui';
 import type { Artifact, Project, State } from '../types';
 import { STEPS, aggregate, analyze, stepOfPart } from '../pipeline';
 import { langName } from '../types';
@@ -196,6 +196,12 @@ export function ProjectPage({ id, stage }: { id: string; stage: string }) {
   const viewing = details ? -1 : stepOfPart(part.id);
   const info = flow.steps[viewing];
   const next = flow.steps[viewing + 1];
+  // the step panels take the colour and icon of the part on screen, the same states as the video cards
+  const partState = info && aggregate(info.artifacts.filter((a) => part.kinds.includes(a.kind)));
+  const look = partState === 'approved' ? { id: 'ready', icon: 'check' }
+    : partState === 'awaiting_review' ? { id: 'waiting', icon: 'clock' }
+    : partState === 'needs_revision' || partState === 'failed' || partState === 'rejected' ? { id: 'attention', icon: 'alert' }
+    : { id: 'progress', icon: 'film' };
   return (
     <ProjectCtx.Provider value={ctx}>
       <div className="stack">
@@ -233,6 +239,8 @@ export function ProjectPage({ id, stage }: { id: string; stage: string }) {
               </div>
             ) : (
               <>
+                <CardIcon.Provider value={look.icon}>
+                <div className={`stack step-content v-${look.id}`}>
                 {part.id === 'research' && <ResearchStage />}
                 {part.id === 'script' && <ScriptStage />}
                 {part.id === 'localize' && <LocalizeStage />}
@@ -242,6 +250,8 @@ export function ProjectPage({ id, stage }: { id: string; stage: string }) {
                 {part.id === 'captions' && <CaptionsStage />}
                 {part.id === 'compose' && <ComposeStage />}
                 {part.id === 'publish' && <PublishStage />}
+                </div>
+                </CardIcon.Provider>
                 <LiveFooter projectId={id} artifactIds={proj.artifacts.map((a) => a.id)} reload={p.reload}>
                   <StepFooter info={info} next={next} partId={part.id} projectId={id} reload={p.reload} />
                 </LiveFooter>

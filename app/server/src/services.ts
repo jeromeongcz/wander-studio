@@ -1,4 +1,4 @@
-import { Engine, EngineError } from './engine.ts';
+import { Engine, EngineError, canonical } from './engine.ts';
 import type { Artifact } from './engine.ts';
 import { ulid } from '../../shared/src/index.ts';
 import type { Actor } from '../../shared/src/index.ts';
@@ -11,7 +11,10 @@ import type { CalibrationSample } from './studios/estimator.ts';
 import { buildAdaptationPrompt, compareScripts, detectMix, languageFitWarnings, ttsText } from './studios/locales.ts';
 import type { LexiconEntry, Locale } from './studios/locales.ts';
 import { validateStoryboardShape, storyboardReadiness, draftScenes, buildStoryboardPrompt, profileFor } from './studios/storyboard.ts';
-import type { StoryboardContent } from './studios/storyboard.ts';
+import type { Scene, StoryboardContent } from './studios/storyboard.ts';
+import { validateCameraOverride, validateTransitionOverride } from './render/resolve.ts';
+import { validateLook } from './render/styles.ts';
+import { validateCinematic } from './studios/direction.ts';
 import { addScene } from './pipeline.ts';
 import { AssetService } from './assets.ts';
 import { resolveConfig } from './config.ts';
@@ -47,6 +50,33 @@ import type { AppConfig } from './config.ts';
 import type { AssetType } from './studios/storyboard.ts';
 
 const LOCALE_CODE = /^[a-z][a-z0-9_-]{1,15}$/;
+
+/** A change to an override: a value sets it, null removes it, leaving it out keeps it. */
+function applyDirection(target: Record<string, unknown>, change: { camera?: unknown; transition?: unknown; look?: unknown }) {
+  for (const [key, check] of [['camera', validateCameraOverride], ['transition', validateTransitionOverride], ['look', validateLook]] as const) {
+    const value = change[key];
+    if (value === null) delete target[key];
+    else if (value !== undefined) target[key] = check(value);
+  }
+}
+
+/** Remember who set each scene's camera and transition. What the client sends for existing scenes is not trusted. */
+function recordOrigins(before: StoryboardContent | null, after: StoryboardContent, actor: Actor) {
+  const old = new Map((before?.scenes ?? []).map((s) => [s.scene_id, s]));
+  const by = actor === 'user' ? 'user' : actor === 'ai' ? 'ai' : 'draft';
+  for (const scene of after.scenes) {
+    const was = old.get(scene.scene_id);
+    if (!was) continue;
+    const origin: NonNullable<Scene['origin']> = {};
+    for (const [field, keys] of [['camera', ['camera']], ['transition', ['transition_in', 'transition_settings']], ['look', ['look']]] as const) {
+      const same = keys.every((k) => canonical(scene[k] ?? null) === canonical(was[k] ?? null));
+      const from = same ? was.origin?.[field] : by;
+      if (from) origin[field] = from;
+    }
+    if (Object.keys(origin).length) scene.origin = origin;
+    else delete scene.origin;
+  }
+}
 
 /** Studio service layer: kind-specific validation on top of the generic engine. */
 export class Studio {
@@ -212,18 +242,19 @@ export class Studio {
       const actor = opts.actor ?? 'user';
       this.validateShape(a, content, actor);
       // A refused or failing save rolls back everything, including scene-artifact sync.
-      const toSave = a.kind === 'storyboard' ? this.prepareStoryboard(a, content) : content;
+      const toSave = a.kind === 'storyboard' ? this.prepareStoryboard(a, content, actor) : content;
       return this.engine.saveVersion(id, toSave, { ...opts, actor });
     });
   }
 
   /** Assign scene ids and order, and keep one scene_asset artifact per scene. Runs inside save()'s transaction. */
-  private prepareStoryboard(a: Artifact, content: unknown): StoryboardContent {
+  private prepareStoryboard(a: Artifact, content: unknown, actor: Actor): StoryboardContent {
     const sb = JSON.parse(JSON.stringify(validateStoryboardShape(content))) as StoryboardContent;
     sb.scenes.forEach((sc, i) => {
       if (!sc.scene_id) sc.scene_id = ulid();
       sc.order_index = i;
     });
+    recordOrigins(this.engine.getContent(a.id) as StoryboardContent | null, sb, actor);
     const keep = new Set(sb.scenes.map((sc) => sc.scene_id!));
     const assets = this.engine.list(a.project_id, { kind: 'scene_asset' });
     const existing = new Map(assets.map((x) => [x.scene_id, x]));
@@ -430,8 +461,55 @@ export class Studio {
     if (a.current_version_id) throw new EngineError('VALIDATION', 'This storyboard already has content; edit it instead of reseeding');
     if (base.state !== 'approved' || !b) throw new EngineError('UNMET_DEPENDENCY', 'Approve the base script before generating a storyboard');
     const category = this.engine.getProject(a.project_id).category ?? undefined;
-    const draft = draftScenes(b, category, { samples: this.samples(b.lang), defaultWpm: this.defaultWpm(b.lang), sceneSeconds });
+    const saved = this.engine.getProject(a.project_id).settings.cinematic;
+    const draft = draftScenes(b, category, { samples: this.samples(b.lang), defaultWpm: this.defaultWpm(b.lang), sceneSeconds, direction: saved ? validateCinematic(saved) : undefined });
     return this.save(storyboardId, draft, { actor: 'system' });
+  }
+
+  /** The Cinematic Direction for future script and scene generation. Saving it changes no content and no approval. */
+  setCinematic(projectId: string, choice: unknown) {
+    const cinematic = validateCinematic(choice);
+    this.engine.tx(() => {
+      const p = this.engine.getProject(projectId);
+      this.engine.db.prepare('UPDATE projects SET settings_json = ? WHERE id = ?').run(JSON.stringify({ ...p.settings, cinematic }), projectId);
+    });
+    return cinematic;
+  }
+
+  /**
+   * Copy the script's camera, transition and look instructions onto an existing storyboard. Descriptions, pictures'
+   * links and anything the person set themselves stay as they are.
+   */
+  applyDirections(storyboardId: string, opts: { reopen?: boolean } = {}) {
+    const a = this.engine.get(storyboardId);
+    const { content: base } = this.storyboardBase(a);
+    const sb = this.engine.getContent(storyboardId) as StoryboardContent | null;
+    if (!sb) throw new EngineError('NO_VERSION', 'This storyboard has no content yet');
+    const sections = new Map((base?.sections ?? []).map((s) => [s.id, s]));
+    if (![...sections.values()].some((s) => s.cinematic)) throw new EngineError('VALIDATION', 'The base script has no cinematic instructions. Write the script again, or set directions in Compose & render.');
+    const next = structuredClone(sb);
+    const started = new Set<string>();
+    let kept = 0;
+    next.scenes.forEach((scene, i) => {
+      const from = sections.get(scene.script_segment_id)?.cinematic;
+      const first = !started.has(scene.script_segment_id);
+      started.add(scene.script_segment_id);
+      if (!from) return;
+      // theirs: marked as edited by the person, or an older value on a scene they have worked on
+      const theirs = (field: 'camera' | 'transition' | 'look', present: boolean) => (scene.origin?.[field] ? scene.origin[field] === 'user' : present && !scene.draft);
+      if (from.camera) { if (theirs('camera', true)) kept++; else scene.camera = { ...from.camera }; }
+      if (from.transition && first && i > 0) {
+        if (theirs('transition', !!scene.transition_in)) kept++;
+        else {
+          const { type, ...settings } = from.transition;
+          scene.transition_in = type;
+          if (Object.keys(settings).length) scene.transition_settings = settings;
+          else delete scene.transition_settings;
+        }
+      }
+      if (from.look) { if (theirs('look', !!scene.look)) kept++; else scene.look = { ...from.look }; }
+    });
+    return { ...this.save(storyboardId, next, { actor: 'ai', reopen: opts.reopen }), kept };
   }
 
   storyboardPrompt(storyboardId: string, notes?: string): string {
@@ -706,11 +784,51 @@ export class Studio {
     return { srt, vtt, files: [`captions/exports/${track.lang}.srt`, `captions/exports/${track.lang}.vtt`, `captions/tracks/${track.lang}.json`] };
   }
 
-  buildComposition(compId: string, opts: { reopen?: boolean; effects?: string } = {}) {
-    return { ...this.save(compId, this.render.build(compId, opts.effects), { actor: 'user', reopen: opts.reopen }) };
+  /** `look`: a video-wide style to set, null to remove it, left out to keep it. */
+  buildComposition(compId: string, opts: { reopen?: boolean; effects?: string; look?: unknown } = {}) {
+    let change = {};
+    if (opts.look !== undefined) {
+      const all = { ...(this.engine.getContent(compId) as Timeline | null)?.overrides_all } as Record<string, unknown>;
+      applyDirection(all, { look: opts.look });
+      change = { overrides_all: all };
+    }
+    return { ...this.save(compId, this.render.build(compId, opts.effects, change), { actor: 'user', reopen: opts.reopen }) };
   }
 
-  setSceneOverride(compId: string, sceneId: string, override: { crop?: { x: number; y: number; w: number; h: number }; caption_y_pct?: number | null }, opts: { reopen?: boolean } = {}) {
+  /** Give the other languages and formats of this video the same camera, transition and style overrides. */
+  copyDirection(compId: string, opts: { reopen?: boolean } = {}) {
+    const source = this.engine.get(compId);
+    if (source.kind !== 'composition') throw new EngineError('VALIDATION', 'Not a composition artifact');
+    const from = validateTimelineShape(this.engine.getContent(compId));
+    const keys = ['camera', 'transition', 'look'] as const;
+    const copied: string[] = [];
+    const skipped: { label: string; reason: string }[] = [];
+    for (const comp of this.engine.list(source.project_id, { kind: 'composition' })) {
+      if (comp.id === compId) continue;
+      const to = this.engine.getContent(comp.id) as Timeline | null;
+      if (!to) { skipped.push({ label: comp.label, reason: 'not built yet' }); continue; }
+      const overrides: Record<string, Record<string, unknown>> = {};
+      for (const id of new Set([...Object.keys(to.overrides), ...Object.keys(from.overrides)])) {
+        const keep: Record<string, unknown> = { ...to.overrides[id] };
+        for (const k of keys) {
+          delete keep[k];
+          const v = from.overrides[id]?.[k];
+          if (v !== undefined) keep[k] = v;
+        }
+        if (Object.keys(keep).length) overrides[id] = keep;
+      }
+      try {
+        const next = this.render.build(comp.id, from.effects ?? 'none', { overrides: overrides as Timeline['overrides'], overrides_all: from.overrides_all ?? {} });
+        this.save(comp.id, next, { actor: 'user', reopen: opts.reopen });
+        copied.push(comp.label);
+      } catch (e) {
+        skipped.push({ label: comp.label, reason: (e as Error).message });
+      }
+    }
+    return { copied, skipped };
+  }
+
+  setSceneOverride(compId: string, sceneId: string, override: { crop?: { x: number; y: number; w: number; h: number }; caption_y_pct?: number | null; camera?: unknown; transition?: unknown; look?: unknown }, opts: { reopen?: boolean } = {}) {
     const tl = validateTimelineShape(this.engine.getContent(compId));
     const cur = { ...(tl.overrides[sceneId] ?? {}) } as Record<string, unknown>;
     if (override.crop !== undefined) {
@@ -723,10 +841,23 @@ export class Studio {
       else if (!(override.caption_y_pct >= 0.2 && override.caption_y_pct <= 0.98)) throw new EngineError('VALIDATION', 'caption_y_pct must be between 0.2 and 0.98');
       else cur.caption_y_pct = override.caption_y_pct;
     }
-    if (!tl.scenes.some((s) => s.scene_id === sceneId)) throw new EngineError('NOT_FOUND', `Scene ${sceneId} is not in this timeline`);
+    const index = tl.scenes.findIndex((s) => s.scene_id === sceneId);
+    if (index < 0) throw new EngineError('NOT_FOUND', `Scene ${sceneId} is not in this timeline`);
+    if (override.transition && index === 0) throw new EngineError('VALIDATION', 'The first scene has no incoming transition');
+    applyDirection(cur, override);
     const overrides = { ...tl.overrides, [sceneId]: cur };
-    // rebuild so placement ranges pick up the change
-    return this.save(compId, { ...this.render.build(compId), overrides }, { actor: 'user', reopen: opts.reopen });
+    if (!Object.keys(cur).length) delete overrides[sceneId];
+    // rebuild with the new overrides, so caption placement, camera and transitions all pick up the change
+    return this.save(compId, this.render.build(compId, undefined, { overrides }), { actor: 'user', reopen: opts.reopen });
+  }
+
+  /** Camera, transition and style for every scene of one video. Scene overrides and the person's storyboard edits still win. */
+  setCompositionOverride(compId: string, override: { camera?: unknown; transition?: unknown; look?: unknown }, opts: { reopen?: boolean } = {}) {
+    if (this.engine.get(compId).kind !== 'composition') throw new EngineError('VALIDATION', 'Not a composition artifact');
+    const tl = validateTimelineShape(this.engine.getContent(compId));
+    const all = { ...tl.overrides_all } as Record<string, unknown>;
+    applyDirection(all, override);
+    return this.save(compId, this.render.build(compId, undefined, { overrides_all: all }), { actor: 'user', reopen: opts.reopen });
   }
 
   async renderComposition(compId: string, variants: ('captioned' | 'clean')[], opts: { reopen?: boolean; signal?: AbortSignal; onProgress?: (pct: number, msg: string) => void } = {}) {

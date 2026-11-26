@@ -421,4 +421,64 @@ test('10-second multi-format captioned video: research -> script -> storyboard -
   const cacheFiles = readdirSync(join(root, 'cache', 'scene_clips')).filter((f) => f.endsWith('.tmp.mp4'));
   assert.deepEqual(cacheFiles, []);
   if (OUT) writeFileSync(join(OUT, 'vertical_rerender.mp4'), readFileSync(join(root, again.json.renders[0].rel_path)));
+
+  // ===== Compose & Render overrides: camera and transitions =====
+  const ocomp = one('composition', 'en', 'vertical_9x16');
+  const before = (await call('GET', `/artifacts/${ocomp.id}`)).json.content;
+  const sceneUrl = (i: number) => `/artifacts/${ocomp.id}/scenes/${before.scenes[i].scene_id}/override`;
+  const change = { camera: { movement: 'pan', direction: 'up', intensity: 'strong' }, transition: { type: 'wipe', duration: 2 } };
+  await approve(one('final_render', 'en', 'vertical_9x16').id, 'final render before the override');
+  assert.equal((await call('PUT', sceneUrl(1), change)).status, 409, 'an approved composition is not changed without reopening it');
+  assert.equal((await call('PUT', sceneUrl(0), { transition: { type: 'fade' }, reopen: true })).status, 422, 'the first scene has no incoming transition');
+  assert.equal((await call('PUT', sceneUrl(1), { camera: { movement: 'teleport' }, reopen: true })).status, 422, 'a camera the renderer cannot do is refused');
+  await ok(call('PUT', sceneUrl(1), { ...change, caption_y_pct: 0.4, reopen: true }), 'scene override');
+  const after = (await call('GET', `/artifacts/${ocomp.id}`)).json.content;
+  assert.deepEqual(after.scenes[1].camera, change.camera);
+  assert.equal(after.scenes[1].transition_in.type, 'wipe');
+  const limit = 0.4 * Math.min(after.scenes[0].duration, after.scenes[1].duration);
+  assert.ok(Math.abs(after.scenes[1].transition_in.duration - Math.min(2, limit)) < 0.002, 'a long transition is shortened to fit the scenes');
+  assert.deepEqual(after.scenes[1].sources, { camera: 'scene_override', transition: 'scene_override' });
+  assert.deepEqual(after.captions.placement.map((x: any) => x.y_pct), [0.4], 'the new caption position reaches the render immediately');
+  assert.equal(after.duration, before.duration, 'overrides never change the video length');
+  assert.equal(state(one('final_render', 'en', 'vertical_9x16').id), 'needs_revision');
+  for (const k of ['storyboard', 'scene_asset', 'audio']) assert.ok(arts().filter((a) => a.kind === k && a.lang_code !== 'taglish').every((a) => a.state !== 'needs_revision'), `${k} not invalidated by a compose override`);
+  // a video-wide setting does not overrule storyboard values the person edited
+  await ok(call('PUT', `/artifacts/${ocomp.id}/override-all`, { camera: { movement: 'static' } }), 'video-wide override');
+  const wide = (await call('GET', `/artifacts/${ocomp.id}`)).json.content;
+  assert.deepEqual(wide.scenes.map((x: any) => x.camera), after.scenes.map((x: any) => x.camera));
+  await ok(call('POST', `/artifacts/${ocomp.id}/build-timeline`, {}), 'rebuild keeps overrides');
+  assert.deepEqual((await call('GET', `/artifacts/${ocomp.id}`)).json.content, wide);
+  await approve(ocomp.id, 'overridden composition');
+  const shot = await ok(call('POST', `/artifacts/${ocomp.id}/render`, { variants: ['captioned'], reopen: true }), 'render with overrides');
+  const spr = probe(join(root, shot.json.renders[0].rel_path));
+  assert.ok(Math.abs(Number(spr.format.duration) - wide.duration) < 0.25);
+  // clearing returns to the storyboard
+  await ok(call('PUT', sceneUrl(1), { camera: null, transition: null, caption_y_pct: null, reopen: true }), 'clear override');
+  await ok(call('PUT', `/artifacts/${ocomp.id}/override-all`, { camera: null }), 'clear video-wide');
+  const cleared = (await call('GET', `/artifacts/${ocomp.id}`)).json.content;
+  assert.deepEqual(cleared.scenes, before.scenes);
+  assert.deepEqual([cleared.overrides, cleared.overrides_all, cleared.captions.placement], [{}, undefined, []]);
+
+  // ===== sources, scene preview and copying settings to other videos =====
+  await ok(call('PUT', sceneUrl(1), { camera: { movement: 'orbit' }, transition: { type: 'iris_out' }, look: { style: 'folklore' }, reopen: true }), 'cinematic override');
+  await ok(call('POST', `/artifacts/${ocomp.id}/build-timeline`, { look: { style: 'minimal' } }), 'video-wide style');
+  const told = (await ok(call('GET', `/artifacts/${ocomp.id}/directions`), 'directions')).json;
+  assert.deepEqual([told.scenes[1].camera.source, told.scenes[1].transition.source, told.scenes[1].look.source], ['scene_override', 'scene_override', 'scene_override']);
+  assert.deepEqual([told.scenes[0].camera.source, told.scenes[0].look.source, told.scenes[0].look.value.style], ['storyboard_user', 'composition_override', 'minimal']);
+  const clip = await call('GET', `/artifacts/${ocomp.id}/scenes/${before.scenes[1].scene_id}/preview`);
+  assert.equal(clip.status, 200);
+  writeFileSync(join(tmp, 'preview.mp4'), clip.raw);
+  const pv = probe(join(tmp, 'preview.mp4'));
+  assert.equal(pv.streams[0].width, 360);
+  assert.ok(Number(pv.format.duration) > 1);
+  const copy = (await ok(call('POST', `/artifacts/${ocomp.id}/copy-direction`, { reopen: true }), 'copy direction')).json;
+  assert.ok(copy.copied.includes('Composition (en, horizontal_16x9)'), JSON.stringify(copy));
+  assert.ok(copy.skipped.some((x: any) => x.reason === 'not built yet') || copy.copied.length >= 2);
+  const other = (await call('GET', `/artifacts/${one('composition', 'en', 'horizontal_16x9').id}`)).json.content;
+  assert.deepEqual([other.scenes[1].camera.movement, other.scenes[1].look.style, other.overrides_all.look.style], ['orbit', 'folklore', 'minimal']);
+  await approve(ocomp.id, 'cinematic composition');
+  const cine = await ok(call('POST', `/artifacts/${ocomp.id}/render`, { variants: ['captioned', 'clean'], reopen: true }), 'cinematic render');
+  for (const r of cine.json.renders) assert.ok(Math.abs(Number(probe(join(root, r.rel_path)).format.duration) - wide.duration) < 0.25);
+  const manifest = (await call('GET', `/projects/${pid}/license-manifest`)).json;
+  assert.ok(manifest.items.some((i: any) => i.id === 'effects-generated-visuals'));
 });
