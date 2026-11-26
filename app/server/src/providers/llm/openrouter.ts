@@ -99,6 +99,24 @@ export function openRouterProvider(opts: OpenRouterOptions): TextLLMProvider {
       return health();
     },
     async listModels() {
+      // Try to fetch live free models from OpenRouter API.
+      if (opts.apiKey) {
+        try {
+          const f: typeof fetch = opts.fetchFn ?? (fetch as typeof fetch);
+          const res = await f(`${base}/models`, {
+            method: 'GET',
+            headers: { authorization: `Bearer ${opts.apiKey}` },
+          });
+          if (res.ok) {
+            const j = await res.json() as { data?: Array<{ id?: string; name?: string; pricing?: { prompt?: number; completion?: number } }> };
+            const free = (j.data ?? [])
+              .filter((m) => m.pricing?.prompt === 0 && m.pricing?.completion === 0)
+              .map((m) => ({ id: m.id ?? '', name: m.name ?? m.id ?? '' }))
+              .filter((m) => m.id);
+            if (free.length > 0) return free;
+          }
+        } catch { /* fall back to static list below */ }
+      }
       return FREE_MODELS;
     },
     async generateText({ prompt, model, temperature, signal, onChunk }) {

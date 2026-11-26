@@ -103,12 +103,26 @@ export function SettingsPage() {
   const [openRouterApiKey, setOpenRouterApiKey] = useState('');
   const [openRouterModelInput, setOpenRouterModelInput] = useState('');
   const [savingOpenRouter, setSavingOpenRouter] = useState(false);
+  const [fetchingOpenRouterModels, setFetchingOpenRouterModels] = useState(false);
 
   const loadOpenRouterModels = async () => {
     try {
       const models = await api.get<Array<{ id: string; name: string }>>('/llm/providers/openrouter/models');
       setOpenRouterModels(models);
     } catch { /* openrouter not configured yet */ }
+  };
+
+  const fetchOpenRouterModels = async () => {
+    setFetchingOpenRouterModels(true);
+    try {
+      const models = await api.get<Array<{ id: string; name: string }>>('/llm/providers/openrouter/models');
+      setOpenRouterModels(models);
+      push('ok', `Fetched ${models.length} free models from OpenRouter`);
+    } catch (e) {
+      push('error', `Fetch failed: ${(e as Error).message}`);
+    } finally {
+      setFetchingOpenRouterModels(false);
+    }
   };
 
   const saveOpenRouterConfig = async () => {
@@ -650,8 +664,11 @@ export function SettingsPage() {
             {openRouterApiKey.trim() && (
               <>
                 <div className="row gap" style={{ marginTop: 10 }}>
-                  <Btn small onClick={loadOpenRouterModels} disabled={savingOpenRouter}>
+                  <Btn small onClick={loadOpenRouterModels} disabled={savingOpenRouter || fetchingOpenRouterModels}>
                     <Icon name="refresh" small /> Refresh model list
+                  </Btn>
+                  <Btn small onClick={fetchOpenRouterModels} disabled={savingOpenRouter || fetchingOpenRouterModels || !openRouterApiKey.trim()}>
+                    {fetchingOpenRouterModels ? 'Fetching…' : 'Fetch free models from OpenRouter'}
                   </Btn>
                   <span className="muted small">{openRouterModels.length} models loaded</span>
                 </div>
