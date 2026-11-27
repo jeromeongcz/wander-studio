@@ -48,7 +48,7 @@ test('lets safe still-compatible lettering and local presentation styles round-t
 });
 
 test('seekable GSAP color, easing and visibility tracks are stable and layer hiding is preview-only', () => {
-  const d=parseArtwork('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><path id="coat" d="M0 0 Q16 22 29 0 Z"/></svg>');
+  const d=parseArtwork('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><path id="coat" visibility="hidden" display="none" d="M0 0 Q16 22 29 0 Z"/></svg>');
   const m=readMotion({duration:2,tracks:[
     {id:'coat-color',target:'coat',property:'fill',keys:[{time:0,value:'#000000'},{time:2,value:'#ffffff'}]},
     {target:'coat',property:'rotate',keys:[{time:0,value:0},{time:2,value:32,ease:'easeIn'}]},
@@ -58,6 +58,7 @@ test('seekable GSAP color, easing and visibility tracks are stable and layer hid
   assert.match(halfway,/fill="rgba\(128,128,128,1\)"/);
   assert.match(halfway,/rotate\(8 0 0\)/);
   assert.match(halfway,/display="inline"/);
+  assert.match(halfway,/visibility="visible"/);
   assert.match(drawFrame(d,m,2,64,64),/display="none"/);
   assert.match(drawFrame(d,m,1,64,64,{hiddenTargets:['coat']}),/display="none"/);
   assert.equal(drawFrame(d,m,1,64,64),halfway);

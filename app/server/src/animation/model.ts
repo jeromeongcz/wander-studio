@@ -203,10 +203,10 @@ export function drawFrame(d:Drawing,m:Motion,sec:number,w:number,h:number,option
     const old=d.ids.get(id)!.attr;const transforms=[old.transform,a.translate,a.rotate,a.scale].filter(Boolean).join(' ');
     changed.set(id,{...(transforms?{transform:transforms}:{}),...(a.opacity===undefined?{}:{opacity:a.opacity}),...(a.path===undefined?{}:{d:a.path}),
       ...(a.fill===undefined?{}:{fill:a.fill}),...(a.stroke===undefined?{}:{stroke:a.stroke}),
-      ...(a.visibility===undefined?{}:{display:a.visibility==='hidden'?'none':'inline'})});
+      ...(a.visibility===undefined?{}:{display:a.visibility==='hidden'?'none':'inline',visibility:a.visibility})});
   }
   for(const id of options?.hiddenTargets??[]){
-    if(d.ids.has(id))changed.set(id,{...changed.get(id),display:'none'});
+    if(d.ids.has(id))changed.set(id,{...changed.get(id),display:'none',visibility:'hidden'});
   }
   return serial(d.root,{width:String(w),height:String(h),xmlns:NS},changed);
 }
