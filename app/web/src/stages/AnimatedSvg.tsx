@@ -204,6 +204,9 @@ export function AnimatedSvgSceneModal({ artifactId, projectId, sceneId, index, t
   const [reviewPreview, setReviewPreview] = useState(false);
   const [motionBrief, setMotionBrief] = useState('');
   const [dialogueCues, setDialogueCues] = useState('');
+  const [dialogueRecognizer, setDialogueRecognizer] = useState('phonetic');
+  const [timingAudio, setTimingAudio] = useState<File>();
+  const [analyzingTiming, setAnalyzingTiming] = useState(false);
   const [motionTargets, setMotionTargets] = useState<string[]>([]);
   const savedMotion = useAsync(() => api.get<{id:string;name:string}[]>('/animated-motion-library'), []);
   const [clipRoles, setClipRoles] = useState('');
@@ -494,9 +497,24 @@ export function AnimatedSvgSceneModal({ artifactId, projectId, sceneId, index, t
           {exactPrompt('motion')}
           {record?.artworkApproved ? <>
             <Field label="Motion direction" wide><textarea value={motionBrief} onChange={e => setMotionBrief(e.target.value)} maxLength={3000} rows={2} placeholder="Describe the beats, contacts, holds, atmosphere and camera." /></Field>
-            <details className="stack"><summary>Optional manual dialogue timing</summary>
+            <details className="stack"><summary>Optional dialogue timing</summary>
               <Field label="Scene-relative viseme cues (JSON array)" wide><textarea value={dialogueCues} onChange={e => setDialogueCues(e.target.value)} maxLength={7000} rows={3} placeholder='[{"start":0.2,"end":0.4,"shape":"open"}]' /></Field>
-              <p className="hint">Enable dialogue in the project settings and supply already-aligned cues. Wander does not automatically align these to narration.</p>
+              <p className="hint">Enable dialogue in the project settings. Enter your own cues, or estimate them from a WAV excerpt that starts at this scene’s first frame. Review the estimates before sending timing to the AI. The WAV is processed locally, not sent to the provider.</p>
+              <div className="form">
+                <Field label="Scene WAV excerpt"><input type="file" accept=".wav,audio/wav,audio/x-wav" disabled={analyzingTiming} onChange={e=>setTimingAudio(e.target.files?.[0])}/></Field>
+                <Field label="Speech recognizer"><select value={dialogueRecognizer} onChange={e=>setDialogueRecognizer(e.target.value)} disabled={analyzingTiming}>
+                  <option value="phonetic">Multilingual phonetic</option><option value="pocketSphinx">English</option>
+                </select></Field>
+              </div>
+              <Btn busy={analyzingTiming} disabled={!timingAudio || working} onClick={async()=>{
+                if(!timingAudio)return;
+                if(timingAudio.size>12*1024*1024)throw new Error('Choose a WAV no larger than 12 MB.');
+                setAnalyzingTiming(true);
+                try {
+                  const result=await api.postBinary<{cues:unknown[]}>(`${path}/dialogue-cues?recognizer=${dialogueRecognizer}`,timingAudio);
+                  setDialogueCues(JSON.stringify(result.cues,null,2));push('ok','Estimated cues are ready for review.');
+                }finally{setAnalyzingTiming(false);}
+              }}>Estimate cues locally</Btn>
             </details>
             <Btn kind="primary" disabled={!provider.data?.active || working} onClick={() => generateScene('motion')}>{record.animation ? 'Generate replacement motion' : 'Generate motion for approved artwork'}</Btn>
             <details className="stack"><summary>Reuse motion without replacing artwork</summary>

@@ -37,6 +37,9 @@ export const api = {
   patch: <T = any>(p: string, b: unknown) => request<T>('PATCH', p, b),
   del: <T = any>(p: string) => request<T>('DELETE', p),
   /** Send a picked file to the server's temp area; returns the server-side path to pass to an import call. */
+  async postBinary<T>(path: string, body: Blob): Promise<T> {
+    return request('POST', path, undefined, { headers: { 'content-type': 'application/octet-stream' }, body });
+  },
   async upload(file: File): Promise<{ path: string; bytes: number; name: string }> {
     return request('POST', '/uploads', undefined, { headers: { 'content-type': 'application/octet-stream', 'x-filename': encodeURIComponent(file.name) }, body: file });
   },

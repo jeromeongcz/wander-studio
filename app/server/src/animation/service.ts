@@ -12,6 +12,7 @@ import { ANIMATED_SVG_PRESETS, animatedSvgRenderPreference, animatedSvgRenderCac
 import { extractApprovedGroup, generateAnimatedArtwork, generateAnimatedScene, type GenerateAnimatedSceneOptions, type ImageReference } from './generate.ts';
 import { buildAnimatedSketchPrompt } from './prompts.ts';
 import { bindMotionClip, exportMotionClip } from './motion-clip.ts';
+import { suggestDialogueCues } from './dialogue-timing.ts';
 import { readAnimatedGenerationControls, readTimedMouthCues } from './generation-controls.ts';
 
 export const animatedSvgDefaults = {mode:'static',quality:'professional',style:'dark-folklore',fps:30,complexity:'standard',character:true,environment:true,dialogue:false,camera:true,detail:70,strategy:'multi-pass',advancedShading:true,visualReview:true,reuseApproved:true,customDirection:''} as const;
@@ -39,6 +40,7 @@ export class AnimatedSvgStudio {
   private s:Studio;
   private referenceBatches=new Map<string,{provider:TextLLMProvider;model?:string;images:ImageReference[];settings:ReturnType<typeof readSettings>}>();
   private previews=new Map<string,{bytes:Buffer;until:number}>();
+  private cueAnalysisActive=false;
   private previewsInFlight=new Map<string,Promise<Buffer>>();
   constructor(studio:Studio){this.s=studio;}
   settings(projectId:string,b:Record<string,unknown>){
@@ -309,6 +311,16 @@ export class AnimatedSvgStudio {
     }).finally(()=>this.previewsInFlight.delete(key));
     this.previewsInFlight.set(key,run);
     return run;
+  }
+  async dialogueTiming(id:string,i:number,wav:unknown,recognizer:unknown){
+    const k=this.locate(id,i);
+    if(!readSettings(k.project.settings.animatedSvg as Record<string,unknown>|undefined).dialogue)
+      return bad('Enable dialogue in the project settings first.');
+    if(this.cueAnalysisActive)throw new EngineError('BUSY','Finish the current local dialogue analysis first.');
+    this.cueAnalysisActive=true;
+    try {
+      return await suggestDialogueCues(wav,Math.min(60,Math.max(.1,k.scene.target_duration??5)),recognizer??'phonetic');
+    }finally{this.cueAnalysisActive=false;}
   }
   capturedPrompt(id:string,i:number,revision:unknown,stage:keyof CapturedPrompts){
     const prompt=this.check(this.locate(id,i),revision)?.prompts?.[stage];

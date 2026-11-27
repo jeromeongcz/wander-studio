@@ -284,6 +284,11 @@ export function buildApi(engine: Engine, config: Partial<AppConfig> = {}, llm?: 
     reply.header('Cache-Control','no-store');
     return studio.animation.capturedPrompt(id,i,(req.query as {revision?:string}).revision,stage==='artwork'?'baseArtwork':'motion');
   });
+  app.post('/artifacts/:id/animated-svg/:index/dialogue-cues', {bodyLimit:12*1024*1024}, async (req,reply) => {
+    const {id,i}=sceneAnimation(req), {recognizer}=req.query as {recognizer?:string};
+    reply.header('Cache-Control','no-store');
+    return studio.animation.dialogueTiming(id,i,req.body,recognizer);
+  });
   app.get('/artifacts/:id/animated-svg/:index/history', async (req) => {const {id,i}=sceneAnimation(req);return studio.animation.history(id,i);});
   app.post('/artifacts/:id/animated-svg/:index/restore', async (req) => {const {id,i}=sceneAnimation(req);return studio.animation.restoreRevision(id,i,body(req));});
   app.post('/artifacts/:id/animated-svg/:index/from-still', async (req) => {const {id,i}=sceneAnimation(req);return studio.animation.copyApprovedStill(id,i,body(req).revision);});
