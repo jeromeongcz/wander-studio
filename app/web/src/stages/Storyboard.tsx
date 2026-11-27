@@ -7,6 +7,7 @@ import { useAsync, useInterval } from '../hooks';
 import { Btn, Card, Empty, Field, Icon, Loading, Modal, Pill, StateBadge, fmtSec, useToast } from '../ui';
 import { url } from '../api';
 import { ASSET_TYPES } from '../types';
+import { AnimatedSvgSceneModal } from './AnimatedSvg';
 
 
 export function StoryboardStage() {
@@ -23,6 +24,7 @@ export function StoryboardStage() {
   const layout = (v: 'list' | 'grid') => { setView(v); try { localStorage.setItem('wander-storyboard-view', v); } catch { /* storage unavailable */ } };
   const listClass = view === 'grid' ? 'board board-grid' : 'stack';
   const [zoom, setZoom] = useState<number | null>(null);
+  const [animated, setAnimated] = useState<number | null>(null);
   // custom SVG: paste a drawing to use as a scene's picture instead of generating one
   const [customSvg, setCustomSvg] = useState<number | null>(null);
   const [svgText, setSvgText] = useState('');
@@ -271,6 +273,7 @@ export function StoryboardStage() {
                 </div>
                 <div className="row gap wrap scene-actions">
                   <Pill>{fmtSec(s.target_duration)}</Pill><Pill>{words(s.camera.movement)}</Pill><Pill>{words(s.transition_in ?? 'cut')} in</Pill>
+                  <Btn small disabled={dirty} title={dirty ? 'Save the storyboard first' : undefined} onClick={() => setAnimated(i)}>Animated SVG…</Btn>
                   {sketches.data?.[i] && <StateBadge state={sketches.data[i].state} />}
                   <span className="grow" />
                 </div>
@@ -280,6 +283,12 @@ export function StoryboardStage() {
             {c.scenes.length === 0 && <Empty>No scenes.</Empty>}
           </div>
         </>
+      )}
+      {animated !== null && c?.scenes[animated] && (
+        <AnimatedSvgSceneModal key={c.scenes[animated].scene_id ?? animated} artifactId={art.id} projectId={project.id} sceneId={c.scenes[animated].scene_id} index={animated}
+          title={c.scenes[animated].title ?? ''} brief={c.scenes[animated].visual_description ?? ''}
+          targetDuration={c.scenes[animated].target_duration ?? 0} approvedStoryboard={art.state === 'approved'}
+          onAttached={() => { sketches.reload(); done(); }} onClose={() => setAnimated(null)} />
       )}
       {customSvg !== null && (
         <Modal title={`Custom SVG — scene ${customSvg + 1}`} wide onClose={() => setCustomSvg(null)}>

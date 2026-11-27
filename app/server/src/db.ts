@@ -309,6 +309,25 @@ const MIGRATIONS: string[] = [
   UPDATE topic_ideas SET video_project_id = (SELECT p.id FROM projects p WHERE p.name = substr(topic_ideas.title, 1, 120) ORDER BY p.id DESC LIMIT 1)
     WHERE status = 'used' AND project_id IS NULL;
   `,
+  // v11: opt-in animated illustration packages and explicitly promoted immutable vector layers.
+  `
+  CREATE TABLE animated_svg_scenes (
+    storyboard_id TEXT NOT NULL REFERENCES artifacts(id) ON DELETE CASCADE,
+    scene_id TEXT NOT NULL,
+    package_json TEXT NOT NULL,
+    PRIMARY KEY(storyboard_id, scene_id)
+  );
+  CREATE TABLE animated_svg_library (
+    id TEXT PRIMARY KEY,
+    revision TEXT NOT NULL,
+    name TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    groupId TEXT NOT NULL,
+    createdAt TEXT NOT NULL,
+    svg TEXT NOT NULL,
+    UNIQUE(revision,groupId)
+  );
+  `,
 ];
 
 export function openDb(path: string = ':memory:'): DatabaseSync {

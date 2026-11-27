@@ -3,10 +3,12 @@ import { api, url } from '../api';
 import { useAsync } from '../hooks';
 import { Empty, ErrorBox, Loading, Modal, Pill, Tabs, fmtBytes, fmtSec } from '../ui';
 import { ASSET_TYPES, formatName, langName } from '../types';
+import { listAnimatedVectors, VECTOR_KINDS } from '../animatedLibrary';
+import type { VectorKind } from '../animatedLibrary';
 
 const STATUS_TONE: Record<string, 'good' | 'warn' | 'bad'> = { approved: 'good', pending: 'warn', rejected: 'bad' };
 const label = (s: string) => s.replace(/_/g, ' ');
-type Scope = 'all' | 'shared' | 'project' | 'videos';
+type Scope = 'all' | 'shared' | 'project' | 'videos' | 'vectors';
 
 /** Every image and clip across all videos and the shared library. Managing an asset (approve, license, focal point) still happens in its video's Visuals step. */
 export function AssetLibrary() {
@@ -26,8 +28,8 @@ export function AssetLibrary() {
       <section className="hero">
         <div className="grow"><h1>Asset Library</h1><p>Your generated videos, plus every image and clip in your videos and the shared library with its licence. To approve or edit one, open it in its video's Visuals step.</p></div>
       </section>
-      <Tabs value={scope} onChange={setScope} items={[{ id: 'all', label: `All (${count('all')})` }, { id: 'shared', label: `Shared library (${count('shared')})` }, { id: 'project', label: `In videos (${count('project')})` }, { id: 'videos', label: `Generated videos (${count('videos')})` }]} />
-      {scope === 'videos' ? <Videos list={videos} loading={renders.loading && !renders.data} error={renders.error} retry={renders.reload} total={count('videos')} q={q} onSearch={setQ} /> : <>
+      <Tabs value={scope} onChange={setScope} items={[{ id: 'all', label: `All (${count('all')})` }, { id: 'shared', label: `Shared library (${count('shared')})` }, { id: 'project', label: `In videos (${count('project')})` }, { id: 'videos', label: `Generated videos (${count('videos')})` }, { id: 'vectors', label: 'Animated vectors' }]} />
+      {scope === 'vectors' ? <AnimatedVectors /> : scope === 'videos' ? <Videos list={videos} loading={renders.loading && !renders.data} error={renders.error} retry={renders.reload} total={count('videos')} q={q} onSearch={setQ} /> : <>
       <div className="bar">
         <input style={{ maxWidth: 280 }} placeholder="Search name, tag or video" aria-label="Search assets" value={q} onChange={(e) => setQ(e.target.value)} />
         <select style={{ maxWidth: 200 }} aria-label="Type" value={type} onChange={(e) => setType(e.target.value)}><option value="">All types</option>{ASSET_TYPES.map((t) => <option key={t} value={t}>{label(t)}</option>)}</select>
@@ -72,6 +74,39 @@ export function AssetLibrary() {
         </Modal>
       )}
     </div>
+  );
+}
+
+function AnimatedVectors() {
+  const library = useAsync(listAnimatedVectors, []);
+  const [search, setSearch] = useState('');
+  const [kind, setKind] = useState<VectorKind | ''>('');
+  const entries = Array.isArray(library.data) ? library.data : [];
+  const query = search.trim().toLocaleLowerCase();
+  const shown = entries.filter((entry) => (!kind || entry.kind === kind) &&
+    (!query || `${entry.name} ${entry.groupId}`.toLocaleLowerCase().includes(query)));
+  return (
+    <>
+      <div className="bar">
+        <input style={{ maxWidth: 270 }} placeholder="Search vector name or group ID" aria-label="Search animated vectors" value={search} onChange={(e) => setSearch(e.target.value)} />
+        <select style={{ maxWidth: 195 }} aria-label="Animated vector category" value={kind} onChange={(e) => setKind(e.target.value as VectorKind | '')}>
+          <option value="">All categories</option>{Object.entries(VECTOR_KINDS).map(([id, name]) => <option key={id} value={id}>{name}</option>)}
+        </select>
+        <span className="grow" /><span className="muted small">{shown.length} shown</span>
+      </div>
+      <p className="muted small">These copies of approved SVG artwork are reusable across projects. To copy or reuse layers, open a scene’s Animated SVG workspace in Storyboard.</p>
+      {library.loading && !library.data && <Loading what="Loading animated vectors" />}
+      {library.error && <ErrorBox error={library.error} retry={library.reload} />}
+      {library.data && entries.length === 0 && <Empty>No approved vector layers saved yet.</Empty>}
+      {entries.length > 0 && shown.length === 0 && <Empty>No animated vectors match those filters.</Empty>}
+      <div className="grid g3">
+        {shown.map((entry) => <article className="card vector-library-card" key={entry.id}>
+          <div className="row gap wrap"><b>{entry.name}</b><Pill tone="good">Approved artwork</Pill><Pill tone="info">{VECTOR_KINDS[entry.kind] ?? entry.kind}</Pill></div>
+          <p className="muted small">SVG group <code>{entry.groupId}</code></p>
+          <p className="muted small">Copied {new Date(entry.createdAt).toLocaleString()}</p>
+        </article>)}
+      </div>
+    </>
   );
 }
 

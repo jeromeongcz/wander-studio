@@ -1,3 +1,4 @@
+import { readSceneAnimation, type SceneAnimationPlan } from '../animation/direction.ts';
 import { EngineError } from '../engine.ts';
 import { estimate, isPreset, PRESETS } from './estimator.ts';
 import type { CalibrationSample, Estimate, PresetId } from './estimator.ts';
@@ -14,6 +15,7 @@ export interface ScriptSection {
   delivery_note?: string;
   tts_text?: string; // optional phonetic respelling for TTS, never shown in captions
   visual?: SceneVisual; // what the viewer sees while this narration plays; never narrated or captioned
+  animation_plan?: SceneAnimationPlan;
   cinematic?: SceneCinematic; // camera, transition and look instructions; never narrated or captioned
 }
 /** The visual brief for one beat. Storyboard scenes are built from it. */
@@ -55,6 +57,7 @@ export function validateScriptShape(content: unknown): ScriptContent {
     ids.add(s.id);
     for (const k of ['delivery_note', 'tts_text'] as const) if (s[k] !== undefined && typeof s[k] !== 'string') throw bad(`${k} must be a string`);
     if (s.visual !== undefined && !(isObj(s.visual) && Object.entries(s.visual).every(([k, v]) => (VISUAL_FIELDS as readonly string[]).includes(k) && typeof v === 'string'))) throw bad(`Section ${s.id} has an invalid visual description`);
+    if (s.animation_plan !== undefined) readSceneAnimation(s.animation_plan);
     if (s.cinematic !== undefined) validateSceneCinematic(s.cinematic, `Section ${s.id}`);
   }
   if (content.cinematic_direction !== undefined) validateCinematic(content.cinematic_direction);

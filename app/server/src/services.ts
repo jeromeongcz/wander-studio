@@ -1,3 +1,4 @@
+import { AnimatedSvgStudio } from './animation/service.ts';
 import { Engine, EngineError, canonical } from './engine.ts';
 import type { Artifact } from './engine.ts';
 import { ulid } from '../../shared/src/index.ts';
@@ -96,6 +97,7 @@ export class Studio {
   writer: ScriptWriter;
   sketches: SketchArtist;
   llm: LLMProviderRegistry;
+  animation: AnimatedSvgStudio;
   constructor(engine: Engine, config: Partial<AppConfig> = {}, llm?: LLMProviderRegistry) {
     this.engine = engine;
     this.config = resolveConfig(config);
@@ -107,6 +109,7 @@ export class Studio {
     this.publish = new PublishService(this);
     this.cache = new CacheService(this.config);
     this.templates = new TemplateService(engine);
+    this.animation = new AnimatedSvgStudio(this);
     this.jobs = new JobRunner(engine, this.jobHandlers());
     this.research = new ResearchService(this);
     this.writer = new ScriptWriter(this);
@@ -163,6 +166,8 @@ export class Studio {
       },
       research_topics: async (ctx) => this.research.run(ctx.params.batchId, ctx),
       sketch_scenes: async (ctx) => this.sketches.run(ctx),
+      animated_svg_generate: async (ctx) => this.animation.generate(ctx),
+      animated_svg_render: async (ctx) => this.animation.render(ctx),
       align_captions: async (ctx) => {
         guard(ctx);
         ctx.progress(0.1, 'Matching the script words to the narration');

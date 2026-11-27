@@ -265,6 +265,48 @@ export function buildApi(engine: Engine, config: Partial<AppConfig> = {}, llm?: 
   app.post('/artifacts/:id/script/generate', async (req) => studio.writer.generate((req.params as { id: string }).id, { seconds: body(req).seconds, scenes: body(req).scenes, notes: body(req).notes as string | undefined, reopen: body(req).reopen === true }));
   app.post('/artifacts/:id/script/prompt', async (req) => ({ prompt: studio.writer.prompt((req.params as { id: string }).id, { seconds: body(req).seconds, scenes: body(req).scenes, notes: body(req).notes as string | undefined }) }));
   app.post('/artifacts/:id/script/import', async (req) => studio.writer.importText((req.params as { id: string }).id, { text: body(req).text, seconds: body(req).seconds, scenes: body(req).scenes, reopen: body(req).reopen === true }));
+
+  // Animated SVG is an opt-in companion to the existing static sketch pipeline.
+  app.put('/projects/:id/animated-svg-settings', async (req) => studio.animation.settings((req.params as { id: string }).id, body(req)));
+  app.get('/animated-svg-library', async () => studio.animation.library());
+  app.get('/artifacts/:id/animated-svg', async (req) => studio.animation.list((req.params as { id: string }).id));
+  const sceneAnimation = (req: {params?:unknown}) => {
+    const { id, index }=req.params as { id: string; index: string };
+    if (!/^\d+$/.test(index)) throw new EngineError('VALIDATION','Unknown scene index.');
+    return {id,i:Number(index)};
+  };
+  app.post('/artifacts/:id/animated-svg/:index/import', async (req) => {const {id,i}=sceneAnimation(req);return studio.animation.import(id,i,body(req));});
+  app.post('/artifacts/:id/animated-svg/:index/library', async (req) => {const {id,i}=sceneAnimation(req);return studio.animation.promote(id,i,body(req));});
+  app.post('/artifacts/:id/animated-svg/:index/reuse', async (req) => {const {id,i}=sceneAnimation(req);return studio.animation.reuse(id,i,body(req));});
+  app.post('/artifacts/:id/animated-svg/:index/approve', async (req) => {const {id,i}=sceneAnimation(req);return studio.animation.approve(id,i,body(req).revision);});
+  app.post('/artifacts/:id/animated-svg/:index/generate', async (req,reply) => {const {id,i}=sceneAnimation(req);return reply.status(202).send(studio.animation.start(id,i,body(req),'animated_svg_generate'));});
+  app.post('/artifacts/:id/animated-svg/:index/render', async (req,reply) => {const {id,i}=sceneAnimation(req);return reply.status(202).send(studio.animation.start(id,i,body(req),'animated_svg_render'));});
+  app.post('/artifacts/:id/animated-svg/:index/attach', async (req) => {const {id,i}=sceneAnimation(req);return studio.animation.attach(id,i,body(req));});
+  app.get('/artifacts/:id/animated-svg/:index/preview', async (req,reply) => {
+    const {id,i}=sceneAnimation(req);const {time,revision}=req.query as {time?:string;revision?:string};
+    return reply.header('Cache-Control','no-store').type('image/png').send(await studio.animation.preview(id,i,Number(time??0),revision));
+  });
+  app.get('/artifacts/:id/animated-svg/:index/package/:file',async(req,reply)=>{
+    const {id,i}=sceneAnimation(req),{file} = req.params as {file:string};
+    const revision=(req.query as {revision?:string}).revision;
+    if(file==='preview.png')return reply.header('Content-Disposition','attachment; filename="preview.png"').type('image/png').send(await studio.animation.preview(id,i,0,revision));
+    if(file==='scene.mp4'){const {path,bytes}=await studio.animation.video(id,i,revision);return reply.header('Content-Disposition','attachment; filename="scene.mp4"').header('Content-Length',bytes).type('video/mp4').send(createReadStream(path));}
+    const {mime,bytes}=studio.animation.part(id,i,file,revision);
+    return reply.header('Content-Disposition',`attachment; filename="${file}"`).header('X-Content-Type-Options','nosniff').type(mime).send(bytes);
+  });
+  app.get('/artifacts/:id/animated-svg/:index/video', async (req,reply) => {
+    const {id,i}=sceneAnimation(req),{path,bytes}=await studio.animation.video(id,i,(req.query as {revision?:string}).revision);
+    const range=req.headers.range;
+    reply.header('Accept-Ranges','bytes').header('Cache-Control','no-store').type('video/mp4');
+    if (!range) return reply.header('Content-Length',bytes).send(createReadStream(path));
+    const match=/^bytes=(\d*)-(\d*)$/.exec(range);
+    const start=match ? match[1]?Number(match[1]):Math.max(0,bytes-Number(match[2])) : -1;
+    const end=match&&match[1]&&match[2]?Math.min(bytes-1,Number(match[2])):bytes-1;
+    if(!match || (!match[1]&&!match[2]) || !Number.isSafeInteger(start) || !Number.isSafeInteger(end) || start<0 || end<start || start>=bytes)
+      return reply.status(416).header('Content-Range',`bytes */${bytes}`).send();
+    return reply.status(206).header('Content-Length',end-start+1).header('Content-Range',`bytes ${start}-${end}/${bytes}`).send(createReadStream(path,{start,end}));
+  });
+
   // ---- storyboard sketch pictures: drawn as a background job, approved by the person in Visuals ----
   app.get('/artifacts/:id/sketches', async (req) => studio.sketches.list((req.params as { id: string }).id));
   app.post('/artifacts/:id/sketches', async (req, reply) => reply.status(202).send(studio.sketches.start((req.params as { id: string }).id, { indexes: body(req).indexes, reopen: body(req).reopen === true, captionSpace: typeof body(req).captionSpace === 'boolean' ? (body(req).captionSpace as boolean) : undefined })));
@@ -783,6 +825,7 @@ export function buildApi(engine: Engine, config: Partial<AppConfig> = {}, llm?: 
   app.post('/jobs', async (req, reply) => {
     const b = body(req);
     if (typeof b.project_id !== 'string' || typeof b.kind !== 'string') throw new EngineError('VALIDATION', 'project_id and kind are required');
+    if (b.kind === 'animated_svg_generate' || b.kind === 'animated_svg_render') throw new EngineError('VALIDATION','Use the scene animation action.');
     return reply.status(202).send(studio.jobs.enqueue(b.kind, { projectId: b.project_id, artifactId: b.artifact_id, params: b.params }));
   });
   app.get('/jobs/:id', async (req) => studio.jobs.get((req.params as { id: string }).id));

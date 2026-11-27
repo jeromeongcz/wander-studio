@@ -29,6 +29,7 @@ const TABLES: { name: string; where: string }[] = [
   { name: 'thumbnails', where: 'project_id = :p' },
   { name: 'topic_batches', where: 'project_id = :p' },
   { name: 'topic_ideas', where: 'project_id = :p' },
+  { name: 'animated_svg_scenes', where: 'storyboard_id IN (SELECT id FROM artifacts WHERE project_id = :p)' },
   { name: 'scene_timing', where: "scene_id IN (SELECT scene_id FROM artifacts WHERE project_id = :p AND scene_id IS NOT NULL)" },
 ];
 const ID_TABLES = ['projects', 'artifacts', 'versions', 'approval_events', 'assets', 'audio_clips', 'renders', 'pronunciation_entries', 'publishing_kits', 'thumbnails', 'topic_batches', 'topic_ideas'];
@@ -166,8 +167,10 @@ export class ArchiveService {
           this.engine.db.prepare('INSERT OR IGNORE INTO locales (code, name, bcp47, default_wpm, builtin) VALUES (?,?,?,?,0)').run(l.code as string, l.name as string, l.bcp47 as string, l.default_wpm as number);
         }
         for (const t of TABLES) {
+          const allowed = new Set((this.engine.db.prepare(`PRAGMA table_info(${t.name})`).all() as {name:string}[]).map(c=>c.name));
           for (const r of manifest.rows[t.name] ?? []) {
             const cols = Object.keys(r);
+            if(!cols.length || cols.some(c=>!allowed.has(c))) throw new EngineError('VALIDATION',`Archive contains unsupported columns in ${t.name}`);
             this.engine.db.prepare(`INSERT INTO ${t.name} (${cols.join(',')}) VALUES (${cols.map(() => '?').join(',')})`).run(...(cols.map((c) => r[c]) as never[]));
           }
         }

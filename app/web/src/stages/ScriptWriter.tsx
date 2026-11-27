@@ -8,6 +8,8 @@ import { FORMAT_LABEL, langName } from '../types';
 import { startTask, useTask } from '../progress';
 import { CinematicDirectionFields, NO_CHOICE, useCinematic } from './Direction';
 import type { CinematicChoice } from './Direction';
+import { AnimatedSvgSettingsFields, DEFAULT_ANIMATED_SVG } from './AnimatedSvg';
+import type { AnimatedSvgSettings } from './AnimatedSvg';
 
 const LENGTHS = [15, 30, 45, 60, 90, 180];
 const SHAPES: Record<string, { w: number; h: number; use: string }> = {
@@ -36,6 +38,16 @@ export function ScriptWriterCard({ artifactId, initialSeconds, initialScenes, ha
   const options = useCinematic();
   const [direction, setDirection] = useState<CinematicChoice>({ ...NO_CHOICE, ...project.settings.cinematic });
   const saveDirection = async (v: CinematicChoice) => { await api.put(`/projects/${project.id}/cinematic`, v); reload(); };
+  const [animatedSvg, setAnimatedSvg] = useState<AnimatedSvgSettings>({ ...DEFAULT_ANIMATED_SVG, ...project.settings.animatedSvg });
+  const [animationSettingsChanged, setAnimationSettingsChanged] = useState(false);
+  const saveWritingSettings = async () => {
+    await api.put(`/projects/${project.id}/cinematic`, direction);
+    if (animationSettingsChanged || project.settings.animatedSvg) {
+      await api.put(`/projects/${project.id}/animated-svg-settings`, animatedSvg);
+      setAnimationSettingsChanged(false);
+    }
+    reload();
+  };
   const writing = !!useTask(artifactId);
   const [manual, setManual] = useState(false);
   const formats = project.settings.formats ?? ['vertical_9x16'];
@@ -57,7 +69,7 @@ export function ScriptWriterCard({ artifactId, initialSeconds, initialScenes, ha
       if (!confirm('This asks Claude Code on this computer to write the script, using your Claude plan.\n\nIt gets no tools. Only the topic, its facts, the category, length, format, language, your cinematic direction (including any custom text) and your notes are sent.\n\nContinue?')) return;
       sessionStorage.setItem('wander-cc-script-ok-2', '1');
     }
-    await saveDirection(direction);
+    await saveWritingSettings();
     const done = startTask(artifactId, 'Writing the script…', `${scenes} scenes for a ${lengthLabel(seconds)} video. This can take a few minutes.`);
     try {
       const r: any = await withReopen((reopen) => api.post(`/artifacts/${artifactId}/script/generate`, { seconds, scenes, notes, reopen }));
@@ -127,14 +139,17 @@ export function ScriptWriterCard({ artifactId, initialSeconds, initialScenes, ha
           {options.data ? <CinematicDirectionFields opts={options.data} value={direction} onChange={setDirection} onDone={(v) => saveDirection(v).catch(fail)} /> : options.error ? <div className="notice bad">{options.error.message}</div> : <Loading />}
         </fieldset>
 
-        <Field label="5. Anything else for the writer? (optional)"><input value={notes} onChange={(e) => setNotes(e.target.value)} maxLength={600} placeholder="e.g. mysterious tone, narrator speaks to the viewer, painterly illustration style" /></Field>
+        <AnimatedSvgSettingsFields value={animatedSvg} change={(v) => { setAnimatedSvg(v); setAnimationSettingsChanged(true); }} />
+        {animationSettingsChanged && <div className="row"><Btn onClick={saveWritingSettings}>Save illustration settings</Btn></div>}
+
+        <Field label="6. Anything else for the writer? (optional)"><input value={notes} onChange={(e) => setNotes(e.target.value)} maxLength={600} placeholder="e.g. mysterious tone, narrator speaks to the viewer, painterly illustration style" /></Field>
 
         {!approved && <div className="notice warn">Approve the topic first (step 1). The script is written only from the approved research.</div>}
         {status.data && !status.data.loggedIn && <div className="notice warn"><strong>{status.data.detail}.</strong> {status.data.fix}</div>}
         {status.error && <div className="notice bad">Could not check Claude Code. Restart the server (<code>npm start</code>) and refresh.</div>}
         <div className="row gap wrap">
           <Btn kind="primary" disabled={!approved || !valid || writing || !status.data?.loggedIn} busy={writing} onClick={generate}><Icon name="spark" small /> {writing ? 'Writing the script…' : hasText ? 'Rewrite script' : 'Generate script'}</Btn>
-          <Btn disabled={!approved || !valid || writing} onClick={async () => { await saveDirection(direction); setManual(true); }}>Use a prompt instead…</Btn>
+          <Btn disabled={!approved || !valid || writing} onClick={async () => { await saveWritingSettings(); setManual(true); }}>Use a prompt instead…</Btn>
           <span className="muted small">{writing ? 'This can take a few minutes. Keep this page open.' : 'You get narration plus setting, characters, action, shot, mood and props for every scene.'}</span>
         </div>
       </div>

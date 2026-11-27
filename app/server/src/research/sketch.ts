@@ -1,3 +1,4 @@
+import { professionalIllustrationGuidance } from '../animation/generate.ts';
 // Storyboard sketch frames: Claude (with no tools) draws one vector illustration per scene. The vector file is untrusted
 // model output, so it is checked against an allow-list before it is turned into a PNG and recorded as an asset.
 import { existsSync } from 'node:fs';
@@ -84,6 +85,7 @@ export function buildSketchPrompt(scene: Scene, o: SketchPromptOptions): string 
     '- A rich, deliberate colour palette; shading with gradients, highlights, rim light, soft and cast shadows, atmosphere and light effects (blurs, glows, grain, texture) where they help.',
     '- Depth and a clear visual hierarchy: foreground, midground and background, with environmental detail that tells the story.',
     '- Cinematic composition: the eye should land on the subject, and the frame should say what is happening.',
+    professionalIllustrationGuidance(undefined, true),
     '- Signs, labels, writing or other lettering are welcome when the scene would really contain them.',
     '',
     'Scene to draw:',

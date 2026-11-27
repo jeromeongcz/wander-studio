@@ -1,3 +1,4 @@
+import { readSceneAnimation, type SceneAnimationPlan } from '../animation/direction.ts';
 import { EngineError } from '../engine.ts';
 import { estimate, PRESETS } from './estimator.ts';
 import { MOVEMENTS, validateCamera } from '../render/camera.ts';
@@ -47,6 +48,7 @@ export interface Scene {
   segment_text?: string;
   target_duration: number; // seconds; initial estimate, superseded by measured audio per language
   visual_description: string;
+  animation_plan?: SceneAnimationPlan;
   visual_style?: string;
   asset_type: AssetType;
   camera: Camera;
@@ -115,6 +117,7 @@ export function validateStoryboardShape(content: unknown): StoryboardContent {
     if (typeof s.title !== 'string' || !s.title.trim()) throw bad(`${at} needs a title`);
     if (typeof s.script_segment_id !== 'string' || !s.script_segment_id) throw bad(`${at} needs script_segment_id`);
     if (typeof s.target_duration !== 'number' || !(s.target_duration >= 0.5 && s.target_duration <= 120)) throw bad(`${at} target_duration must be 0.5-120 seconds`);
+    if (s.animation_plan !== undefined) readSceneAnimation(s.animation_plan);
     if (typeof s.visual_description !== 'string') throw bad(`${at} needs visual_description`);
     if (!ASSET_TYPES.includes(s.asset_type as AssetType)) throw bad(`${at} has invalid asset_type`);
     if (!isObj(s.camera) || !MOVEMENTS.includes(s.camera.movement as Movement)) throw bad(`${at} has invalid camera.movement`);
@@ -235,6 +238,7 @@ export function draftScenes(base: ScriptContent, category: string | undefined, o
         script_segment_id: sec.id,
         segment_text: text,
         target_duration: Math.round(dur * 10) / 10,
+        ...(sec.animation_plan ? {animation_plan:sec.animation_plan} : {}),
         visual_description: brief || `${profile.hint}: ${text}`,
         visual_style: profile.styles[idx % profile.styles.length],
         asset_type: asset,
