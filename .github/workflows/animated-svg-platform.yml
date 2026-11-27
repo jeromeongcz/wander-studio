@@ -21,10 +21,15 @@ jobs:
     runs-on: ${{ matrix.os }}
     timeout-minutes: 35
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-        with:
-          path: Wander Studio
-          persist-credentials: false
+      - name: Check out the exact branch commit without submodules
+        shell: bash
+        run: |
+          # The repository tracks a legacy worktree gitlink without a .gitmodules entry.
+          # The app doesn't use it. Fetch the public commit without invoking git submodule.
+          git init 'Wander Studio'
+          git -C 'Wander Studio' fetch --depth=1 --no-tags --no-recurse-submodules "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY.git" "$GITHUB_SHA"
+          git -C 'Wander Studio' -c submodule.recurse=false checkout --detach FETCH_HEAD
+          test "$(git -C 'Wander Studio' rev-parse HEAD)" = "$GITHUB_SHA"
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: '22.x'
