@@ -1,8 +1,9 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { mkdir, mkdtemp, readFile, rm, stat, rename } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, lstat, rename } from 'node:fs/promises';
 import { join } from 'node:path';
 import { EngineError } from '../engine.ts';
 import type { JobCtx } from '../jobs.ts';
+import { sha256File } from '../media.ts';
 import type { TextLLMProvider } from '../providers/llm/types.ts';
 import type { Studio } from '../services.ts';
 import type { StoryboardContent } from '../studios/storyboard.ts';
@@ -34,12 +35,14 @@ type GenerationOperation=(typeof generationOperations)[number];
 type ArtworkSource={kind:'still';assetId:string;sha256:string}|{kind:'animated';revision:string;sha256:string};
 type Draft = {svg:string;animation?:ReturnType<typeof readMotion>;rig?:unknown;scene?:unknown;passes?:unknown;provider?:string};
 type CapturedPrompts = Partial<Record<'baseArtwork'|'motion',string>>;
-type Stored = Draft & {cameraBaked?:boolean;artworkHash?:string;artworkApproved?:boolean;artworkSource?:ArtworkSource;parentRevision?:string;prompts?:CapturedPrompts;sourceFingerprint?:string; revision:string;state:'draft'|'approved'|'rendered'|'attached';duration:number;layers:string[];assetId?:string;video?:{width:number;height:number;fps:number;frames:number;durationSeconds:number;backend?:AnimatedSvgBackend}};
+type VerifiedOutput = {token:string;sha256:string;bytes:number};
+type Stored = Draft & {verifiedOutput?:VerifiedOutput;cameraBaked?:boolean;artworkHash?:string;artworkApproved?:boolean;artworkSource?:ArtworkSource;parentRevision?:string;prompts?:CapturedPrompts;sourceFingerprint?:string; revision:string;state:'draft'|'approved'|'rendered'|'attached';duration:number;layers:string[];assetId?:string;video?:{width:number;height:number;fps:number;frames:number;durationSeconds:number;backend?:AnimatedSvgBackend}};
 type LibraryItem={id:string;revision:string;name:string;kind:string;groupId:string;createdAt:string;svg:string;rig_json:string|null};
 type Key = ReturnType<AnimatedSvgStudio['locate']>;
 export class AnimatedSvgStudio {
   private s:Studio;
   private referenceBatches=new Map<string,{provider:TextLLMProvider;model?:string;images:ImageReference[];settings:ReturnType<typeof readSettings>}>();
+  private verifiedFiles=new Map<string,{stamp:string;confirmed:Promise<string>}>();
   private previews=new Map<string,{bytes:Buffer;until:number}>();
   private cueAnalysisActive=false;
   private previewsInFlight=new Map<string,Promise<Buffer>>();
@@ -68,7 +71,7 @@ export class AnimatedSvgStudio {
     return (c?.scenes??[]).map((_,i)=>{
       const entry=this.get(this.locate(id,i));
       if(!entry)return null;
-      const {prompts,...metadata}=entry;
+      const {prompts,verifiedOutput:_privateOutput,...metadata}=entry;
       return {...metadata,hasArtworkPrompt:!!prompts?.baseArtwork,hasMotionPrompt:!!prompts?.motion};
     });
   }
@@ -280,7 +283,44 @@ export class AnimatedSvgStudio {
     return k;
   }
   private dir(k:Key){return join(this.s.config.root,'projects','proj_'+k.project.id,'animated-svg');}
-  private filename(k:Key,e:Stored){if(!/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/.test(e.revision))return bad('Invalid stored scene revision.');return join(this.dir(k),e.revision+'.mp4');}
+  private filename(k:Key,e:Stored){
+    const uuid=/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/;
+    const token=e.verifiedOutput?.token;
+    if(!uuid.test(e.revision)||token!==undefined&&!uuid.test(token))return bad('Invalid stored render identifier.');
+    return join(this.dir(k),e.revision+(token?'-'+token:'')+'.mp4');
+  }
+  private async verifiedClip(k:Key,e:Stored,requireDigest=false){
+    const path=this.filename(k,e);
+    const file=await lstat(path).catch(()=>undefined);
+    if(!file?.isFile()||!file.size)throw new EngineError('NOT_FOUND','The rendered clip is missing. Render this revision again.');
+    const expected=e.verifiedOutput;
+    if(!expected){
+      if(requireDigest)throw new EngineError('RENDER_VERIFY','Run a fresh render to verify this older clip.');
+      return {path,bytes:file.size};
+    }
+    const damaged=()=>new EngineError('RENDER_VERIFY','The rendered clip changed on disk. Render this revision again before using it.');
+    if(file.size!==expected.bytes)throw damaged();
+    const identify=(f:typeof file)=>[f.dev,f.ino,f.size,f.mtimeMs,f.ctimeMs,expected.sha256].join(':');
+    const stamp=identify(file);
+    let record=this.verifiedFiles.get(path);
+    if(record?.stamp!==stamp){
+      const confirmed=sha256File(path).then(async digest=>{
+        const after=await lstat(path);
+        if(!after.isFile()||identify(after)!==stamp)throw damaged();
+        return digest;
+      });
+      record={stamp,confirmed};
+      if(this.verifiedFiles.size>=16)this.verifiedFiles.delete(this.verifiedFiles.keys().next().value!);
+      this.verifiedFiles.set(path,record);
+    }
+    let sha:string;
+    try{sha=await record.confirmed;}catch{
+      if(this.verifiedFiles.get(path)===record)this.verifiedFiles.delete(path);
+      throw damaged();
+    }
+    if(sha!==expected.sha256)throw damaged();
+    return {path,bytes:file.size};
+  }
   private async raster(svg:string,w:number,h:number,signal?:AbortSignal){
     const dir=join(this.s.config.root,'cache');await mkdir(dir,{recursive:true});const temp=await mkdtemp(join(dir,'svg-preview-'));
     try{
@@ -405,20 +445,49 @@ export class AnimatedSvgStudio {
     const d=parseArtwork(e.svg), m=readMotion(e.animation,d);
     if(typeof p.preset!=='string'||!Object.hasOwn(ANIMATED_SVG_PRESETS,p.preset))return bad('Unknown render preset.');
     const preset=ANIMATED_SVG_PRESETS[p.preset as keyof typeof ANIMATED_SVG_PRESETS],{width,height}=this.dims(k,preset.shortEdge);
-    const outputPath=this.filename(k,e); const fps=p.preset==='ultra'?readSettings(k.project.settings.animatedSvg as Record<string,unknown>|undefined).fps:preset.fps;
+    const fps=p.preset==='ultra'?readSettings(k.project.settings.animatedSvg as Record<string,unknown>|undefined).fps:preset.fps;
     const backend=animatedSvgRenderPreference();
-    if(e.video?.width===width&&e.video.height===height&&e.video.fps===fps&&animatedSvgRenderCacheMatches(e.video.backend,backend)&&await stat(outputPath).then(x=>x.isFile()).catch(()=>false)){ctx.progress(1,'Using existing verified render');return {revision:e.revision,video:e.video};}
+    if(e.video?.width===width&&e.video.height===height&&e.video.fps===fps&&animatedSvgRenderCacheMatches(e.video.backend,backend)&&await this.verifiedClip(k,e,true).then(()=>true,()=>false)){ctx.progress(1,'Using existing verified render');return {revision:e.revision,video:e.video};}
     await mkdir(this.dir(k),{recursive:true});
     const cache=join(this.s.config.root,'cache');await mkdir(cache,{recursive:true});
     const staging=await mkdtemp(join(cache,'animated-svg-'));
+    let candidate:string|undefined;
     try{
-      const {outputPath:_,...video}=await renderAnimatedSvg({outputPath:join(staging,'scene.mp4'),width,height,fps,durationSeconds:m.duration,backend,onBackend:(name)=>ctx.progress(0.01,`Preparing ${name} animation frames`),frameAt:(t)=>drawFrame(d,m,t,width,height),assertSafeSvg:parseArtwork,ffprobeOverride:this.s.config.ffprobePath,signal:ctx.signal,onProgress:(p)=>ctx.progress(p.stage==='frames'?.02+.76*p.completed/Math.max(1,p.total):p.stage==='encoding'?.79+.17*p.completed/Math.max(1,p.total):.98,p.stage==='frames'?'Preparing animation frames':p.stage==='encoding'?'Encoding MP4':'Verifying output')});
+      const temporary=join(staging,'scene.mp4');
+      let lastBucket=-1,lastStage='';
+      const {outputPath:_,...video}=await renderAnimatedSvg({outputPath:temporary,width,height,fps,durationSeconds:m.duration,backend,
+        onBackend:(name)=>ctx.progress(.01,`Preparing ${name} animation frames`),frameAt:(t)=>drawFrame(d,m,t,width,height),
+        assertSafeSvg:parseArtwork,ffprobeOverride:this.s.config.ffprobePath,signal:ctx.signal,onProgress:p=>{
+          const part=p.completed/Math.max(1,p.total);
+          const raw=p.stage==='frames'?.02+.76*part:p.stage==='encoding'?.79+.17*part:.98;
+          const bucket=Math.floor(raw*50);
+          if(p.stage===lastStage&&bucket<=lastBucket)return;
+          lastStage=p.stage;lastBucket=bucket;
+          ctx.progress(raw,p.stage==='frames'?'Preparing animation frames':p.stage==='encoding'?'Encoding MP4':'Verifying output');
+        }});
+      const [sha,file]=await Promise.all([sha256File(temporary),lstat(temporary)]);
       this.jobKey(ctx);
       const fresh=this.check(k,p.revision)!;
       if(ctx.signal.aborted)throw new EngineError('CANCELLED','Animation render cancelled.');
-      await rename(join(staging,'scene.mp4'),outputPath);
-      this.put(k,{...fresh,video,state:'rendered'});
+      const verifiedOutput={token:randomUUID(),sha256:sha,bytes:file.size};
+      const next={...fresh,verifiedOutput,video,state:'rendered' as const};
+      candidate=this.filename(k,next);
+      await rename(temporary,candidate);
+      this.jobKey(ctx);
+      const latest=this.check(k,p.revision)!;
+      if(latest.state==='attached')throw new EngineError('STALE','This revision was already attached. Its render was not replaced.');
+      if(ctx.signal.aborted)throw new EngineError('CANCELLED','Animation render cancelled.');
+      this.put(k,next);
+      candidate=undefined; // the database now owns the new file
+      if(fresh.video){
+        const prior=this.filename(k,fresh);
+        this.verifiedFiles.delete(prior);
+        void rm(prior,{force:true}).catch(()=>{});
+      }
       return {revision:fresh.revision,video};
+    }catch(error){
+      if(candidate)await rm(candidate,{force:true}).catch(()=>{});
+      throw error;
     }finally{await rm(staging,{recursive:true,force:true});}
   }
   private libraryItem(id:string):LibraryItem{
@@ -472,13 +541,14 @@ export class AnimatedSvgStudio {
   async video(id:string,i:number,revision?:string,historical=false){
     const k=this.locate(id,i),e=revision?(historical?this.revision(k,revision):this.check(k,revision)):this.get(k);
     if(!e?.video)throw new EngineError('NOT_FOUND','Render a video first.');
-    const path=this.filename(k,e);try{return {path,bytes:(await stat(path)).size};}catch{throw new EngineError('NOT_FOUND','Render file no longer exists.');}
+    return this.verifiedClip(k,e);
   }
   async attach(id:string,i:number,b:Record<string,unknown>){
     const k=this.locate(id,i),e=this.check(k,b.revision)!;
     this.current(k,e);
     if(k.a.state!=='approved')return bad('Approve the storyboard before attaching the clip.');
     if(!e.video)return bad('Render the approved animation before attaching it.');
+    this.unbusy(k.project.id);
     const art=this.s.engine.list(k.project.id,{kind:'scene_asset'}).find(a=>a.scene_id===k.sceneId);
     if(!art)throw new EngineError('NOT_FOUND','Scene asset artifact not found.');
     if(art.state==='approved'&&b.reopen!==true)throw new EngineError('PROTECTED','Reopen the approved scene asset in Visuals before replacing it.');
@@ -489,7 +559,8 @@ export class AnimatedSvgStudio {
     const original=e.artworkSource?.kind==='still'?e.artworkSource.assetId:undefined;
     let assetId:string;
     try{
-      const asset=await this.s.assets.importLocal(k.project.id,this.filename(k,e),{type:'motion_graphic',name:'Animated SVG: scene '+(i+1),license:{type:e.provider?'ai-generated':'other',commercial_use:'unknown',notes:'Approved animated scene. Verify rights to imported artwork and provider outputs before commercial use.'},provider:e.provider??'animated-svg-import',tags:['animated-svg'],params:{scene_id:k.sceneId,revision:e.revision,animated_svg:attachment,...(original?{source_asset_id:original}:{})}});
+      const {path}=await this.verifiedClip(k,e);
+      const asset=await this.s.assets.importLocal(k.project.id,path,{type:'motion_graphic',name:'Animated SVG: scene '+(i+1),license:{type:e.provider?'ai-generated':'other',commercial_use:'unknown',notes:'Approved animated scene. Verify rights to imported artwork and provider outputs before commercial use.'},provider:e.provider??'animated-svg-import',tags:['animated-svg'],params:{scene_id:k.sceneId,revision:e.revision,animated_svg:attachment,...(original?{source_asset_id:original}:{})}});
       assetId=asset.id;
     }catch(err){
       const x=err as EngineError;
@@ -502,6 +573,8 @@ export class AnimatedSvgStudio {
     }
     const fresh=this.check(k,b.revision)!;
     this.current(this.locate(id,i),fresh);
+    if(fresh.verifiedOutput?.token!==e.verifiedOutput?.token)throw new EngineError('STALE','The render changed before attachment. Review the latest clip.');
+    this.unbusy(k.project.id);
     if(this.locate(id,i).a.current_version_id!==k.a.current_version_id)throw new EngineError('STALE','Storyboard changed before attachment.');
     this.s.setSceneAssets(k.sceneId,[{asset_id:assetId,role:'primary'}],assetId,{reopen:b.reopen===true});
     return this.put(k,{...fresh,assetId,cameraBaked,state:'attached'});

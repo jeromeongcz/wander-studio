@@ -104,6 +104,8 @@ export class JobRunner {
   retry(id: string): Job {
     const j = this.get(id);
     if (j.state !== 'failed' && j.state !== 'cancelled') throw new EngineError('BAD_TRANSITION', `Only failed or cancelled jobs can be retried (this one is ${j.state})`);
+    if(j.kind==='animated_svg_generate')
+      throw new EngineError('VALIDATION','Start generation again from Storyboard to confirm the provider and references.');
     return this.enqueue(j.kind, { projectId: j.project_id, artifactId: j.artifact_id ?? undefined, params: j.params, retryOf: j.id });
   }
 
