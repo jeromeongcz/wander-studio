@@ -259,6 +259,24 @@ test('restore refuses tampered, unsafe and foreign archives and leaves nothing b
   assert.deepEqual(state(), { projects: 0, files: 0 });
 });
 
+test('restore rejects unknown manifest columns before staging project files', async () => {
+  const src = boot();
+  const { id } = await projectWithFiles(src);
+  const arch = (await src.call('POST', `/projects/${id}/archive`, {})).json;
+  const entries = await readZipEntries(arch.path);
+  const manifest = JSON.parse((await extractToBuffer(arch.path, entries[0], 1e8)).toString());
+  manifest.rows.projects[0].unexpected_column = 'not trusted';
+  const forged = join(tmp, 'unknown-column.zip');
+  const z = new ZipWriter(forged);
+  await z.addBuffer('manifest.json', Buffer.from(JSON.stringify(manifest)));
+  await z.finish();
+  const dst = boot();
+  const result = await dst.call('POST', '/archive/restore', { path: forged });
+  assert.equal(result.status, 422);
+  assert.match(result.json.error.message, /Unknown archive column/);
+  assert.equal(dst.engine.listProjects().length, 0);
+});
+
 // ---------------- jobs ----------------
 function jobsFixture(handlers: Record<string, any>) {
   const engine = new Engine(openDb());
