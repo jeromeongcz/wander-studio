@@ -79,9 +79,36 @@ export class JobRunner {
     return (this.engine.db.prepare(`SELECT * FROM jobs ${where.length ? 'WHERE ' + where.join(' AND ') : ''} ORDER BY id DESC LIMIT 200`).all(...args) as any[]).map(rowToJob);
   }
 
+  /** Verify both the job's declared artifact and handler-specific target belong to its project. */
+  private validateOwnership(kind: string, projectId: string, artifactId: string | null | undefined, params: Record<string, unknown>) {
+    const check = (id: unknown, expectedKind?: string) => {
+      if (typeof id !== 'string' || !id) throw new EngineError('VALIDATION', 'Job artifact ID is required');
+      const a = this.engine.get(id);
+      if (a.project_id !== projectId || (expectedKind && a.kind !== expectedKind)) throw new EngineError('VALIDATION', 'Job artifact does not belong to this project or has the wrong kind');
+    };
+    if (artifactId !== undefined && artifactId !== null) check(artifactId);
+    const targets: Record<string, [string, string]> = {
+      render_composition: ['compositionId', 'composition'],
+      sketch_scenes: ['storyboardId', 'storyboard'],
+      align_captions: ['captionId', 'caption'],
+      synthesize_narration: ['audioId', 'audio'],
+    };
+    if (Object.hasOwn(targets, kind)) {
+      const [key, expectedKind] = targets[kind];
+      check(params[key], expectedKind);
+      if (artifactId && artifactId !== params[key]) throw new EngineError('VALIDATION', 'Job artifact and target do not match');
+    }
+    if (kind === 'research_topics') {
+      if (typeof params.batchId !== 'string') throw new EngineError('VALIDATION', 'Research batch ID is required');
+      const row = this.engine.db.prepare('SELECT project_id FROM topic_batches WHERE id = ?').get(params.batchId) as { project_id: string | null } | undefined;
+      if (!row || row.project_id !== projectId) throw new EngineError('VALIDATION', 'Research batch does not belong to this project');
+    }
+  }
+
   enqueue(kind: string, opts: { projectId: string; artifactId?: string; params?: Record<string, unknown>; retryOf?: string }): Job {
-    if (!this.handlers[kind]) throw new EngineError('VALIDATION', `Unknown job kind "${kind}"`);
+    if (!Object.hasOwn(this.handlers, kind) || typeof this.handlers[kind] !== 'function') throw new EngineError('VALIDATION', `Unknown job kind "${kind}"`);
     this.engine.getProject(opts.projectId);
+    this.validateOwnership(kind, opts.projectId, opts.artifactId, opts.params ?? {});
     const id = ulid();
     const t = now();
     this.engine.db
@@ -159,6 +186,7 @@ export class JobRunner {
       },
     };
     try {
+      this.validateOwnership(job.kind, job.project_id, job.artifact_id, job.params);
       const result = await this.handlers[job.kind](ctx);
       if (ac.signal.aborted) throw new EngineError('CANCELLED', 'Cancelled');
       this.patch(id, { state: 'succeeded', progress: 1, result_json: JSON.stringify(result ?? null), finished_at: now(), message: 'Done' });

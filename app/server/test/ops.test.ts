@@ -266,6 +266,20 @@ function jobsFixture(handlers: Record<string, any>) {
   return { engine, projectId, runner: new JobRunner(engine, handlers) };
 }
 
+test('jobs reject cross-project targets and prototype handler names', async () => {
+  const { engine, projectId, runner } = jobsFixture({ render_composition: async () => ({}) });
+  const other = engine.createProject('Other', ['en']);
+  const target = engine.createArtifact({ projectId: other, kind: 'composition', label: 'Other composition' });
+  const own = engine.createArtifact({ projectId, kind: 'composition', label: 'Own composition' });
+  assert.throws(() => runner.enqueue('render_composition', { projectId, params: { compositionId: target } }), /does not belong/);
+  assert.throws(() => runner.enqueue('render_composition', { projectId, artifactId: target, params: { compositionId: own } }), /does not belong/);
+  assert.throws(() => runner.enqueue('toString', { projectId }), /Unknown job kind/);
+  assert.equal(runner.list(projectId).length, 0);
+  const job = runner.enqueue('render_composition', { projectId, artifactId: own, params: { compositionId: own } });
+  await runner.idle();
+  assert.equal(runner.get(job.id).state, 'succeeded');
+});
+
 test('jobs: run in order one at a time, report progress and results, and log', async () => {
   const order: string[] = [];
   let concurrent = 0;
