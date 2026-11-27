@@ -169,7 +169,7 @@ export class AnimatedSvgStudio {
     const drawing=parseArtwork(e.svg);
     if(b.translationScale!==undefined&&typeof b.translationScale!=='number')return bad('Translation scale must be a number.');
     const animation=bindMotionClip(typeof b.libraryClipId==='string'?this.motionLibraryClip(b.libraryClipId):b.clip,drawing,{bindings:b.bindings,duration:Math.min(60,Math.max(0.1,k.scene.target_duration??5)),translationScale:b.translationScale});
-    return this.savePackage(k,{svg:e.svg,animation,revision:e.revision,scene:{artwork:(e.scene as {artwork?:unknown}|undefined)?.artwork??(e.animation?undefined:e.scene),reusedMotion:true}},{artworkApproved:true,prompts:{baseArtwork:e.prompts?.baseArtwork},
+    return this.savePackage(k,{svg:e.svg,animation,rig:e.rig,revision:e.revision,scene:{artwork:(e.scene as {artwork?:unknown}|undefined)?.artwork??(e.animation?undefined:e.scene),reusedMotion:true}},{artworkApproved:true,prompts:{baseArtwork:e.prompts?.baseArtwork},
       artworkSource:e.artworkSource?.kind==='still'?e.artworkSource:{kind:'animated',revision:e.revision,sha256:e.artworkHash??createHash('sha256').update(e.svg).digest('hex')}});
   }
   approveArtwork(id:string,i:number,revision:unknown){

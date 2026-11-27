@@ -117,3 +117,47 @@ test('the Storyboard keeps approved still SVG and artwork revisions while separa
     await app.close();db.close();await rm(root,{recursive:true,force:true});
   }
 });
+
+test('motion binding keeps a destination character rig and enforces its joint limits', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'wander-motion-rig-'));
+  const db = openDb(), engine = new Engine(db), app = buildApi(engine, {root});
+  try {
+    const project = (await app.inject({method:'POST',url:'/projects',payload:{name:'Motion rig fixture'}})).json();
+    const storyboard = engine.list(project.id,{kind:'storyboard'})[0];
+    engine.saveVersion(storyboard.id,{scenes:[{scene_id:'destination-character',target_duration:2}]});
+    const path = `/artifacts/${storyboard.id}/animated-svg`;
+    const post = (action:string,payload:object)=>app.inject({method:'POST',url:path+'/0/'+action,payload});
+    const character = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1080 1920"><g id="arm"><path d="M0 0L80 10"/><g id="wrist"><path d="M80 10L100 30"/></g></g></svg>';
+    const rig = {joints:[{id:'shoulder',target:'arm',pivot:[0,0]},{id:'hand',target:'wrist',parent:'shoulder',pivot:[80,10],min:-12,max:12}]};
+    const makeKeys = (value:number)=>[{time:0,value:0},{time:2,value}];
+    const imported = await post('import',{svg:character,rig,animation:{duration:2,tracks:[{target:'wrist',property:'rotate',pivot:[80,10],keys:makeKeys(5)}]}});
+    assert.equal(imported.statusCode,200,imported.body);
+    const initial = imported.json();
+    const approved = await post('approve',{revision:initial.revision});
+    assert.equal(approved.statusCode,200,approved.body);
+    const bind = (angle:number)=>post('motion-clip/bind',{
+      revision:initial.revision,
+      bindings:{hand:{target:'wrist',pivot:[80,10]}},
+      clip:{version:1,duration:2,tracks:[{role:'hand',property:'rotate',keys:makeKeys(angle)}]},
+    });
+    const invalid = await bind(20);
+    assert.equal(invalid.statusCode,422,invalid.body);
+    assert.match(invalid.json().error.message,/Rotation exceeds joint limits/);
+    const active = (await app.inject({method:'GET',url:path})).json()[0];
+    assert.equal(active.revision,initial.revision);
+    assert.deepEqual(active.rig,rig);
+    const valid = await bind(10);
+    assert.equal(valid.statusCode,200,valid.body);
+    const draft = valid.json();
+    assert.equal(draft.state,'draft');
+    assert.notEqual(draft.revision,initial.revision);
+    assert.equal(draft.parentRevision,initial.revision);
+    assert.equal(draft.svg,initial.svg);
+    assert.equal(draft.artworkHash,initial.artworkHash);
+    assert.equal(draft.artworkApproved,true);
+    assert.deepEqual(draft.rig,rig);
+    assert.equal(draft.animation.tracks[0].keys.at(-1).value,10);
+  } finally {
+    await app.close(); db.close(); await rm(root,{recursive:true,force:true});
+  }
+});
