@@ -28,7 +28,7 @@ export function buildAnimationMotionRules(duration: number): string {
 }
 
 export interface TimedMouthCue {start: number; end: number; shape: string}
-export function buildAnimatedMotionPrompt(o: { duration: number; context: string; targets: unknown; artPlan?: unknown; preparation?: unknown; allowIK?: boolean; allowCycles?: boolean; dialogueCues?: readonly TimedMouthCue[] }): string {
+export function buildAnimatedMotionPrompt(o: { duration: number; context: string; targets: unknown; artPlan?: unknown; preparation?: unknown; allowIK?: boolean; allowCycles?: boolean; dialogueCues?: readonly TimedMouthCue[]; approvedRig?:unknown }): string {
   return [
     buildAnimationMotionRules(o.duration),
     ...(o.allowIK ? [
@@ -42,6 +42,7 @@ export function buildAnimatedMotionPrompt(o: { duration: number; context: string
       `Provided timed mouth cues: ${JSON.stringify(o.dialogueCues)}`,
     ] : ['No verified timed mouth cues were supplied. Do not emit animation.visemes or claim lip synchronization.']),
     'Do not duplicate a target/property across regular and generated tracks. Use 1–80 tracks after all optional structures are baked. If an optional structure is unsuitable, keep ordinary motion on the existing drawing instead.',
+    ...(o.approvedRig ? ['Use the approved rig and its joint limits below. Do not return a replacement rig.', `Approved rig: ${JSON.stringify(o.approvedRig)}`] : []),
     'Return only JSON {animation,rig?,scene}. The scene metadata includes continuity, source assets, visual notes, timing beats and cameraBaked. Use only the named groups and paths in the supplied target list. Never regenerate the artwork.',
     `Scene inputs: ${o.context}`,
     `Art plan: ${JSON.stringify(o.artPlan ?? {})}`,

@@ -354,6 +354,8 @@ const MIGRATIONS: string[] = [
     SELECT storyboard_id,scene_id,json_extract(package_json,'$.revision'),package_json FROM animated_svg_scenes
     WHERE json_valid(package_json) AND json_type(package_json,'$.revision')='text';
   `,
+  // v13: approved vector assets may carry the joints for the saved character group.
+  `ALTER TABLE animated_svg_library ADD COLUMN rig_json TEXT;`,
 ];
 
 export function openDb(path: string = ':memory:'): DatabaseSync {

@@ -9,8 +9,9 @@ import type { StoryboardContent } from '../studios/storyboard.ts';
 import { FRAME } from '../research/sketch.ts';
 import { bad, canonicalArtwork, drawFrame, drawingTarget, parseArtwork, readMotion, readRig } from './model.ts';
 import { ANIMATED_SVG_PRESETS, animatedSvgRenderPreference, animatedSvgRenderCacheMatches, renderAnimatedSvg, renderAnimatedSvgFrame, type AnimatedSvgBackend } from './render.ts';
-import { extractApprovedGroup, generateAnimatedArtwork, generateAnimatedScene, type GenerateAnimatedSceneOptions, type ImageReference } from './generate.ts';
+import { generateAnimatedArtwork, generateAnimatedScene, type GenerateAnimatedSceneOptions, type ImageReference } from './generate.ts';
 import { buildAnimatedSketchPrompt } from './prompts.ts';
+import { combineCharacterRigs, extractCharacter, placeCharacter, selectCharacterRig } from './character-rig.ts';
 import { bindMotionClip, exportMotionClip } from './motion-clip.ts';
 import { suggestDialogueCues } from './dialogue-timing.ts';
 import { readAnimatedGenerationControls, readTimedMouthCues } from './generation-controls.ts';
@@ -34,7 +35,7 @@ type ArtworkSource={kind:'still';assetId:string;sha256:string}|{kind:'animated';
 type Draft = {svg:string;animation?:ReturnType<typeof readMotion>;rig?:unknown;scene?:unknown;passes?:unknown;provider?:string};
 type CapturedPrompts = Partial<Record<'baseArtwork'|'motion',string>>;
 type Stored = Draft & {cameraBaked?:boolean;artworkHash?:string;artworkApproved?:boolean;artworkSource?:ArtworkSource;parentRevision?:string;prompts?:CapturedPrompts;sourceFingerprint?:string; revision:string;state:'draft'|'approved'|'rendered'|'attached';duration:number;layers:string[];assetId?:string;video?:{width:number;height:number;fps:number;frames:number;durationSeconds:number;backend?:AnimatedSvgBackend}};
-type LibraryItem={id:string;revision:string;name:string;kind:string;groupId:string;createdAt:string;svg:string};
+type LibraryItem={id:string;revision:string;name:string;kind:string;groupId:string;createdAt:string;svg:string;rig_json:string|null};
 type Key = ReturnType<AnimatedSvgStudio['locate']>;
 export class AnimatedSvgStudio {
   private s:Studio;
@@ -109,7 +110,7 @@ export class AnimatedSvgStudio {
   private savePackage(k:Key,b:Record<string,unknown>,internal:{passes?:unknown;provider?:string;prompts?:CapturedPrompts;artworkOnly?:boolean;artworkApproved?:boolean;artworkSource?:ArtworkSource}={}) {
     const previous=this.check(k,b.revision,true);
     const d=parseArtwork(b.svg), svg=canonicalArtwork(d);
-    const animation=internal.artworkOnly?undefined:readMotion(b.animation,d), rig=animation?readRig(b.rig,d,animation):undefined;
+    const animation=internal.artworkOnly?undefined:readMotion(b.animation,d), rig=readRig(b.rig,d,animation??{duration:1,tracks:[]});
     const layers=[...d.ids].filter(([,el])=>el.tag==='g').map(([id])=>id);
     return this.put(k,{svg,animation,rig,scene:json(b.scene,64_000),passes:json(internal.passes,36_000),provider:internal.provider,prompts:internal.prompts,
       sourceFingerprint:this.fingerprint(k),revision:randomUUID(),parentRevision:previous?.revision,state:'draft',duration:animation?.duration??Math.min(60,Math.max(0.1,k.scene.target_duration??5)),layers,
@@ -344,19 +345,25 @@ export class AnimatedSvgStudio {
     const reusable=settings.reuseApproved?this.list(k.a.id).filter((v,i)=>i!==k.index&&v&&v.state!=='draft').slice(0,6):[];
     const vision = provider.generateVision?.bind(provider);
     const reuse=reusable.map(x=>({id:x!.revision,version:x!.revision,kind:'background',notes:'Approved scene layers: '+x!.layers.join(', '),layers:undefined as {target:string;svg:string}[]|undefined}));
+    const characterRigs:ReturnType<typeof extractCharacter>['rig'][]=[];
     if(p.reuseLayer){
       const r=p.reuseLayer,source=this.get(this.locate(p.id,r.fromIndex));
       if(!source||source.state==='draft'||source.revision!==r.revision)throw new EngineError('STALE','The selected approved reuse source changed.');
-      reuse.unshift({id:source.revision,version:source.revision,kind:'background',notes:'Use the approved locked group at the named placeholder.',layers:[extractApprovedGroup(source.svg,r.sourceGroupId,r.targetId)]});
+      const {layer,rig}=extractCharacter(source.svg,source.rig,r.sourceGroupId,r.targetId);
+      reuse.unshift({id:source.revision,version:source.revision,kind:'background',notes:'Use the approved locked group at the named placeholder.',layers:[layer]});
+      characterRigs.push(rig);
     }
     if(p.libraryReuse){
       const asset=this.libraryItem(p.libraryReuse.id);
-      reuse.unshift({id:asset.id,version:asset.revision,kind:asset.kind,notes:'Explicitly selected immutable library artwork',layers:[extractApprovedGroup(asset.svg,asset.groupId,p.libraryReuse.targetId)]});
+      const {layer,rig}=extractCharacter(asset.svg,this.libraryRig(asset),asset.groupId,p.libraryReuse.targetId);
+      reuse.unshift({id:asset.id,version:asset.revision,kind:asset.kind,notes:'Explicitly selected immutable library artwork',layers:[layer]});
+      characterRigs.push(rig);
     }
+    const reusedRig=combineCharacterRigs(characterRigs);
     const motionOperation=operation==='motion'||operation==='refine-motion';
     const prompts:CapturedPrompts=motionOperation?{baseArtwork:e?.prompts?.baseArtwork}:{};
     const opts:GenerateAnimatedSceneOptions={
-      provider,model,settings:{...settings,stages:{...stageDefaults,...settings.stages}},
+      provider,model,settings:{...settings,reuseApproved:settings.reuseApproved||!!p.reuseLayer||!!p.libraryReuse,stages:{...stageDefaults,...settings.stages}},
       baseArtworkPrompt:additionalArt?baseArtworkPrompt+'\nAdditional scene artwork direction: '+additionalArt:baseArtworkPrompt,
       dialogueCues:p.dialogueCues,
       scene:{id:k.sceneId,visualDescription:[k.scene.visual_description,p.brief].filter(Boolean).join('\n'),duration:Math.min(60,Math.max(0.1,k.scene.target_duration??5)),width:k.size.w,height:k.size.h,context:k.scene.animation_plan?JSON.stringify(k.scene.animation_plan):undefined},
@@ -364,14 +371,14 @@ export class AnimatedSvgStudio {
       reuse,images,
       ...(vision&&(p.analyzeVision||p.vision)?{analyzeReferences:({images:refs,prompt,signal})=>vision({model,prompt,images:refs.map(x=>x.bytes),signal})}:{}),
       ...(vision&&(p.reviewVision||p.vision)?{visionReview:({image,prompt,signal})=>vision({model,prompt,images:[image],signal})}:{}),
-      ...(operation==='motion'&&e?{motionOnly:{svg:e.svg,scene:e.scene}}:{}),
+      ...(operation==='motion'&&e?{motionOnly:{svg:e.svg,scene:e.scene,rig:e.rig}}:{}),
       ...(operation==='refine-motion'&&e?{refineMotion:{svg:e.svg,animation:e.animation,rig:e.rig,scene:e.scene,targetLayerIds:p.targetLayerIds,notes:p.brief}}:{}),
       ...(!motionOperation&&e&&p.targetLayerIds?{refine:{svg:e.svg,animation:e.animation,rig:e.rig,scene:e.scene,targetLayerIds:p.targetLayerIds,notes:p.brief}}:{}),
       signal:ctx.signal,
       onPromptRequest:(stage,prompt)=>{if(Buffer.byteLength(prompt,'utf8')<=128_000)prompts[stage]=prompt;},
       onProgress:(fraction,message)=>ctx.progress(fraction,message),
       validateArtwork:parseArtwork,
-      validate:(v)=>{const d=parseArtwork(v.svg);const m=readMotion(v.animation,d);readRig(v.rig,d,m);},
+      validate:(v)=>{const d=parseArtwork(v.svg);const m=readMotion(v.animation,d);readRig(reusedRig??v.rig,d,m);},
       rasterizePreview:(svg,signal)=>{const d=parseArtwork(svg);const {width,height}=this.dims(k,360);return this.raster(drawFrame(d,{duration:1,tracks:[]},0,width,height),width,height,signal);},
     };
     this.check(k,p.revision,true);
@@ -382,11 +389,12 @@ export class AnimatedSvgStudio {
     if(motionOperation&&generated.svg!==e?.svg)throw new EngineError('PROVIDER_ERROR','A motion-only request attempted to change artwork.');
     const metadata:Record<string,unknown>={metadata:'scene' in generated?generated.scene:undefined,artPlan:generated.artPlan,review:generated.review,finalReview:generated.finalReview,referenceAnalysis:generated.referenceAnalysis,reused:generated.reused,preparation:generated.preparation};
     if(motionOperation){
-      const prior=e?.scene as {artwork?:unknown;metadata?:unknown}|undefined;
+      const prior=e?.scene as {artwork?:unknown;metadata?:unknown;characterPlacements?:unknown}|undefined;
+      metadata.characterPlacements=prior?.characterPlacements;
       metadata.artwork=prior?.artwork??(e?.animation?undefined:prior);
       if(operation==='refine-motion')metadata.metadata=prior?.metadata??prior;
     }
-    const saved=this.savePackage(k,{...generated,revision:p.revision,scene:metadata},{passes:generated.passes,provider:provider.id,prompts,artworkOnly:artOnly,artworkApproved:motionOperation,
+    const saved=this.savePackage(k,{...generated,rig:reusedRig??((motionOperation||p.targetLayerIds)?e?.rig:undefined)??('rig' in generated?generated.rig:undefined),revision:p.revision,scene:metadata},{passes:generated.passes,provider:provider.id,prompts,artworkOnly:artOnly,artworkApproved:motionOperation,
       artworkSource:motionOperation&&e?.artworkHash?(e.artworkSource?.kind==='still'?e.artworkSource:{kind:'animated',revision:e.revision,sha256:e.artworkHash}):e&&p.targetLayerIds&&e.artworkHash?{kind:'animated',revision:e.revision,sha256:e.artworkHash}:undefined});
     return {revision:saved.revision,state:saved.state};
   }
@@ -418,21 +426,39 @@ export class AnimatedSvgStudio {
     if(!row)throw new EngineError('NOT_FOUND','Reusable vector layer not found.');
     return row as unknown as LibraryItem;
   }
+  private libraryRig(asset:LibraryItem):unknown{
+    return asset.rig_json?JSON.parse(asset.rig_json):undefined;
+  }
   library(){
-    return this.s.engine.db.prepare('SELECT id,revision,name,kind,groupId,createdAt FROM animated_svg_library ORDER BY createdAt DESC LIMIT 200').all();
+    return this.s.engine.db.prepare('SELECT id,revision,name,kind,groupId,createdAt,rig_json IS NOT NULL AS hasRig FROM animated_svg_library ORDER BY createdAt DESC LIMIT 200').all()
+      .map(row=>({...row,hasRig:!!row.hasRig}));
+  }
+  placeLibraryCharacter(id:string,i:number,b:Record<string,unknown>){
+    const k=this.locate(id,i),e=this.check(k,b.revision)!;
+    this.current(k,e);
+    if(typeof b.libraryId!=='string'||typeof b.targetId!=='string')return bad('Choose a saved character and a receiving group.');
+    const asset=this.libraryItem(b.libraryId);
+    if(asset.kind!=='character'||!asset.rig_json)return bad('Choose a saved character with a rig.');
+    const placed=placeCharacter(e.svg,e.rig,asset.svg,this.libraryRig(asset),asset.groupId,b.targetId);
+    const previous=e.scene as {artwork?:unknown;characterPlacements?:unknown[]}|undefined;
+    const placements=Array.isArray(previous?.characterPlacements)?previous.characterPlacements.slice(-19):[];
+    return this.savePackage(k,{...placed,revision:e.revision,scene:{artwork:previous?.artwork,characterPlacements:[...placements,{libraryId:asset.id,sourceRevision:asset.revision,targetId:b.targetId}]}},
+      {artworkOnly:true,artworkSource:{kind:'animated',revision:e.revision,sha256:e.artworkHash??createHash('sha256').update(e.svg).digest('hex')}});
   }
   promote(id:string,i:number,b:Record<string,unknown>){
     const k=this.locate(id,i),e=this.check(k,b.revision)!;
     this.current(k,e);
-    if(e.state==='draft')return bad('Approve artwork before adding a reusable layer.');
+    if(e.state==='draft'&&!e.artworkApproved)return bad('Approve artwork before adding a reusable layer.');
     const name=str(b.name,120);
     if(!name||typeof b.groupId!=='string'||!e.layers.includes(b.groupId)||typeof b.kind!=='string'||!['character','background','prop','environment','effect'].includes(b.kind))return bad('Name the approved layer and select its type.');
     const count=(this.s.engine.db.prepare('SELECT COUNT(*) AS n FROM animated_svg_library').get() as {n:number}).n;
     if(count>=200)return bad('The reusable vector library is full.');
-    const duplicate=this.s.engine.db.prepare('SELECT id,revision,name,kind,groupId,createdAt FROM animated_svg_library WHERE revision=? AND groupId=?').get(e.revision,b.groupId);
-    if(duplicate)return duplicate;
-    const entry={id:randomUUID(),revision:e.revision,name,kind:b.kind,groupId:b.groupId,createdAt:new Date().toISOString()};
-    this.s.engine.db.prepare('INSERT INTO animated_svg_library(id,revision,name,kind,groupId,createdAt,svg) VALUES (?,?,?,?,?,?,?)').run(entry.id,entry.revision,entry.name,entry.kind,entry.groupId,entry.createdAt,e.svg);
+    const duplicate=this.s.engine.db.prepare('SELECT id,revision,name,kind,groupId,createdAt,rig_json IS NOT NULL AS hasRig FROM animated_svg_library WHERE revision=? AND groupId=?').get(e.revision,b.groupId);
+    if(duplicate)return {...duplicate,hasRig:!!duplicate.hasRig};
+    const rig=selectCharacterRig(e.svg,b.kind==='character'?e.rig:undefined,b.groupId);
+    const entry={id:randomUUID(),revision:e.revision,name,kind:b.kind,groupId:b.groupId,createdAt:new Date().toISOString(),hasRig:!!rig};
+    this.s.engine.db.prepare('INSERT INTO animated_svg_library(id,revision,name,kind,groupId,createdAt,svg,rig_json) VALUES (?,?,?,?,?,?,?,?)')
+      .run(entry.id,entry.revision,entry.name,entry.kind,entry.groupId,entry.createdAt,e.svg,rig?JSON.stringify(rig):null);
     return entry;
   }
   part(id:string,i:number,name:string,revision?:string){

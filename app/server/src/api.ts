@@ -297,6 +297,9 @@ export function buildApi(engine: Engine, config: Partial<AppConfig> = {}, llm?: 
   app.post('/artifacts/:id/animated-svg/:index/motion-clip/save', async (req) => {const {id,i}=sceneAnimation(req);return studio.animation.saveMotionClip(id,i,body(req));});
   app.post('/artifacts/:id/animated-svg/:index/motion-clip/bind', async (req) => {const {id,i}=sceneAnimation(req);return studio.animation.bindClip(id,i,body(req));});
   app.post('/artifacts/:id/animated-svg/:index/import', async (req) => {const {id,i}=sceneAnimation(req);return studio.animation.import(id,i,body(req));});
+  app.post('/artifacts/:id/animated-svg/:index/library/place-character', async (req) => {
+    const {id,i}=sceneAnimation(req);return studio.animation.placeLibraryCharacter(id,i,body(req));
+  });
   app.post('/artifacts/:id/animated-svg/:index/library', async (req) => {const {id,i}=sceneAnimation(req);return studio.animation.promote(id,i,body(req));});
   app.post('/artifacts/:id/animated-svg/:index/reuse', async (req) => {const {id,i}=sceneAnimation(req);return studio.animation.reuse(id,i,body(req));});
   app.post('/artifacts/:id/animated-svg/:index/approve', async (req) => {const {id,i}=sceneAnimation(req);return studio.animation.approve(id,i,body(req).revision);});

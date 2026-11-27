@@ -79,7 +79,7 @@ export interface GenerateAnimatedSceneOptions extends AnimatedGenerationControls
   /** User requests a scoped change on a previously validated source; unrelated layers remain byte-for-byte. */
   refine?: { svg: string; notes: string; targetLayerIds: string[]; animation?: unknown; rig?: unknown; scene?: unknown };
   /** Generate only motion for existing, validated artwork. The artist never redraws it. */
-  motionOnly?: { svg: string; scene?: unknown };
+  motionOnly?: { svg: string; scene?: unknown; rig?: unknown };
   /** Scope the model to already named selected layers and merge only validated track changes. */
   refineMotion?: { svg: string; animation: unknown; rig?: unknown; scene?: unknown; notes: string; targetLayerIds: string[] };
   signal?: AbortSignal;
@@ -212,7 +212,11 @@ function replaceLayers(svg: string, replacements: ReadonlyMap<string, string>, l
  * Artwork stays vector; only IDs and their local references are remapped for safe scene composition.
  * The caller verifies approval/asset scope and explicitly chooses the group and the receiving placeholder.
  */
-export function extractApprovedGroup(svg: string, sourceGroupId: string, target: string): { target: string; svg: string } {
+export function extractApprovedGroup(svg: string, sourceGroupId: string, target: string): {target:string;svg:string} {
+  const extracted=extractApprovedGroupWithIds(svg,sourceGroupId,target);
+  return {target:extracted.target,svg:extracted.svg};
+}
+export function extractApprovedGroupWithIds(svg: string, sourceGroupId: string, target: string, placement?: string): {target:string;svg:string;ids:ReadonlyMap<string,string>} {
   if (!id(target)) throw new EngineError('VALIDATION', 'Use a stable group ID for the receiving reusable layer.');
   const drawing = parseSafeDrawing(svg), source = drawing.ids.get(sourceGroupId);
   if (!source || source.tag !== 'g') throw new EngineError('VALIDATION', 'Choose a named SVG group from the approved artwork.');
@@ -227,6 +231,7 @@ export function extractApprovedGroup(svg: string, sourceGroupId: string, target:
   // Preserve normal inherited paint when the selected group was nested. Placement is the new scene's concern.
   const inherited = ['fill', 'fill-opacity', 'fill-rule', 'stroke', 'stroke-width', 'stroke-opacity', 'stroke-dasharray', 'stroke-dashoffset', 'stroke-linecap', 'stroke-linejoin', 'stroke-miterlimit', 'color'];
   const srcAttrs = { ...source.attr };
+  if(placement)srcAttrs.transform=[placement,srcAttrs.transform].filter(Boolean).join(' ');
   for (const name of inherited) for (let at = source.parent; srcAttrs[name] === undefined && at; at = at.parent) {
     if (at.attr[name] !== undefined) srcAttrs[name] = at.attr[name];
   }
@@ -261,7 +266,15 @@ export function extractApprovedGroup(svg: string, sourceGroupId: string, target:
     const defs = el === source && roots.length ? `<defs>${roots.map(encode).join('')}</defs>` : '';
     return `<${el.tag}${attrs}>${defs}${el.children.map((child) => typeof child === 'string' ? escape(child) : encode(child)).join('')}</${el.tag}>`;
   };
-  return { target, svg: encode(source) };
+  const ids=new Map([...groups].flatMap(node=>node.attr.id?[[node.attr.id,renamed.get(node.attr.id)!] as const]:[]));
+  return { target, svg: encode(source),ids };
+}
+
+/** Replace a user's explicit drawable placeholder, then validate the complete local drawing. */
+export function replaceApprovedGroup(svg:string,replacement:{target:string;svg:string}):string {
+  const edited=replaceLayers(svg,new Map([[replacement.target,replacement.svg]]),new Set());
+  parseSafeDrawing(edited);
+  return edited;
 }
 
 /** Shared professional-illustration direction, also usable by the existing static sketch prompt. */
@@ -681,7 +694,7 @@ async function runAnimatedPipeline(o: GenerateAnimatedSceneOptions, artworkOnly:
   } else {
     step(0.87, 'Choreographing articulated character and atmospheric motion');
     const allowIK = s.complexity === 'advanced' && has('character'), allowCycles = has('environment');
-    const motion = parseObject(await send('motion', 'Rig and motion', buildAnimatedMotionPrompt({duration: scene.duration, context, targets: known, artPlan, preparation, allowIK, allowCycles, dialogueCues})), 250_000, 'Rig and motion');
+    const motion = parseObject(await send('motion', 'Rig and motion', buildAnimatedMotionPrompt({duration: scene.duration, context, targets: known, artPlan, preparation, allowIK, allowCycles, dialogueCues, approvedRig:o.motionOnly?.rig})), 250_000, 'Rig and motion');
     const motionData = obj(motion.animation);
     if (motionData.duration !== scene.duration) throw artError('The generated motion must use the approved scene duration.');
     if ((!allowIK && motionData.ik !== undefined) || (!allowCycles && motionData.cycles !== undefined)) throw artError('The returned motion includes a disabled motion category.');
@@ -692,7 +705,7 @@ async function runAnimatedPipeline(o: GenerateAnimatedSceneOptions, artworkOnly:
       try { confirmed = readTimedMouthCues(obj(motionData.visemes).cues, scene.duration); } catch { throw artError('The motion provider returned invalid mouth timing.'); }
       if (JSON.stringify(confirmed) !== JSON.stringify(dialogueCues)) throw artError('The motion provider must preserve the supplied mouth timing exactly.');
     }
-    candidate = {svg, animation: motion.animation, rig: motion.rig, scene: motion.scene ?? o.motionOnly?.scene};
+    candidate = {svg, animation: motion.animation, rig: o.motionOnly?.rig ?? motion.rig, scene: motion.scene ?? o.motionOnly?.scene};
     record('rig-and-motion', 'complete');
   }
   o.validate(candidate);

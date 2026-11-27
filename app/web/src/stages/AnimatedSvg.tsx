@@ -270,7 +270,7 @@ export function AnimatedSvgSceneModal({ artifactId, projectId, sceneId, index, t
     jobs.reload();
     data.reload();
   };
-  const mutate = async (action: 'import' | 'approve' | 'approve-artwork' | 'from-still' | 'restore' | 'attach' | 'reuse', body?: ObjectRecord) => {
+  const mutate = async (action: 'import' | 'approve' | 'approve-artwork' | 'from-still' | 'library/place-character' | 'restore' | 'attach' | 'reuse', body?: ObjectRecord) => {
     if (action === 'attach') await withReopen((reopen) => api.post(`${path}/attach`, { revision, reopen, ...body }));
     else await api.post(`${path}/${action}`, { revision, ...body });
     data.reload();
@@ -353,7 +353,7 @@ export function AnimatedSvgSceneModal({ artifactId, projectId, sceneId, index, t
   const reuseReady = !reuseSource || (reusable.includes(Number(reuseSource)) && reuseGroupIds.includes(reuseGroup) && GROUP_ID.test(reuseTarget.trim()));
   const libraryReady = !libraryId || (libraryEntries.some((entry) => entry.id === libraryId) && GROUP_ID.test(libraryTarget.trim()) && (!reuseSource || reuseTarget.trim() !== libraryTarget.trim()));
   const saveLibraryGroup = async () => {
-    if (record?.state === 'draft' || !revision || !layerIds.includes(librarySourceGroup) || !libraryName.trim()) return;
+    if ((record?.state === 'draft' && !record.artworkApproved) || !revision || !layerIds.includes(librarySourceGroup) || !libraryName.trim()) return;
     await api.post(`${path}/library`, { revision, groupId: librarySourceGroup, name: libraryName.trim(), kind: libraryKind });
     library.reload();
     setLibrarySourceGroup('');
@@ -460,12 +460,20 @@ export function AnimatedSvgSceneModal({ artifactId, projectId, sceneId, index, t
                 setLibraryTarget(libraryEntries.find((entry) => entry.id === id)?.groupId ?? '');
               }}>
                 <option value="">No library layer</option>
-                {libraryEntries.map((entry) => <option key={entry.id} value={entry.id}>{entry.name} · {VECTOR_KINDS[entry.kind] ?? entry.kind}</option>)}
+                {libraryEntries.map((entry) => <option key={entry.id} value={entry.id}>{entry.name} · {VECTOR_KINDS[entry.kind] ?? entry.kind}{entry.hasRig ? ' · rigged' : ''}</option>)}
               </select></Field>
               {libraryId && <Field label="Library layer ID in the new scene"><input value={libraryTarget} disabled={working}
                 onChange={(e) => setLibraryTarget(e.target.value)} maxLength={80} placeholder="e.g. lantern_traveler" /></Field>}
             </div>}
             {libraryId && !libraryReady && <p className="hint">Use a valid receiving group ID distinct from any scene-layer reuse ID.</p>}
+            {libraryEntries.some(entry=>entry.id===libraryId&&entry.hasRig) && record && <>
+              <p className="hint">Enter an existing group ID to replace it with this character and its rig. Other layers stay in place. Review the new artwork before generating motion.</p>
+              <Btn disabled={working || !layerIds.includes(libraryTarget.trim())} onClick={async()=>{
+                if(!confirm('Place this rigged character in a new artwork draft? The current revision stays in history.'))return;
+                await mutate('library/place-character',{libraryId,targetId:libraryTarget.trim()});
+                push('ok','Character and rig placed in a new artwork draft.');
+              }}>Place rigged character without AI</Btn>
+            </>}
           </details>
           <div className="row gap wrap">
             <Btn kind="primary" disabled={!provider.data?.active || !prompt.trim() || !reuseReady || !libraryReady || working || preparingImages || !!data.error || (data.loading && !data.data)}
@@ -611,8 +619,8 @@ export function AnimatedSvgSceneModal({ artifactId, projectId, sceneId, index, t
           {record?.scene && <details><summary>Scene and continuity metadata</summary><pre>{stringify(record.scene)}</pre></details>}
           {record && layerIds.length > 0 && <fieldset className="choices animated-library-save">
             <legend>Save approved artwork to Asset Library</legend>
-            {record.state === 'draft' ? <p className="hint">Preview and approve this revision before sharing any of its vector groups across projects.</p> : <>
-              <p className="muted small">This copies the artwork and its linked definitions to the local reusable vector library. It does not change the current scene or save its motion tracks.</p>
+            {record.state === 'draft' && !record.artworkApproved ? <p className="hint">Preview and approve the artwork before sharing a vector group across projects.</p> : <>
+              <p className="muted small">This saves the artwork and linked definitions to the local vector library. Character groups also retain their approved joints. Motion tracks are saved separately.</p>
               <div className="form">
                 <Field label="Artwork group for library"><select disabled={working} value={librarySourceGroup}
                   onChange={(e) => { setLibrarySourceGroup(e.target.value); if (!libraryName) setLibraryName(e.target.value.replace(/[_-]+/g, ' ')); }}>

@@ -15,5 +15,6 @@ export interface VectorLibraryEntry {
   kind: VectorKind;
   groupId: string;
   createdAt: string;
+  hasRig?: boolean;
 }
 export const listAnimatedVectors = () => api.get<VectorLibraryEntry[]>('/animated-svg-library');

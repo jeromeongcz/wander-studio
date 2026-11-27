@@ -161,3 +161,128 @@ test('motion binding keeps a destination character rig and enforces its joint li
     await app.close(); db.close(); await rm(root,{recursive:true,force:true});
   }
 });
+
+test('a saved rigged character stays consistent and independently animatable across two storyboard scenes', {timeout:40_000}, async () => {
+  const root = await mkdtemp(join(tmpdir(), 'wander-character-continuity-'));
+  const db = openDb(), engine = new Engine(db), libraryProvider = new LLMProviderRegistry();
+  const app = buildApi(engine, {root}, libraryProvider);
+  let target = '', degrees = 20, sent = '';
+  const provider:TextLLMProvider={
+    id:'motion-fixture',kind:'claude',name:'Fixture motion',
+    terms:{freeTier:'local',requiresKey:false,commercialUse:'',privacy:''},
+    async healthCheck(){return {ok:true,detail:'ready'};},
+    async generateText({prompt}){
+      if(prompt.startsWith('Wander Studio • Layered vector artwork\n'))return '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1080 1920"><g id="provider_slot"><path d="M0 0L10 10"/></g></svg>';
+      assert.match(prompt,/Rig and motion/);sent=prompt;
+      return JSON.stringify({animation:{duration:2,tracks:[{target,property:'rotate',pivot:[20,16],keys:[{time:0,value:0},{time:2,value:degrees}]}]},
+        rig:{joints:[{id:'attempted_replacement',target,pivot:[20,16],min:-180,max:180}]}});
+    },
+  };
+  libraryProvider.register(provider);libraryProvider.setActive(provider.id);
+  try {
+    const project = (await app.inject({method:'POST',url:'/projects',payload:{name:'Character continuity fixture'}})).json();
+    const settings=await app.inject({method:'PUT',url:`/projects/${project.id}/animated-svg-settings`,payload:{strategy:'single-pass',visualReview:false,reuseApproved:false,stages:{animationPreparation:false}}});
+    assert.equal(settings.statusCode,200,settings.body);
+    const storyboard = engine.list(project.id,{kind:'storyboard'})[0];
+    engine.saveVersion(storyboard.id,{scenes:[
+      {scene_id:'first-character-scene',target_duration:2,visual_description:'A character in a workshop'},
+      {scene_id:'second-character-scene',target_duration:2,visual_description:'The same character outside'},
+    ]});
+    const path = `/artifacts/${storyboard.id}/animated-svg`;
+    const post = (i:number,action:string,payload:object)=>app.inject({method:'POST',url:`${path}/${i}/${action}`,payload});
+    const ok=async(i:number,action:string,payload:object)=>{
+      const res=await post(i,action,payload);assert.ok(res.statusCode>=200&&res.statusCode<300,res.body);return res.json();
+    };
+    const sections=async()=>(await app.inject({method:'GET',url:path})).json();
+    const draw = (inside:string)=>`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1080 1920">${inside}</svg>`;
+    const character = draw('<defs><linearGradient id="coat"><stop offset="0" stop-color="#f81c24"/><stop offset="1" stop-color="#291733"/></linearGradient></defs><g id="figure"><path d="M10 10L140 10L140 180L10 180Z" fill="url(#coat)"/><g id="wrist"><path d="M20 16L150 40L140 90Z" fill="#ffbb80"/></g></g><g id="outside"><path d="M0 0L20 10"/></g>');
+    const rig = {joints:[
+      {id:'root',target:'figure',pivot:[0,0]},
+      {id:'hand',target:'wrist',parent:'root',pivot:[20,16],min:-12,max:12},
+      {id:'in_other_layer',target:'outside',pivot:[0,0]},
+    ]};
+    const setA=await ok(0,'import',{svg:character,artworkOnly:true,rig});
+    await ok(0,'approve-artwork',{revision:setA.revision});
+    const entry=await ok(0,'library',{revision:setA.revision,name:'Workshop character',kind:'character',groupId:'figure'});
+    assert.equal(entry.hasRig,true);
+    const entries=(await app.inject({method:'GET',url:'/animated-svg-library'})).json();
+    assert.equal(entries[0].hasRig,true);
+    const clip = {version:1,duration:2,tracks:[{role:'hand',property:'rotate',keys:[{time:0,value:0},{time:2,value:10}]}]};
+    const movedA=await ok(0,'motion-clip/bind',{revision:setA.revision,clip,bindings:{hand:{target:'wrist',pivot:[20,16]}}});
+    await ok(0,'approve',{revision:movedA.revision});
+
+    const destination=draw('<g id="stand"><path d="M0 0L300 20L20 500Z" fill="#063482"/></g><g id="placeholder" transform="translate(240 40)"><path d="M0 0L40 0L30 60Z" fill="#fe02fe"/></g>');
+    const setB=await ok(1,'import',{svg:destination,artworkOnly:true,rig:{joints:[{id:'stand_joint',target:'stand',pivot:[0,0]}]}});
+    const missing=await post(1,'library/place-character',{revision:setB.revision,libraryId:entry.id,targetId:'missing'});
+    assert.equal(missing.statusCode,422,missing.body);
+    assert.equal((await sections())[1].revision,setB.revision);
+    const placed=await ok(1,'library/place-character',{revision:setB.revision,libraryId:entry.id,targetId:'placeholder'});
+    assert.equal(placed.artworkApproved,false);
+    assert.equal(placed.animation,undefined);
+    assert.equal(placed.parentRevision,setB.revision);
+    assert.match(placed.svg,/id="placeholder" transform="translate\(240 40\)"/);
+    assert.match(placed.svg,/fill="#063482"/);
+    assert.match(placed.svg,/stop-color="#f81c24"/);
+    assert.match(placed.svg,/fill="url\(#asset_/);
+    assert.doesNotMatch(placed.svg,/#fe02fe/);
+    assert.ok(placed.rig.joints.some((j:{id:string})=>j.id==='stand_joint'));
+    assert.ok(!placed.rig.joints.some((j:{id:string})=>j.id.includes('in_other_layer')));
+    const wrist=placed.rig.joints.find((j:{min?:number})=>j.min===-12);
+    const parent=placed.rig.joints.find((j:{target:string})=>j.target==='placeholder');
+    assert.notEqual(wrist.target,'wrist');
+    assert.equal(wrist.max,12);
+    assert.equal(wrist.parent,parent.id);
+    assert.deepEqual(wrist.pivot,[20,16]);
+    assert.equal((await sections())[0].revision,movedA.revision);
+
+    await ok(1,'approve-artwork',{revision:placed.revision});
+    target=wrist.target;
+    const waitJob=async(job:{id:string})=>{
+      for(let i=0;i<240;i++){
+        const m=(await app.inject({method:'GET',url:'/jobs/'+job.id})).json();
+        if(m.state!=='running'&&m.state!=='queued')return m;
+        await delay(25);
+      }
+      assert.fail('Motion job did not reach a terminal state');
+    };
+    const runJob=async(operation:object)=>waitJob((await ok(1,'generate',{...operation,consent:true,expectedProvider:provider.id})).job);
+    const askMotion=()=>runJob({revision:placed.revision,operation:'motion'});
+    const outside=await askMotion();
+    assert.equal(outside.state,'failed');
+    assert.match(outside.error.message,/Rotation exceeds joint limits/);
+    assert.equal((await sections())[1].revision,placed.revision);
+    degrees=10;
+    const inside=await askMotion();
+    assert.equal(inside.state,'succeeded',JSON.stringify(inside));
+    assert.match(sent,/Approved rig:/);
+    const movedB=(await sections())[1];
+    assert.deepEqual(movedB.rig,placed.rig);
+    assert.equal(movedB.svg,placed.svg);
+    assert.equal(movedB.artworkHash,placed.artworkHash);
+    await ok(1,'approve',{revision:movedB.revision});
+    for(const [i,revision] of [[0,movedA.revision],[1,movedB.revision]]){
+      const get=(time:number)=>app.inject({method:'GET',url:`${path}/${i}/preview?revision=${revision}&time=${time}`});
+      const before=await get(0),after=await get(2);
+      assert.equal(before.statusCode,200,before.body.slice(0,300));
+      assert.equal(after.statusCode,200,after.body.slice(0,300));
+      assert.equal(before.headers['content-type'],'image/png');
+      assert.ok(!before.rawPayload.equals(after.rawPayload),'the same wrist motion renders in each scene');
+    }
+    for(const [i,revision] of [[0,movedA.revision],[1,movedB.revision]] as const){
+      const rendered=await waitJob((await ok(i,'render',{revision,preset:'draft'})).job);
+      assert.equal(rendered.state,'succeeded',JSON.stringify(rendered));
+      assert.equal(rendered.result.video.frames,30);
+      const mp4=await app.inject({method:'GET',url:`${path}/${i}/video?revision=${revision}`});
+      assert.equal(mp4.headers['content-type'],'video/mp4');
+      assert.equal(mp4.rawPayload.toString('ascii',4,8),'ftyp');
+    }
+    const reusedDuringArt=await runJob({revision:movedB.revision,operation:'artwork',libraryReuse:{id:entry.id,targetId:'provider_slot'}});
+    assert.equal(reusedDuringArt.state,'succeeded',JSON.stringify(reusedDuringArt));
+    const nextArt=(await sections())[1];
+    assert.match(nextArt.svg,/#f81c24/);
+    assert.ok(nextArt.rig.joints.some((j:{target:string})=>j.target==='provider_slot'));
+    assert.ok(nextArt.rig.joints.some((j:{min?:number})=>j.min===-12));
+  } finally {
+    await app.close();db.close();await rm(root,{recursive:true,force:true});
+  }
+});
