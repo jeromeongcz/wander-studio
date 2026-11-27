@@ -25,6 +25,7 @@ async function run() {
       'app/server/test/animated-svg-mixed-composition.test.ts',
       'app/server/test/animated-svg-recovery.test.ts',
       'app/server/test/transitions.test.ts',
+      'app/server/test/render-golden.test.ts',
     ],
   ]) {
     const result = spawnSync(process.execPath, command, { cwd: root, env, stdio: 'inherit', windowsHide: true });
