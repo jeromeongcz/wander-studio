@@ -16,7 +16,8 @@ function subject(tl: Timeline, s: TimelineScene) {
 /** Filter chains for inputs 0..n-1 (one per scene clip); `out` is the label of the joined picture. */
 export function videoGraph(tl: Timeline): { filters: string[]; out: string } {
   const { fps, width, height } = parseFormat(tl.format.id, { fps: tl.format.fps });
-  const filters: string[] = tl.scenes.map((_, i) => `[${i}:v]settb=AVTB,fps=${fps},setpts=PTS-STARTPTS,setsar=1[s${i}]`);
+  // Normalize after resetting timestamps: FFmpeg 7 can clear frame-rate metadata in setpts.
+  const filters: string[] = tl.scenes.map((_, i) => `[${i}:v]setpts=PTS-STARTPTS,setsar=1,fps=${fps}[s${i}]`);
   let last = 's0';
   for (let i = 1; i < tl.scenes.length; i++) {
     const s = tl.scenes[i];

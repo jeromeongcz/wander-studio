@@ -250,7 +250,9 @@ export function boundaryFilters(b: Boundary): { filters: string[]; out: string }
     // a fade through a colour other than black or white is that colour washing over the change
     : b.spec.type === 'fade' && b.spec.color && !['#000000', '#ffffff'].includes(b.spec.color.toLowerCase()) ? 'flash' : null;
   const layers = [...new Set([own, b.spec.overlay].filter(Boolean))] as (keyof typeof OVERLAY_COLOR)[];
-  if (!layers.length) return { filters: [`[${b.prev}][${b.next}]${chain.join(',')}[${out}]`], out };
+  // FFmpeg can drop the advertised frame rate after xfade or a timed effect.
+  // Give the next boundary the same constant-rate time base as each scene input.
+  if (!layers.length) return { filters: [`[${b.prev}][${b.next}]${chain.join(',')},fps=${fps}[${out}]`], out };
   const filters = [`[${b.prev}][${b.next}]${chain.join(',')}[t${i}]`];
   let label = `t${i}`;
   layers.forEach((kind, n) => {

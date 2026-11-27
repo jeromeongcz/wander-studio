@@ -14,7 +14,8 @@
     "build:web": "npm run build -w @wander/web",
     "dev:web": "npm run dev -w @wander/web",
     "seed:demo": "node scripts/seed-demo.mjs",
-    "start": "npm run build:web && npm run dev:server"
+    "start": "npm run build:web && npm run dev:server",
+    "smoke:animated-svg": "node scripts/animated-svg-smoke.mjs"
   },
   "engines": {
     "node": "^22.18.0 || >=24.0.0"
