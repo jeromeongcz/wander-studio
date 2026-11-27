@@ -1,4 +1,6 @@
-import { bad } from './model.ts';
+import { EngineError } from '../engine.ts';
+
+const bad = (message:string):never => { throw new EngineError('VALIDATION',message); };
 
 type Point = [number, number];
 type Bend = 'clockwise' | 'counterclockwise';
@@ -63,7 +65,7 @@ export function solveTwoBoneIK(pose: TwoBonePose): TwoBoneSolution {
   return {elbow,end,upperDegrees:deg(upperAngle)-rest,lowerDegrees:deg(bendAngle),reachable:distance>=min-1e-8&&distance<=max+1e-8};
 }
 
-interface TwoBoneBake extends Omit<TwoBonePose, 'target'> {
+export interface TwoBoneBake extends Omit<TwoBonePose, 'target'> {
   upperGroup: string;
   lowerGroup: string;
   keys: {time: number; target: Point; ease?: Ease}[];
@@ -81,7 +83,7 @@ function continuousAngle(angle:number,previous:number|undefined):number {
  */
 export function bakeTwoBoneTracks(spec: TwoBoneBake) {
   const id = /^[A-Za-z_][A-Za-z0-9_.:-]{0,95}$/;
-  if (!id.test(spec.upperGroup) || !id.test(spec.lowerGroup) || spec.upperGroup===spec.lowerGroup) return bad('IK bones need two distinct SVG group IDs.');
+  if (typeof spec.upperGroup!=='string'||typeof spec.lowerGroup!=='string'||!id.test(spec.upperGroup) || !id.test(spec.lowerGroup) || spec.upperGroup===spec.lowerGroup) return bad('IK bones need two distinct SVG group IDs.');
   if (!Array.isArray(spec.keys) || spec.keys.length<2 || spec.keys.length>80) return bad('Use 2–80 IK target keys.');
   const origin = point(spec.origin,'origin');
   const rest = scalar(spec.restDegrees??0,-720,720,'rest direction');

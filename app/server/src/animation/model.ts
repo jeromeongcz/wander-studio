@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { createRequire } from 'node:module';
 import { SaxesParser } from 'saxes';
 import { EngineError } from '../engine.ts';
+import { bakeTwoBoneTracks, type TwoBoneBake } from './ik.ts';
 
 // Use GSAP only for trusted, seekable numeric/color interpolation. No timers, DOM, or generated JavaScript.
 const { gsap } = createRequire(import.meta.url)('gsap') as typeof import('gsap');
@@ -26,7 +27,8 @@ function styleDeclarations(value:string): [string,string][] {
 }
 const idRx = /^[A-Za-z_][A-Za-z0-9_.:-]{0,95}$/;
 const escape = (v: string) => v.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
-type El = {tag:string; attr:Record<string,string>; children:(El|string)[]; parent?:El};
+export type DrawingElement = {tag:string; attr:Record<string,string>; children:(DrawingElement|string)[]; parent?:DrawingElement};
+type El = DrawingElement;
 export type Drawing = {root:El; ids:Map<string,El>; size:[number,number]};
 export function parseArtwork(svg: unknown): Drawing {
   if (typeof svg !== 'string' || !svg.trim() || Buffer.byteLength(svg)>600_000) return bad('Artwork must be one SVG under 600 KB.');
@@ -116,14 +118,102 @@ function pathParts(s:unknown){
   if(expected!==0||parts.length>600)return bad('Unsupported path deformation topology.');
   return parts;
 }
-type MotionTrack={id?:string;target:string;property:'translate'|'rotate'|'scale'|'opacity'|'path'|'fill'|'stroke'|'visibility';pivot?:[number,number];keys:{time:number;value:MotionValue;ease?:string}[]};
+export type MotionTrack={id?:string;target:string;property:'translate'|'rotate'|'scale'|'opacity'|'path'|'fill'|'stroke'|'visibility';pivot?:[number,number];keys:{time:number;value:MotionValue;ease?:string}[]};
 export type Motion={duration:number;tracks:MotionTrack[]};
+const drawableTags = new Set('g path rect circle ellipse use polygon polyline line text tspan textPath'.split(' '));
+const definitionTags = new Set('defs symbol marker clipPath mask pattern filter linearGradient radialGradient'.split(' '));
+export function drawingTarget(d:Drawing,id:string):DrawingElement|undefined {
+  const target=d.ids.get(id);
+  if(!target||!drawableTags.has(target.tag))return;
+  for(let node=target.parent;node;node=node.parent)if(definitionTags.has(node.tag))return;
+  return target;
+}
+
+function compileIK(value:unknown,d:Drawing):unknown[] {
+  if(value===undefined)return [];
+  if(!Array.isArray(value)||value.length>12)return bad('Use at most 12 two-bone IK chains.');
+  return value.flatMap((entry:unknown)=>{
+    const spec=record(entry);
+    const upper=typeof spec.upperGroup==='string'?drawingTarget(d,spec.upperGroup):undefined;
+    const lower=typeof spec.lowerGroup==='string'?drawingTarget(d,spec.lowerGroup):undefined;
+    // The pivot math uses the upper group's unposed coordinate system. Transformed
+    // intermediaries or a pretransformed bone would require inverse coordinate mapping.
+    if(upper?.tag!=='g'||lower?.tag!=='g'||upper===lower||upper.attr.transform||lower.attr.transform)return bad('IK bones must be distinct, untransformed, named groups.');
+    let parent=lower.parent;
+    while(parent&&parent!==upper){
+      if(parent.attr.transform)return bad('IK bones cannot cross an intermediate SVG transform.');
+      parent=parent.parent;
+    }
+    if(parent!==upper)return bad('The lower IK group must be nested in the upper group.');
+    if(!Array.isArray(spec.keys))return bad('Provide two-bone IK target keyframes.');
+    const keys=spec.keys.map((key:unknown)=>{
+      const k=record(key);
+      return {time:k.time,target:k.target,ease:k.ease};
+    });
+    return bakeTwoBoneTracks({...spec,keys} as TwoBoneBake).tracks;
+  });
+}
+
+function compileVisemes(value:unknown,d:Drawing,duration:number):unknown[] {
+  if(value===undefined)return [];
+  const {groups,cues}=record(value), shapes=Object.entries(record(groups));
+  if(shapes.length<2||shapes.length>12||!Object.hasOwn(groups,'rest'))return bad('Use 2–12 mouth shapes including a rest group.');
+  const targets=new Map<string,string>();
+  let parent:DrawingElement|undefined;
+  for(const [shape,id] of shapes){
+    const el=typeof id==='string'?drawingTarget(d,id):undefined;
+    if(!/^[a-z][a-z0-9_-]{0,23}$/.test(shape)||typeof id!=='string'||el?.tag!=='g'||[...targets.values()].includes(id))return bad('Mouth shapes need distinct named SVG groups.');
+    if(parent&&parent!==el.parent)return bad('Mouth shape groups must be siblings under the same artwork group.');
+    parent=el.parent;
+    targets.set(shape,id);
+  }
+  // Each interval can introduce two state edges. Leave one key for each scene boundary.
+  if(!Array.isArray(cues)||!cues.length||cues.length>38)return bad('Use 1–38 timed mouth cues.');
+  const events=new Map<number,string>([[0,'rest']]);
+  let previousEnd=0;
+  for(const cue of cues){
+    const {start,end,shape}=record(cue), from=number(start,0,duration), to=number(end,0,duration);
+    if(from<previousEnd||to<=from||typeof shape!=='string'||!targets.has(shape))return bad('Mouth cues must be ordered, non-overlapping intervals using a known shape.');
+    events.set(from,shape);events.set(to,'rest');previousEnd=to;
+  }
+  events.set(duration,'rest');
+  return [...targets].map(([shape,target])=>{
+    const keys:{time:number;value:string;ease:'step'}[]=[];
+    for(const [time,current] of events){
+      const value=current===shape?'visible':'hidden';
+      if(keys.at(-1)?.value!==value||time===duration)keys.push({time,value,ease:'step'});
+    }
+    return {target,property:'visibility',keys};
+  });
+}
+
+function compileCycles(value:unknown,duration:number):unknown[] {
+  if(value===undefined)return [];
+  if(!Array.isArray(value)||value.length>24)return bad('Use at most 24 ambient motion cycles.');
+  return value.map((entry:unknown)=>{
+    const {target,property,pivot,from,to,ease,start,end,period}=record(entry);
+    if(!['translate','rotate','scale','opacity','fill','stroke'].includes(property))return bad('Ambient cycles support transforms, opacity and paint only.');
+    const begins=number(start??0,0,duration), ends=number(end??duration,0,duration), every=number(period,0.1,60);
+    if(ends-begins+1e-6<every)return bad('An ambient cycle needs at least one complete period in its time range.');
+    const count=Math.floor((ends-begins+1e-6)/every);
+    if(count>38)return bad('Use at most 38 periods per ambient cycle.');
+    const keys:{time:number;value:unknown;ease?:unknown}[]=[{time:0,value:from},...(begins>0?[{time:begins,value:from}]:[])];
+    for(let i=0;i<count;i++){
+      keys.push({time:begins+(i+0.5)*every,value:to,ease},{time:Math.min(ends,begins+(i+1)*every),value:from,ease});
+    }
+    if(keys.at(-1)!.time<duration)keys.push({time:duration,value:from});
+    return {target,property,pivot,keys};
+  });
+}
+
 export function readMotion(input:unknown,d:Drawing):Motion {
   const o=record(input),duration=number(o.duration,0.1,60); const seen=new Set<string>(); const trackIds=new Set<string>();
-  if(!Array.isArray(o.tracks)||o.tracks.length<1||o.tracks.length>80)return bad('Use 1–80 animation tracks.');
-  const tracks=o.tracks.map((t:unknown):MotionTrack=>{
+  if(o.tracks!==undefined&&(!Array.isArray(o.tracks)||o.tracks.length>80))return bad('Use 1–80 animation tracks.');
+  const compiled=[...(o.tracks??[]),...compileIK(o.ik,d),...compileVisemes(o.visemes,d,duration),...compileCycles(o.cycles,duration)];
+  if(compiled.length<1||compiled.length>80)return bad('Use 1–80 animation tracks, including compiled cues.');
+  const tracks=compiled.map((t:unknown):MotionTrack=>{
     const {id,target,property,pivot,keys}=record(t);
-    if(typeof target!=='string'||!d.ids.has(target)||!['g','path','rect','circle','ellipse','use','polygon','polyline','line','text','tspan','textPath'].includes(d.ids.get(target)!.tag))return bad('Animation target is not a drawing layer.');
+    if(typeof target!=='string'||!drawableTags.has(d.ids.get(target)?.tag??''))return bad('Animation target is not a drawing layer.');
     if(!['translate','rotate','scale','opacity','path','fill','stroke','visibility'].includes(property)||property==='path'&&d.ids.get(target)?.tag!=='path'||seen.has(target+' '+property))return bad('Unsupported or duplicate motion track.');seen.add(target+' '+property);
     const stableId=id===undefined?'track-'+createHash('sha256').update(target+' '+property).digest('hex').slice(0,24):id;
     if(typeof stableId!=='string'||!idRx.test(stableId)||trackIds.has(stableId))return bad('Motion track IDs must be valid and unique.');

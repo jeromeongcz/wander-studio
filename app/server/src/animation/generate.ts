@@ -1,14 +1,15 @@
 import { createHash } from 'node:crypto';
 import { SaxesParser } from 'saxes';
-import { parseArtwork as parseSafeDrawing } from './model.ts';
+import { drawingTarget, parseArtwork as parseSafeDrawing } from './model.ts';
 import { EngineError } from '../engine.ts';
 import type { TextLLMProvider } from '../providers/llm/types.ts';
-import { checkAnimatedStageOutput, readAnimatedGenerationControls, runWithAnimatedStageDeadline, type AnimatedBudgetStage, type AnimatedGenerationControls, type AnimatedOptionalStage } from './generation-controls.ts';
-import { ANIMATED_SVG_ARTWORK_RULES, buildAnimatedMotionPrompt, buildAnimationPreparationPrompt, buildBaseArtworkPrompt, buildRenderedReviewPrompt, buildTargetedArtworkRefinementPrompt, buildTargetedMotionRefinementPrompt, generationRequestPrompt } from './prompt-directives.ts';
-export { readAnimatedGenerationControls, runBoundedAnimatedStage } from './generation-controls.ts';
+import { checkAnimatedStageOutput, readAnimatedGenerationControls, readTimedMouthCues, runWithAnimatedStageDeadline, type AnimatedBudgetStage, type AnimatedGenerationControls, type AnimatedOptionalStage } from './generation-controls.ts';
+import { ANIMATED_SVG_ARTWORK_RULES, buildAnimatedMotionPrompt, buildAnimationPreparationPrompt, buildBaseArtworkPrompt, buildRenderedReviewPrompt, buildTargetedArtworkRefinementPrompt, buildTargetedMotionRefinementPrompt, generationRequestPrompt, type TimedMouthCue } from './prompt-directives.ts';
+export { readAnimatedGenerationControls, readTimedMouthCues, runBoundedAnimatedStage } from './generation-controls.ts';
 
 /** These presets describe visual choices, never a numerical guarantee of output quality. */
 export const ART_DIRECTIONS = {
+  'archival-sepia': 'Archival sepia: weathered warm paper, blue-black or umber ink, patient hatching and old-print tonal depth. Draw era-appropriate structures, fabric, gestures and surfaces from the brief; preserve a legible focal silhouette and quiet caption margin. Keep haze behind important forms and separate only the elements that genuinely move.',
   'dark-folklore': 'Dark folklore horror: indigo charcoal, muted teal and deep green, with restrained warm amber. Put believable anatomy and tense expressions against organic balete roots, twisting branches, aerial perspective and bark hatching. Use warm reflected light and occlusion, layered volumetric-looking mist, deliberate negative space, and an unsettling creature silhouette rather than two glowing dots. Slow reveals, uneven breathing and restrained secondary motion.',
   'cinematic-25d': 'Cinematic semi-realistic 2.5D: realistic proportions and gestures, overlapping depth planes, coherent perspective, directional bounce light, readable silhouettes and cinematic contrast. Design depth layers for restrained parallax, not disconnected cut-outs.',
   'professional-cartoon': 'Professional 2D cartoon: appealing deliberate shape language, anatomically credible poses, strong expressions, sculpted organic contours, layered folds, and economical but intentional shading.',
@@ -61,12 +62,14 @@ export interface ImageReference {
   bytes: Uint8Array;
 }
 export interface AnimatedCandidate { svg: string; animation: unknown; rig?: unknown; scene?: unknown }
-export interface GenerationPass { name: string; status: 'complete' | 'skipped' | 'preserved'; note?: string }
+export interface GenerationPass { name: string; status: 'complete' | 'skipped' | 'preserved' | 'failed'; note?: string }
 export interface GenerateAnimatedSceneOptions extends AnimatedGenerationControls {
   /** The caller resolves (and pins) this provider from the existing registry. Never re-resolve or fall back mid-job. */
   provider: Pick<TextLLMProvider, 'id' | 'generateText'>;
   model?: string;
   scene: { id?: string; visualDescription: string; duration: number; width: number; height: number; context?: string };
+  /** Only use host-provided, verified, scene-local timing, never AI-estimated speech alignment. */
+  dialogueCues?: readonly TimedMouthCue[];
   settings?: AnimatedGenerationSettings;
   /** Built from the shipped still prompt by buildAnimatedSketchPrompt; only animated jobs pass this in. */
   baseArtworkPrompt?: string;
@@ -100,8 +103,9 @@ interface ArtPlan {
   layers: Array<{ id: string; role: string; detail: string }>;
   characters: Array<{ id: string; proportions: string; facialFeatures: string; expression: string; wardrobe: string; views: string; poses: string; dialogue: string }>;
 }
-export interface IllustrationReview {
-  method: 'rendered' | 'source-only';
+export type IllustrationReview = ({method: 'rendered'; previewSha256: string} | {method: 'source-only'; previewSha256?: never}) & {
+  /** Hashes the exact source at this pass, before any subsequent refinements or canonicalization. */
+  artworkSha256: string;
   notes: Array<{ category: string; observation: string; fixes: string; targets: string[] }>;
 }
 export interface AnimationPreparation {
@@ -274,14 +278,14 @@ export function professionalIllustrationGuidance(style?: string, shading = true)
   ].filter(Boolean).join('\n');
 }
 
-function parseReview(answer: string, method: IllustrationReview['method'], layers: ReadonlyMap<string, LayerSpan>): IllustrationReview {
+function parseReview(answer: string, evidence: Omit<Extract<IllustrationReview, {method: 'rendered'}>, 'notes'> | Omit<Extract<IllustrationReview, {method: 'source-only'}>, 'notes'>, layers: ReadonlyMap<string, LayerSpan>): IllustrationReview {
   const o = parseObject(answer, 32_000, 'Illustration review');
   if (!Array.isArray(o.notes)) throw artError('The review must have a notes array.');
   const notes = o.notes.slice(0, 18).map((item) => {
     const a = obj(item);
     return { category: trimmed(a.category, 80), observation: trimmed(a.observation, 700), fixes: trimmed(a.fixes, 700), targets: (Array.isArray(a.targets) ? a.targets : []).map(id).filter((target) => layers.has(target)).slice(0, 6) };
   }).filter((n) => n.observation && n.fixes);
-  return { method, notes };
+  return { ...evidence, notes };
 }
 function patchResponse(answer: string, allowed: ReadonlySet<string>): Map<string, string> {
   const o = parseObject(answer, MAX_SVG + MAX_TEXT, 'Targeted refinement');
@@ -300,7 +304,7 @@ export interface MotionTarget { id: string; kind: 'group' | 'path' | 'shape'; pa
 /** Ground the motion prompt in actual immutable artwork. Only named renderable shapes are offered. */
 export function listAnimationTargets(svg: string, selected?: ReadonlySet<string>): MotionTarget[] {
   const drawing = parseSafeDrawing(svg);
-  const names = [...drawing.ids].filter(([id, el]) => (!selected || selected.has(id)) && ['g', 'path', 'rect', 'circle', 'ellipse', 'use', 'polygon', 'polyline', 'line', 'text', 'tspan', 'textPath'].includes(el.tag));
+  const names = [...drawing.ids].filter(([id]) => (!selected || selected.has(id)) && drawingTarget(drawing, id));
   const order = (tag: string) => tag === 'g' ? 0 : tag === 'path' ? 1 : 2;
   return names.sort(([, a], [, b]) => order(a.tag) - order(b.tag)).slice(0, selected ? 6 : 158).map(([id, el]) => ({
     id, kind: el.tag === 'g' ? 'group' : el.tag === 'path' ? 'path' : 'shape', parent: el.parent?.attr.id, transform: el.attr.transform,
@@ -358,14 +362,22 @@ async function runAnimatedPipeline(o: GenerateAnimatedSceneOptions, artworkOnly:
   const stages = { ...settings.stages, ...overrides.stages };
   const getBudget = (stage: AnimatedBudgetStage) => ({ ...settings.stageBudgets?.[stage], ...overrides.stageBudgets?.[stage] });
   const maxRevisions = overrides.maxRevisions ?? settings.maxRevisions ?? 1;
+  const reviewFallback = overrides.reviewFallback ?? settings.reviewFallback ?? 'source-only';
   const quality = s.quality ?? 'professional';
   const multi = s.strategy ? s.strategy === 'multi-pass' : quality !== 'draft';
   const on = (key: AnimatedOptionalStage, def = false) => stages[key] ?? def;
   const has = (name: 'character' | 'environment' | 'dialogue' | 'camera') => s[name] ?? (name === 'character' || name === 'environment');
+  const dialogueCues = readTimedMouthCues(o.dialogueCues, scene.duration);
+  if (dialogueCues?.length && !has('dialogue')) throw new EngineError('VALIDATION', 'Enable dialogue motion before supplying timed mouth cues.');
   const passes: GenerationPass[] = [];
   const record = (name: string, status: GenerationPass['status'], note?: string) => passes.push({ name, status, ...(note ? { note } : {}) });
   const checkCancel = () => {
     if (signal?.aborted) throw new EngineError('CANCELLED', 'Animated SVG generation was cancelled.');
+  };
+  const optionalFailure = (name: string, error: unknown, note: string) => {
+    checkCancel();
+    if ((error as {code?: unknown})?.code === 'CANCELLED') throw error;
+    record(name, 'failed', note);
   };
   let lastProgress = 0;
   const step = (value: number, detail: string) => { checkCancel(); lastProgress = Math.max(lastProgress, value); o.onProgress?.(lastProgress, detail); };
@@ -383,6 +395,7 @@ async function runAnimatedPipeline(o: GenerateAnimatedSceneOptions, artworkOnly:
     } catch (error) {
       checkCancel();
       if (error instanceof EngineError) throw error;
+      if ((error as {code?: unknown})?.code === 'CANCELLED') throw new EngineError('CANCELLED', 'Animated SVG generation was cancelled.');
       throw artError(`${label} could not be completed by ${provider.id}: ${error instanceof Error ? error.message.slice(0, 300) : 'provider failure'}`);
     }
   }
@@ -521,31 +534,51 @@ async function runAnimatedPipeline(o: GenerateAnimatedSceneOptions, artworkOnly:
   const reviewArtwork = async (art: string, label: string): Promise<IllustrationReview | undefined> => {
     if (!reviewEnabled) { record(label, 'skipped', 'Art review was turned off or not selected for this operation.'); return; }
     const layers = spans(art), groups = [...layers.keys()];
-    const result = await bounded('renderedReview', 'Illustration review', async (opSignal) => {
-      if (o.rasterizePreview) {
-        let png: Uint8Array;
-        try { png = await o.rasterizePreview(art, opSignal); } catch (error) {
-          if (opSignal?.aborted) throw error;
-          throw artError('Could not rasterize the illustration for visual review. Check the local renderer or refine the artwork.');
-        }
-        opSignal?.throwIfAborted();
-        if (!png.byteLength || png.byteLength > 20 * 1024 * 1024) throw artError('The preview is empty or exceeds the review size budget.');
-        if (o.visionReview) {
+    const artworkSha256 = createHash('sha256').update(art).digest('hex');
+    try {
+      const result = await bounded('renderedReview', 'Illustration review', async (opSignal) => {
+        const fallback = (note: string) => record('vision-review', 'skipped', note);
+        if (o.rasterizePreview && (o.visionReview || reviewFallback === 'source-only')) {
+          let png: Uint8Array | undefined;
           try {
-            const answer = await o.visionReview({ image: png, prompt: buildRenderedReviewPrompt({ context, groups }), signal: opSignal });
-            return parseReview(boundedOutput('renderedReview', 'Rendered illustration review', answer), 'rendered', layers);
+            png = await o.rasterizePreview(art, opSignal);
+            opSignal?.throwIfAborted();
+            if (!png.byteLength || png.byteLength > 20 * 1024 * 1024) throw artError('The preview is empty or exceeds the review size budget.');
           } catch (error) {
-            if ((error as {code?: unknown})?.code !== 'VISION_UNSUPPORTED') throw error;
-            record('vision-review', 'skipped', 'Selected model has no verified vision capability; switching to source-only critique with the same provider.');
+            if (opSignal?.aborted) throw error;
+            optionalFailure('preview-render', error, 'A usable preview could not be rendered. No preview pixels were reviewed.');
+            png = undefined;
+          }
+          if (png && o.visionReview) {
+            const previewSha256 = createHash('sha256').update(png).digest('hex');
+            try {
+              const answer = await o.visionReview({ image: png, prompt: buildRenderedReviewPrompt({ context, groups }), signal: opSignal });
+              opSignal?.throwIfAborted();
+              return parseReview(boundedOutput('renderedReview', 'Rendered illustration review', answer), {method: 'rendered', artworkSha256, previewSha256}, layers);
+            } catch (error) {
+              if (opSignal?.aborted || (error as {code?: unknown})?.code !== 'VISION_UNSUPPORTED') throw error;
+              fallback('The selected model has no verified vision capability.');
+            }
+          } else if (png) {
+            record('preview-render', 'complete', 'Rendered a local preview; the provider cannot view its image bytes without a vision adapter and consent.');
           }
         }
-        record('preview-render', 'complete', 'Rendered a local preview; provider cannot view image bytes.');
+        if (reviewFallback === 'skip') {
+          record(label, 'skipped', 'Pixel review was unavailable. Source-only critique was disabled.');
+          return;
+        }
+        opSignal?.throwIfAborted();
+        const critique = await sendRaw('SVG source art critique', buildRenderedReviewPrompt({ context, groups, artwork: art }), opSignal);
+        opSignal?.throwIfAborted();
+        return parseReview(boundedOutput('renderedReview', 'Source illustration review', critique), {method: 'source-only', artworkSha256}, layers);
+      });
+      if (result) {
+        record(label, 'complete', result.method === 'rendered' ? 'Rendered preview reviewed by the configured vision reviewer. Human approval is still required.' : 'Source-only critique, not an assessment of rendered pixels.');
       }
-      const critique = await sendRaw('SVG source art critique', buildRenderedReviewPrompt({ context, groups, artwork: art }), opSignal);
-      return parseReview(boundedOutput('renderedReview', 'Source illustration review', critique), 'source-only', layers);
-    });
-    record(label, 'complete', result.method === 'rendered' ? 'Rendered preview reviewed by the configured vision reviewer.' : 'Source-only critique, not an assessment of rendered pixels.');
-    return result;
+      return result;
+    } catch (error) {
+      optionalFailure(label, error, 'The optional review did not complete. Validated artwork was retained; no assessment or approval is implied.');
+    }
   };
 
   const locked = new Set(reuseLayers.keys());
@@ -581,8 +614,12 @@ async function runAnimatedPipeline(o: GenerateAnimatedSceneOptions, artworkOnly:
     const targets = suitable(possible, 4, {nonOverlapping: true});
     if (!targets.length) { record(key, 'skipped', 'No matching, unlocked named layer.'); continue; }
     step(0.34 + i * 0.04, label);
-    const n = await fixGroups(key, label, targets, request);
-    record(key, n ? 'complete' : 'preserved', n ? `Refined ${n} scoped group(s).` : 'The provider kept the original artwork.');
+    try {
+      const n = await fixGroups(key, label, targets, request);
+      record(key, n ? 'complete' : 'preserved', n ? `Refined ${n} scoped group(s).` : 'The provider kept the original artwork.');
+    } catch (error) {
+      optionalFailure(key, error, 'This optional refinement did not complete. The validated illustration was kept unchanged for this pass.');
+    }
   }
 
   let review: IllustrationReview | undefined, finalReview: IllustrationReview | undefined;
@@ -594,8 +631,7 @@ async function runAnimatedPipeline(o: GenerateAnimatedSceneOptions, artworkOnly:
     const priorities = /subject|character|traveler|hero|environment|foreground|light|midground|forest|creature|props?/i;
     const planned = artPlan?.layers.filter((l) => priorities.test(l.role)).map((l) => l.id) ?? [];
     if (stages.targetedCorrections === true) planned.push(...drawnGroups.filter((group) => priorities.test(group)), ...drawnGroups.slice(-4).reverse());
-    const noReviewFallback = reviewEnabled && !review ? [] : planned;
-    let candidates = o.refine?.targetLayerIds ?? (initialTargets.length ? initialTargets : noReviewFallback);
+    let candidates = o.refine?.targetLayerIds ?? (reviewEnabled ? initialTargets : planned);
     const enabled = !!o.refine || on('targetedCorrections', multi && !artworkOnly);
     const limit = enabled ? o.refine ? 1 : maxRevisions : 0;
     if (!limit) record('targeted-refinement', 'skipped', 'Targeted corrections not selected or automatic revision limit is zero.');
@@ -604,8 +640,16 @@ async function runAnimatedPipeline(o: GenerateAnimatedSceneOptions, artworkOnly:
       if (o.refine && (!targets.length || targets.length !== new Set(o.refine.targetLayerIds).size)) throw new EngineError('VALIDATION', 'Choose one to six unlocked groups for a targeted improvement.');
       if (!targets.length) { if (!round) record('targeted-refinement', 'skipped', 'No eligible group was available for scoped refinement.'); break; }
       step(0.61 + round * 0.035, `Refining selected illustration layers (${round + 1}/${limit})`);
-      const requested = o.refine ? trimmed(o.refine.notes, 3_000) : (finalReview ?? review)?.notes ?? ['Add selected, meaningful material detail and dimensional lighting without changing staging.'];
-      const n = await fixGroups('targetedCorrections', 'Targeted vector refinement', targets, requested);
+      const assessment = finalReview ?? review;
+      const requested = o.refine ? trimmed(o.refine.notes, 3_000) : assessment ? {method: assessment.method, notes: assessment.notes} : ['Add selected, meaningful material detail and dimensional lighting without changing staging.'];
+      let n: number;
+      try {
+        n = await fixGroups('targetedCorrections', 'Targeted vector refinement', targets, requested);
+      } catch (error) {
+        if (o.refine) throw error;
+        optionalFailure('targeted-refinement', error, 'The automatic correction did not complete. The last validated illustration was retained.');
+        break;
+      }
       record('targeted-refinement', n ? 'complete' : 'preserved', n ? `Replaced ${n} named group(s); other artwork was preserved.` : 'The provider returned no targeted changes.');
       if (!n) break;
       if (quality === 'studio' || quality === 'professional' || o.refine || round + 1 < limit) finalReview = await reviewArtwork(svg, 'final-art-review');
@@ -636,8 +680,18 @@ async function runAnimatedPipeline(o: GenerateAnimatedSceneOptions, artworkOnly:
     record('rig-and-motion', 'preserved', 'Kept existing motion and rig for the targeted artwork revision.');
   } else {
     step(0.87, 'Choreographing articulated character and atmospheric motion');
-    const motion = parseObject(await send('motion', 'Rig and motion', buildAnimatedMotionPrompt({duration: scene.duration, context, targets: known, artPlan, preparation})), 250_000, 'Rig and motion');
-    if (obj(motion.animation).duration !== scene.duration) throw artError('The generated motion must use the approved scene duration.');
+    const allowIK = s.complexity === 'advanced' && has('character'), allowCycles = has('environment');
+    const motion = parseObject(await send('motion', 'Rig and motion', buildAnimatedMotionPrompt({duration: scene.duration, context, targets: known, artPlan, preparation, allowIK, allowCycles, dialogueCues})), 250_000, 'Rig and motion');
+    const motionData = obj(motion.animation);
+    if (motionData.duration !== scene.duration) throw artError('The generated motion must use the approved scene duration.');
+    if ((!allowIK && motionData.ik !== undefined) || (!allowCycles && motionData.cycles !== undefined)) throw artError('The returned motion includes a disabled motion category.');
+    if (dialogueCues?.length && motionData.visemes === undefined) throw artError('The returned motion omitted the supplied mouth cues. Add compatible mouth groups or retry.');
+    if (motionData.visemes !== undefined) {
+      if (!dialogueCues?.length) throw artError('Mouth cues cannot be generated without verified dialogue timing.');
+      let confirmed: TimedMouthCue[] | undefined;
+      try { confirmed = readTimedMouthCues(obj(motionData.visemes).cues, scene.duration); } catch { throw artError('The motion provider returned invalid mouth timing.'); }
+      if (JSON.stringify(confirmed) !== JSON.stringify(dialogueCues)) throw artError('The motion provider must preserve the supplied mouth timing exactly.');
+    }
     candidate = {svg, animation: motion.animation, rig: motion.rig, scene: motion.scene ?? o.motionOnly?.scene};
     record('rig-and-motion', 'complete');
   }

@@ -15,6 +15,11 @@ import type { Scene, Transition } from '../studios/storyboard.ts';
 import { computeSceneTimes } from './timing.ts';
 import type { SceneIn } from './timing.ts';
 
+export interface AnimatedClip {
+  camera_baked: boolean;
+  duration_seconds: number;
+}
+
 export interface TimelineScene {
   scene_id: string;
   index: number;
@@ -22,7 +27,7 @@ export interface TimelineScene {
   start: number;
   duration: number;
   timing_source: 'audio' | 'estimate';
-  asset: { id: string; sha256: string; rel_path: string; kind: 'image' | 'video'; width: number; height: number } | null;
+  asset: { id: string; sha256: string; rel_path: string; kind: 'image' | 'video'; width: number; height: number; animated?: AnimatedClip } | null;
   focal: { x: number; y: number };
   camera: Camera;
   transition_in: { type: string; duration: number } & Partial<Omit<TransitionSpec, 'type' | 'duration'>>;
@@ -100,7 +105,7 @@ export function buildTimeline(i: BuildInput): Timeline {
     const { type: _t, duration: wanted, ...settings } = k === 0 ? { type: 'cut' as const, duration: undefined } : transition.value;
     const dur = type === 'cut' ? 0 : Math.min(wanted ?? DEFAULT_SECONDS[type], 0.4 * Math.min(t.duration, prev ? prev.duration : t.duration));
     const sources = {
-      ...(OVERRIDES.includes(camera.source) ? { camera: camera.source } : {}),
+      ...(a?.animated?.camera_baked !== true && OVERRIDES.includes(camera.source) ? { camera: camera.source } : {}),
       ...(k > 0 && OVERRIDES.includes(transition.source) ? { transition: transition.source } : {}),
       ...(look && OVERRIDES.includes(look.source) ? { look: look.source } : {}),
     };
@@ -111,9 +116,9 @@ export function buildTimeline(i: BuildInput): Timeline {
       start: t.start,
       duration: t.duration,
       timing_source: t.source,
-      asset: a ? { id: a.id, sha256: a.sha256, rel_path: a.rel_path, kind: a.kind, width: a.width, height: a.height } : null,
+      asset: a ? { id: a.id, sha256: a.sha256, rel_path: a.rel_path, kind: a.kind, width: a.width, height: a.height, ...(a.animated ? { animated: a.animated } : {}) } : null,
       focal: a?.focal ?? { x: 0.5, y: 0.5 },
-      camera: camera.value,
+      camera: a?.animated?.camera_baked ? { movement: 'static' } : camera.value,
       ...(look ? { look: look.value } : {}),
       transition_in: { type, duration: Math.round(dur * 1000) / 1000, ...settings },
       ...(Object.keys(sources).length ? { sources } : {}),
@@ -159,6 +164,12 @@ export function validateTimelineShape(c: unknown): Timeline {
   let prevEnd = 0;
   for (const [k, s] of (c.scenes as Record<string, unknown>[]).entries()) {
     if (typeof s.start !== 'number' || typeof s.duration !== 'number' || !(s.duration > 0) || s.start < prevEnd - 0.01) throw bad(`Scene ${k + 1} has invalid timing`);
+    if (isObj(s.asset) && s.asset.animated !== undefined && (
+      s.asset.kind !== 'video' || !isObj(s.asset.animated)
+      || typeof s.asset.animated.camera_baked !== 'boolean'
+      || typeof s.asset.animated.duration_seconds !== 'number'
+      || !Number.isFinite(s.asset.animated.duration_seconds) || s.asset.animated.duration_seconds <= 0
+    )) throw bad(`Scene ${k + 1} has invalid animated clip metadata`);
     prevEnd = s.start + s.duration;
   }
   if (!isObj(c.captions) || !isObj(c.audio) || !isObj(c.overrides)) throw bad('captions, audio and overrides are required');

@@ -4,7 +4,7 @@ import { copyFile, mkdir, readFile, rename, stat, symlink, unlink, writeFile, rm
 import { filterPath, fontFullName, systemFontDirs } from '../platform.ts';
 import { basename, dirname, extname, join } from 'node:path';
 import { Engine, EngineError, canonical } from '../engine.ts';
-import type { AssetService } from '../assets.ts';
+import type { Asset, AssetService } from '../assets.ts';
 import type { AudioService, NarrationContent } from '../audio/service.ts';
 import { buildMixGraph } from '../audio/mix.ts';
 import { alignHeuristic, tokenize } from '../captions/align.ts';
@@ -14,7 +14,7 @@ import type { CaptionTrack } from '../captions/track.ts';
 import type { AppConfig } from '../config.ts';
 import { ffmpegBinary, ffprobeBinary, run, sha256File } from '../media.ts';
 import type { ScriptContent } from '../studios/script.ts';
-import type { StoryboardContent } from '../studios/storyboard.ts';
+import type { Scene, StoryboardContent } from '../studios/storyboard.ts';
 import { ulid } from '../../../shared/src/index.ts';
 import { parseFormat, safeZoneFor } from './formats.ts';
 import { videoGraph } from './compose.ts';
@@ -25,7 +25,7 @@ import type { EffectStyle } from './effects.ts';
 import { isStyle } from './styles.ts';
 import type { LookChoice } from './styles.ts';
 import { buildTimeline, direct, timelineHash, validateTimelineShape } from './timeline.ts';
-import type { Timeline, TimelineScene } from './timeline.ts';
+import type { AnimatedClip, BuildInput, Timeline, TimelineScene } from './timeline.ts';
 
 export interface RenderRow {
   id: string;
@@ -123,11 +123,36 @@ export class RenderService {
     return { comp, sb, sbc, audio, caption, source: { storyboard: sb?.current_version_id ?? null, audio: audio?.current_version_id ?? null, caption: caption?.current_version_id ?? null, scene_assets: scenes } };
   }
 
+  private selectedMode(mode: unknown, scene: Scene): 'animated' | 'static' | undefined {
+    if (mode === 'animated') return 'animated';
+    if (mode === 'mixed') return scene.animation_plan?.mode;
+  }
+
   /** Is the stored timeline still built from the current upstream versions? */
   isStale(compId: string): boolean {
     const content = this.engine.getContent(compId) as Timeline | null;
     if (!content) return true;
-    return canonical(content.source) !== canonical(this.currentSource(compId).source);
+    const current = this.currentSource(compId);
+    if (canonical(content.source) !== canonical(current.source)) return true;
+    const settings = this.engine.getProject(current.comp.project_id).settings;
+    const format = (settings.formats as string[] | undefined)?.[0] ?? 'vertical_9x16';
+    const mode = (settings.animatedSvg as {mode?: string} | undefined)?.mode;
+    const scenes = new Map(current.sbc?.scenes.map(s => [s.scene_id,s]));
+    return (content.scenes ?? []).some(s => {
+      if (!s.asset) return false; // readiness already reports scenes without an asset
+      const scene = scenes.get(s.scene_id);
+      if (!scene || !current.sb) return true;
+      const selected = this.selectedMode(mode,scene);
+      if ((selected === 'animated' && !s.asset.animated) || (selected === 'static' && s.asset.kind !== 'image')) return true;
+      if (s.asset.kind !== 'video') return false;
+      try {
+        const asset = this.assets.get(s.asset.id);
+        const animated = this.animatedClip(asset,current.sb.id,format,scene);
+        return (!!animated && asset.approval_status !== 'approved') || canonical(animated) !== canonical(s.asset.animated);
+      } catch {
+        return true;
+      }
+    });
   }
 
   /** Estimated word times (proportional within each narration clip) used for scene timing before captions exist. */
@@ -153,9 +178,35 @@ export class RenderService {
     return { words: this.estimatedWords(layout, script), total: layout.total, source: 'estimate' };
   }
 
+  /** Only assets attached by Animated SVG have authored timing/camera ownership. Older attached packages
+   * are accepted only when their original revision can still be proven from the project's local metadata. */
+  private animatedClip(asset: Asset, storyboardId: string, format: string, scene: Scene): AnimatedClip | undefined {
+    if (!asset.tags.includes('animated-svg') && asset.params.animated_svg === undefined
+      && !(typeof asset.params.revision === 'string' && typeof asset.params.scene_id === 'string')) return;
+    const notFresh = () => new EngineError('STALE', `The animated clip for "${scene.title}" is no longer current. Render and attach a fresh clip, or replace it with a different asset.`);
+    if (asset.media_kind !== 'video' || asset.params.scene_id !== scene.scene_id || typeof asset.params.revision !== 'string') throw notFresh();
+    const {scene_id: _id, order_index: _order, ...source} = scene;
+    const currentFingerprint = createHash('sha256').update(JSON.stringify({format, scene: source})).digest('hex');
+    const byRevision = this.engine.db.prepare('SELECT package_json FROM animated_svg_revisions WHERE storyboard_id=? AND scene_id=? AND revision=?')
+      .get(storyboardId, scene.scene_id!, asset.params.revision) as {package_json: string} | undefined;
+    const row = byRevision ?? this.engine.db.prepare('SELECT package_json FROM animated_svg_scenes WHERE storyboard_id=? AND scene_id=?')
+      .get(storyboardId, scene.scene_id!) as {package_json: string} | undefined;
+    if (!row) throw notFresh();
+    const data = JSON.parse(row.package_json) as {
+      revision?: string; assetId?: string; state?: string; sourceFingerprint?: string; cameraBaked?: boolean;
+      duration?: number; video?: {durationSeconds?: number}; scene?: {cameraBaked?: unknown; metadata?: {cameraBaked?: unknown}};
+    };
+    if (data.revision !== asset.params.revision || data.assetId !== asset.id || data.state !== 'attached' || data.sourceFingerprint !== currentFingerprint) throw notFresh();
+    const duration = data.video?.durationSeconds ?? data.duration;
+    if (typeof duration !== 'number' || !Number.isFinite(duration) || !(duration > 0)) throw notFresh();
+    // Legacy packages did not identify which stage owned the camera. Preserve their historic no-extra-camera behavior.
+    const explicit = data.cameraBaked ?? data.scene?.cameraBaked ?? data.scene?.metadata?.cameraBaked;
+    return {camera_baked: explicit !== false, duration_seconds: duration};
+  }
+
   /** `effects`: a style, 'none' to clear it, or left out to keep what the timeline already has. */
   build(compId: string, effects?: string, change: Partial<Pick<Timeline, 'overrides' | 'overrides_all'>> = {}): Timeline {
-    const { comp, sbc, audio, caption, source } = this.currentSource(compId);
+    const { comp, sb, sbc, audio, caption, source } = this.currentSource(compId);
     if (comp.kind !== 'composition' || !comp.lang_code || !comp.format) throw new EngineError('VALIDATION', 'Not a composition artifact');
     if (!sbc?.scenes.length) throw new EngineError('NO_VERSION', 'The storyboard has no scenes yet');
     const narration = audio ? (this.engine.getContent(audio.id) as NarrationContent | null) : null;
@@ -167,13 +218,22 @@ export class RenderService {
     const track = caption ? (this.engine.getContent(caption.id) as CaptionTrack | null) : null;
     const prev = this.engine.getContent(compId) as Timeline | null;
 
-    const assets = new Map<string, any>();
+    const assets: BuildInput['assets'] = new Map();
+    const settings = this.engine.getProject(comp.project_id).settings;
+    const sourceFormat = (settings.formats as string[] | undefined)?.[0] ?? 'vertical_9x16';
+    const mode = (settings.animatedSvg as {mode?: string} | undefined)?.mode;
+    const sceneAssets = new Map(this.engine.list(comp.project_id, {kind: 'scene_asset'}).map(a => [a.scene_id, a]));
     for (const sc of sbc.scenes) {
-      const art = this.engine.list(comp.project_id, { kind: 'scene_asset' }).find((a) => a.scene_id === sc.scene_id);
+      const art = sceneAssets.get(sc.scene_id ?? null);
       const c = art ? (this.engine.getContent(art.id) as { primary_asset_id?: string } | null) : null;
       if (c?.primary_asset_id) {
         const a = this.assets.get(c.primary_asset_id);
-        assets.set(sc.scene_id!, { id: a.id, sha256: a.sha256, rel_path: a.rel_path, kind: a.media_kind, width: a.width, height: a.height, focal: a.focal });
+        const animated = this.animatedClip(a, sb.id, sourceFormat, sc);
+        const selected = this.selectedMode(mode,sc);
+        if ((selected === 'animated' && !animated) || (selected === 'static' && a.media_kind !== 'image')) {
+          throw new EngineError('VALIDATION', `Scene "${sc.title}" needs a ${selected === 'animated' ? 'fresh attached Animated SVG clip' : 'still image'} for its selected mode.`);
+        }
+        assets.set(sc.scene_id!, { id: a.id, sha256: a.sha256, rel_path: a.rel_path, kind: a.media_kind, width: a.width, height: a.height, focal: a.focal, ...(animated ? {animated} : {}) });
       }
     }
     const clipRel = (id: string) => ({ clip_id: id, rel_path: this.audio.get(id).rel_path });
@@ -223,7 +283,7 @@ export class RenderService {
           scene_id: s.scene_id,
           index: s.index,
           title: s.title,
-          camera: { value: s.camera, source: name('camera', from?.camera.source) },
+          camera: { value: s.camera, source: s.asset?.animated?.camera_baked ? 'animated_clip' : name('camera', from?.camera.source) },
           transition: { value: s.transition_in, source: s.index === 0 ? 'default' : name('transition', from?.transition.source) },
           look: { value: s.look ?? null, source: name('look', from?.look?.source) },
         };
@@ -301,16 +361,16 @@ export class RenderService {
     if (!existsSync(src)) throw new EngineError('RENDER_INPUT', `Asset file for scene "${s.title}" is missing`);
     const tIn = this.preroll(tl, s);
     const spec: SceneClipSpec = {
-      asset: { path: src, kind: s.asset.kind, width: s.asset.width, height: s.asset.height, sha256: s.asset.sha256 },
+      asset: { path: src, kind: s.asset.kind, width: s.asset.width, height: s.asset.height, sha256: s.asset.sha256, ...(s.asset.animated ? {animated:s.asset.animated} : {}) },
       focal: s.focal,
-      camera: s.camera,
+      camera: s.asset.animated?.camera_baked ? {movement:'static'} : s.camera,
       crop: tl.overrides[s.scene_id]?.crop,
       duration: s.duration + tIn,
       width: tl.format.width,
       height: tl.format.height,
       fps: tl.format.fps,
       ...(tl.effects ? { effects: tl.effects, ...(s.index === tl.scenes.length - 1 ? { glitch: true } : {}) } : {}),
-      // a camera the person chose is played as chosen: the style adds no extra framings to it
+      // A camera owned by the animation cannot be replaced by a composition style or override.
       ...(tl.effects && s.sources?.camera ? { hold: true } : {}),
       ...(s.look ? { look: s.look } : {}),
     };

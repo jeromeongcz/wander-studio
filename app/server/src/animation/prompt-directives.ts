@@ -27,9 +27,21 @@ export function buildAnimationMotionRules(duration: number): string {
   ].join('\n');
 }
 
-export function buildAnimatedMotionPrompt(o: { duration: number; context: string; targets: unknown; artPlan?: unknown; preparation?: unknown }): string {
+export interface TimedMouthCue {start: number; end: number; shape: string}
+export function buildAnimatedMotionPrompt(o: { duration: number; context: string; targets: unknown; artPlan?: unknown; preparation?: unknown; allowIK?: boolean; allowCycles?: boolean; dialogueCues?: readonly TimedMouthCue[] }): string {
   return [
     buildAnimationMotionRules(o.duration),
+    ...(o.allowIK ? [
+      'Optional animation.ik (up to 12) represents two-bone contacts: [{upperGroup,lowerGroup,origin:[x,y],upperLength,lowerLength,bend:"clockwise"|"counterclockwise",restDegrees?,keys:[{time,target:[x,y],ease?}]}]. Use 2–80 strictly ordered reachable targets. Use two untransformed drawable groups; nest the lower bone inside the upper without intermediate transforms. Use this only when the existing anatomy, SVG coordinates and contact geometry support it.',
+    ] : []),
+    ...(o.allowCycles ? [
+      'Optional animation.cycles (up to 24) gives selected atmosphere, cloth, fire, vegetation, or lighting a restrained secondary loop: [{target,property:"translate"|"rotate"|"scale"|"opacity"|"fill"|"stroke",from,to,period,start?,end?,ease?,pivot?}]. Use a period of at least 0.1 seconds and 1–38 full from→to→from periods; stays at from outside the loop. Prefer a small number of purposeful motions.',
+    ] : []),
+    ...(o.dialogueCues?.length ? [
+      'Optional animation.visemes = {groups:{rest:<groupId>,<shape>:<groupId>},cues:[{start,end,shape}]}. The 2–12 distinct mouth groups must be drawable siblings under the face, including a rest group. Use the supplied timed mouth cues exactly as supplied; the host returns the mouth to rest in gaps. If the artwork cannot support those mouth shapes, leave visemes absent and report the limitation instead of synthesizing dialogue timings.',
+      `Provided timed mouth cues: ${JSON.stringify(o.dialogueCues)}`,
+    ] : ['No verified timed mouth cues were supplied. Do not emit animation.visemes or claim lip synchronization.']),
+    'Do not duplicate a target/property across regular and generated tracks. Use 1–80 tracks after all optional structures are baked. If an optional structure is unsuitable, keep ordinary motion on the existing drawing instead.',
     'Return only JSON {animation,rig?,scene}. The scene metadata includes continuity, source assets, visual notes, timing beats and cameraBaked. Use only the named groups and paths in the supplied target list. Never regenerate the artwork.',
     `Scene inputs: ${o.context}`,
     `Art plan: ${JSON.stringify(o.artPlan ?? {})}`,

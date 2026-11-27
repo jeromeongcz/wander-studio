@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import test from 'node:test';
 import { extractApprovedGroup, generateAnimatedArtwork, generateAnimatedScene, professionalIllustrationGuidance, readAnimatedGenerationControls } from '../src/animation/generate.ts';
 import type { AnimatedCandidate, GenerateAnimatedSceneOptions } from '../src/animation/generate.ts';
@@ -66,6 +67,9 @@ test('professional generation validates and renders artwork, reviews by true vis
   assert.deepEqual(result.reused, [{ id: 'location-balete', version: 'approved-r3' }]);
   assert.equal(result.review?.method, 'rendered');
   assert.equal(result.finalReview?.method, 'rendered');
+  assert.equal(result.review?.artworkSha256, createHash('sha256').update(svg.replace(forestOriginal, forestReusable)).digest('hex'));
+  assert.equal(result.finalReview?.artworkSha256, createHash('sha256').update(result.svg).digest('hex'));
+  assert.equal(result.finalReview?.previewSha256, createHash('sha256').update(Uint8Array.of(137, 80, 78, 71)).digest('hex'));
   assert.match(f.prompts[0], /organic balete roots/i);
   assert.match(f.prompts.at(-1)!, /staggered keys/);
   assert.equal(result.svg, svg.replace(forestOriginal, forestReusable).replace(/<g id="traveler">.*?<\/g>/, travelerRefined));
@@ -94,6 +98,8 @@ test('a text provider reviews source only and leaves an honest local preview rec
   } });
   const result = await generateAnimatedScene(f.opts);
   assert.equal(result.review?.method, 'source-only');
+  assert.equal(result.review?.artworkSha256, createHash('sha256').update(result.svg).digest('hex'));
+  assert.ok(!Object.hasOwn(result.review!, 'previewSha256'));
   assert.ok(result.passes.some((p) => p.name === 'preview-render' && /cannot view/.test(p.note!)));
   assert.ok(result.passes.some((p) => p.name === 'targeted-refinement' && p.status === 'skipped'));
 });
@@ -247,6 +253,8 @@ test('artwork-only targeted corrections do not call a motion provider, even if e
 
 test('revision and per-stage budget controls are bounded, optional and reliably enforced', async () => {
   assert.deepEqual(readAnimatedGenerationControls({quality:'professional'}), {});
+  assert.deepEqual(readAnimatedGenerationControls({reviewFallback:'skip'}), {reviewFallback:'skip'});
+  assert.throws(() => readAnimatedGenerationControls({reviewFallback:'assume-visual'}), /source-only or skip/);
   assert.throws(() => readAnimatedGenerationControls({stages:{notAStage:true}}), /Invalid animated SVG stage/);
   assert.throws(() => readAnimatedGenerationControls({maxRevisions:4}), /0 to 3/);
   assert.throws(() => readAnimatedGenerationControls({stageBudgets:{baseArtwork:{timeoutMs:2}}}), /100 to 480000/);
@@ -284,4 +292,81 @@ test('targeted corrections can be enabled by themselves and the revision limit c
   assert.equal(round, 2);
   assert.equal(result.finalReview?.method, 'rendered');
   assert.equal(result.passes.filter((p) => p.name === 'targeted-refinement').length, 2);
+});
+
+test('optional review can continue with explicit source evidence after a preview renderer fails', async () => {
+  const f = fake({'Layered vector artwork':svg, 'SVG source art critique':JSON.stringify({notes:[]}), 'Rig and motion':JSON.stringify({animation})}, {
+    settings:{strategy:'single-pass', stages:{renderedReview:true, targetedCorrections:true}},
+    rasterizePreview:async () => { throw new Error('Renderer unavailable'); },
+    visionReview:async () => { assert.fail('No valid preview was available'); },
+  });
+  const result = await generateAnimatedScene(f.opts);
+  assert.equal(result.review?.method, 'source-only');
+  assert.equal(result.svg, svg, 'no review defects means no automatic redraw');
+  assert.deepEqual(f.marks, ['Layered vector artwork', 'SVG source art critique', 'Rig and motion']);
+  assert.ok(result.passes.some(p=>p.name==='preview-render'&&p.status==='failed'));
+});
+
+test('skip fallback does not send art source for review or silently claim approval', async () => {
+  const f = fake({'Layered vector artwork':svg, 'Rig and motion':JSON.stringify({animation})}, {
+    settings:{strategy:'single-pass', stages:{renderedReview:true, targetedCorrections:true}, reviewFallback:'skip'},
+    rasterizePreview:async () => Uint8Array.of(137,80,78,71),
+    visionReview:async () => { throw Object.assign(new Error('No vision'), {code:'VISION_UNSUPPORTED'}); },
+  });
+  const result = await generateAnimatedScene(f.opts);
+  assert.deepEqual(f.marks, ['Layered vector artwork', 'Rig and motion']);
+  assert.equal(result.review, undefined);
+  assert.ok(result.passes.some(p=>p.name==='art-review'&&p.status==='skipped'&&p.note?.includes('Pixel review was unavailable')));
+});
+
+test('failed optional refinement and critique preserve the SVG, but aborts stop the whole job', async () => {
+  const f = fake({'Layered vector artwork':svg, 'Lighting refinement':JSON.stringify({patches:[{id:'unauthorized',svg: travelerRefined}]}), 'SVG source art critique':'not JSON', 'Rig and motion':JSON.stringify({animation})}, {
+    settings:{strategy:'single-pass', stages:{lighting:true, renderedReview:true}},
+  });
+  const result = await generateAnimatedScene(f.opts);
+  assert.equal(result.svg, svg);
+  assert.equal(result.review, undefined);
+  assert.ok(result.passes.some(p=>p.name==='lighting'&&p.status==='failed'));
+  assert.ok(result.passes.some(p=>p.name==='art-review'&&p.status==='failed'));
+  const controller = new AbortController();
+  const c = fake({'Layered vector artwork':svg}, {
+    settings:{strategy:'single-pass', stages:{renderedReview:true}},
+    signal:controller.signal,
+    rasterizePreview:async () => { controller.abort(); throw new Error('renderer stopped'); },
+  });
+  await assert.rejects(generateAnimatedScene(c.opts), {code:'CANCELLED'});
+  assert.deepEqual(c.marks,['Layered vector artwork']);
+});
+
+test('advanced motion instructions are scoped to enabled categories and do not invent lip sync timing', async () => {
+  const options = {motionOnly:{svg},settings:{complexity:'advanced' as const, character:true, environment:false, dialogue:true}};
+  const noCues = fake({'Rig and motion':JSON.stringify({animation})}, options);
+  await generateAnimatedScene(noCues.opts);
+  assert.match(noCues.prompts[0], /Optional animation\.ik/);
+  assert.doesNotMatch(noCues.prompts[0], /Optional animation\.cycles/);
+  assert.match(noCues.prompts[0], /No verified timed mouth cues/);
+  const unsupported = fake({'Rig and motion':JSON.stringify({animation:{...animation,visemes:{groups:{rest:'rest',open:'open'},cues:[{start:1,end:2,shape:'open'}]}}})}, options);
+  await assert.rejects(generateAnimatedScene(unsupported.opts), /without verified dialogue timing/);
+  const changedCues = fake({'Rig and motion':JSON.stringify({animation:{...animation,visemes:{groups:{rest:'rest',open:'open'},cues:[{start:3,end:4,shape:'open'}]}}})}, {...options,dialogueCues:[{start:1,end:2,shape:'open'}]});
+  await assert.rejects(generateAnimatedScene(changedCues.opts), /preserve the supplied mouth timing exactly/);
+  const invalidTiming = fake({}, {...options,dialogueCues:[{start:1,end:2,shape:'open'},{start:1.5,end:3,shape:'open'}]});
+  await assert.rejects(generateAnimatedScene(invalidTiming.opts), /non-overlapping/);
+  assert.deepEqual(invalidTiming.marks, []);
+});
+
+test('a stale vision callback cannot send another review request after its deadline', async () => {
+  let finishVision: (() => void) | undefined;
+  const unresolved = new Promise<string>((_, reject) => {
+    finishVision = () => reject(Object.assign(new Error('Unsupported'), {code:'VISION_UNSUPPORTED'}));
+  });
+  const f = fake({'Layered vector artwork':svg, 'Rig and motion':JSON.stringify({animation})}, {
+    settings:{strategy:'single-pass', stages:{renderedReview:true}, stageBudgets:{renderedReview:{timeoutMs:100}}},
+    rasterizePreview:async () => Uint8Array.of(137,80,78,71),
+    visionReview:async () => unresolved,
+  });
+  const result = await generateAnimatedScene(f.opts);
+  assert.ok(result.passes.some(p=>p.name==='art-review'&&p.status==='failed'));
+  finishVision!();
+  await new Promise<void>(resolve=>setImmediate(resolve));
+  assert.deepEqual(f.marks, ['Layered vector artwork', 'Rig and motion']);
 });

@@ -1,14 +1,18 @@
 import { EngineError } from '../engine.ts';
+import type { TimedMouthCue } from './prompt-directives.ts';
 
 export const ANIMATED_OPTIONAL_STAGES = ['referenceAnalysis', 'artDirection', 'composition', 'anatomy', 'environmentMaterials', 'lighting', 'texture', 'renderedReview', 'targetedCorrections', 'animationPreparation'] as const;
 export type AnimatedOptionalStage = typeof ANIMATED_OPTIONAL_STAGES[number];
 export const ANIMATED_BUDGET_STAGES = [...ANIMATED_OPTIONAL_STAGES, 'baseArtwork', 'motion', 'motionRefinement'] as const;
 export type AnimatedBudgetStage = typeof ANIMATED_BUDGET_STAGES[number];
 export type AnimatedStageBudget = { timeoutMs?: number; maxOutputBytes?: number };
+export type AnimatedReviewFallback = 'source-only' | 'skip';
 export interface AnimatedGenerationControls {
   stages?: Partial<Record<AnimatedOptionalStage, boolean>>;
   /** Limits automatic targeted correction/review cycles; a manually requested correction still runs once. */
   maxRevisions?: number;
+  /** If pixels cannot be reviewed, use text-only critique or stop the optional review. */
+  reviewFallback?: AnimatedReviewFallback;
   stageBudgets?: Partial<Record<AnimatedBudgetStage, AnimatedStageBudget>>;
 }
 
@@ -34,6 +38,10 @@ export function readAnimatedGenerationControls(input: unknown = {}): AnimatedGen
     if (Object.keys(stages).length) out.stages = stages;
   }
   if (src.maxRevisions !== undefined) out.maxRevisions = integer(src.maxRevisions, 0, 3, 'Automatic revision limit');
+  if (src.reviewFallback !== undefined) {
+    if (src.reviewFallback !== 'source-only' && src.reviewFallback !== 'skip') throw new EngineError('VALIDATION', 'Choose source-only or skip for the animation review fallback.');
+    out.reviewFallback = src.reviewFallback;
+  }
   if (src.stageBudgets !== undefined) {
     const budgets: NonNullable<AnimatedGenerationControls['stageBudgets']> = {};
     for (const [key, value] of Object.entries(controlsRecord(src.stageBudgets, 'stage budgets'))) {
@@ -47,6 +55,22 @@ export function readAnimatedGenerationControls(input: unknown = {}): AnimatedGen
     if (Object.keys(budgets).length) out.stageBudgets = budgets;
   }
   return out;
+}
+
+/** Host-supplied, scene-local speech timing; never synthesize timing from model output. */
+export function readTimedMouthCues(value: unknown, duration: number): TimedMouthCue[] | undefined {
+  if (value === undefined) return;
+  if (!Array.isArray(value) || value.length > 38) throw new EngineError('VALIDATION', 'Use at most 38 timed mouth cues in a scene.');
+  let previousEnd = 0;
+  return value.map((input) => {
+    const { start, end, shape } = controlsRecord(input, 'timed mouth cue');
+    if (typeof start !== 'number' || typeof end !== 'number' || !Number.isFinite(start) || !Number.isFinite(end) ||
+      start < previousEnd || end <= start || end > duration || typeof shape !== 'string' || !/^[a-z][a-z0-9_-]{0,23}$/.test(shape)) {
+      throw new EngineError('VALIDATION', 'Timed mouth cues must use ordered non-overlapping intervals, within the scene, with named shapes.');
+    }
+    previousEnd = end;
+    return {start, end, shape};
+  });
 }
 
 /** Bound long-running local or provider work without assuming that every adapter respects AbortSignal. */

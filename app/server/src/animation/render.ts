@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process';
-import { mkdir, mkdtemp, rename, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, open, rename, rm, writeFile } from 'node:fs/promises';
 import { basename, dirname, join, resolve } from 'node:path';
 import { EngineError } from '../engine.ts';
 import { ffmpegBinary, ffprobeBinary, run } from '../media.ts';
@@ -17,6 +17,20 @@ export const ANIMATED_SVG_PRESETS = {
 export type AnimatedRenderPreset = keyof typeof ANIMATED_SVG_PRESETS;
 export type AnimatedSvgBackend = 'chromium' | 'librsvg';
 export type AnimatedSvgBackendPreference = AnimatedSvgBackend | 'auto';
+
+/** Resolve deployment configuration without downloading or starting a browser. */
+export function animatedSvgRenderPreference(override?: unknown): AnimatedSvgBackendPreference {
+  const preference = override ?? process.env.WANDER_ANIMATION_RENDERER ?? 'auto';
+  if (preference !== 'auto' && preference !== 'librsvg' && preference !== 'chromium') {
+    throw new EngineError('ANIMATION_RENDERER', 'Choose auto, chromium, or librsvg for animated SVG rendering.');
+  }
+  return preference;
+}
+
+/** A specifically requested backend must never silently reuse a different backend's output. */
+export function animatedSvgRenderCacheMatches(cached: unknown, preferred: AnimatedSvgBackendPreference): boolean {
+  return (cached === 'chromium' || cached === 'librsvg') && (preferred === 'auto' || preferred === cached);
+}
 
 export interface RasterOptions {
   outputPath: string;
@@ -77,10 +91,7 @@ function checkFrame(svg: string, validate: RasterOptions['assertSafeSvg']): numb
 }
 
 async function createRasterizer(options: RasterOptions, signal: AbortSignal): Promise<ChromiumRasterizer | undefined> {
-  const preference = options.backend ?? process.env.WANDER_ANIMATION_RENDERER ?? 'auto';
-  if (!['auto','librsvg','chromium'].includes(preference)) {
-    throw new EngineError('ANIMATION_RENDERER', 'Choose auto, chromium, or librsvg for animated SVG rendering.');
-  }
+  const preference = animatedSvgRenderPreference(options.backend);
   if (preference === 'librsvg') return undefined;
   try {
     return await createChromiumRasterizer({
@@ -146,20 +157,39 @@ function runEncoder(bin: string, args: string[], signal: AbortSignal, onFrame: (
 async function validateEncoded(file: string, options: AnimatedSvgRenderOptions, frames: number, signal: AbortSignal): Promise<number> {
   const probe = await run(ffprobeBinary(options.ffprobeOverride),
     ['-v', 'error', '-show_streams', '-show_format', '-of', 'json', file], { signal, timeout: 30_000 });
-  const parsed = JSON.parse(probe.stdout) as {
-    streams?: { codec_type: string; codec_name: string; width: number; height: number; nb_frames: string; avg_frame_rate: string; pix_fmt: string }[];
-    format?: { duration: string };
+  type Probe = {
+    streams?: { codec_type: string; codec_name: string; width: number; height: number; nb_frames: string; avg_frame_rate: string; pix_fmt: string; sample_aspect_ratio: string }[];
+    format?: { format_name: string; duration: string };
   };
-  const video = parsed.streams?.find((stream) => stream.codec_type === 'video');
+  let parsed: Probe;
+  try { parsed = JSON.parse(probe.stdout) as Probe; }
+  catch { throw new EngineError('ANIMATION_VIDEO_INVALID', 'The encoded clip could not be verified as an MP4.'); }
+  const streams = Array.isArray(parsed?.streams) ? parsed.streams : [];
+  const video = streams[0];
   const [num, den] = (video?.avg_frame_rate ?? '').split('/').map(Number);
-  const duration = Number(parsed.format?.duration);
+  const duration = Number(parsed?.format?.duration);
   const expected = frames / options.fps;
-  if (!video || video.codec_name !== 'h264' || video.width !== options.width || video.height !== options.height
+  if (!video || streams.length !== 1 || !parsed?.format?.format_name?.split(',').includes('mp4')
+    || video.codec_type !== 'video' || video.codec_name !== 'h264' || video.width !== options.width || video.height !== options.height || video.sample_aspect_ratio !== '1:1'
     || video.pix_fmt !== 'yuv420p' || Number(video.nb_frames) !== frames || num / den !== options.fps || !Number.isFinite(duration)
-    || Math.abs(duration - expected) > 0.002 || parsed.streams?.some((stream) => stream.codec_type === 'audio')) {
+    || Math.abs(duration - expected) > 0.002) {
     throw new EngineError('ANIMATION_VIDEO_INVALID', 'The encoded clip did not match the requested dimensions, timing or H.264 format.');
   }
   return duration;
+}
+
+const PNG_HEADER = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82]);
+
+async function validatePng(file: string, width: number, height: number): Promise<void> {
+  const handle = await open(file);
+  try {
+    const bytes = Buffer.alloc(24);
+    const { bytesRead } = await handle.read(bytes, 0, bytes.length, 0);
+    if (bytesRead !== bytes.length || !bytes.subarray(0, PNG_HEADER.length).equals(PNG_HEADER)
+      || bytes.readUInt32BE(16) !== width || bytes.readUInt32BE(20) !== height) {
+      throw new EngineError('ANIMATION_FRAME', 'The rendered preview is not a PNG with the requested dimensions.');
+    }
+  } finally { await handle.close(); }
 }
 
 /**
@@ -258,7 +288,7 @@ export async function renderAnimatedSvgFrame(options: RasterOptions & { svg: str
         '-vf', `${rasterFilter(width, height)},format=rgb24`, '-c:v', 'png', '-threads', '1', '-update', '1', output,
       ], signal, () => {}, work);
     }
-    if (!(await stat(output)).size) throw new EngineError('ANIMATION_FRAME', 'The rasterizer returned an empty frame.');
+    await validatePng(output, width, height);
     checkSignal(signal);
     await rename(output, outputPath);
     return outputPath;

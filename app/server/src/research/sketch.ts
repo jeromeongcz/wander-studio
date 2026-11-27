@@ -2,6 +2,7 @@ import { professionalIllustrationGuidance } from '../animation/generate.ts';
 // Storyboard sketch frames: Claude (with no tools) draws one vector illustration per scene. The vector file is untrusted
 // model output, so it is checked against an allow-list before it is turned into a PNG and recorded as an asset.
 import { existsSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { mkdir, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { EngineError } from '../engine.ts';
@@ -268,6 +269,9 @@ export class SketchArtist {
         tags: ['storyboard-sketch'],
         params: { scene_id: scene.scene_id, prompt_version: 2, caption_space: captionSpace },
       });
+      // Retain the already checked source. The input prompt, validation, PNG render and linkage are unchanged.
+      this.s.engine.db.prepare('INSERT INTO storyboard_svg_sources(asset_id,svg,source_hash) VALUES (?,?,?)')
+        .run(asset.id, svg, createHash('sha256').update(svg).digest('hex'));
       const art = this.s.engine.list(projectId, { kind: 'scene_asset' }).find((x) => x.scene_id === scene.scene_id)!;
       this.s.save(art.id, { assets: [{ asset_id: asset.id, role: 'primary' }], primary_asset_id: asset.id }, { actor: 'ai', reopen: o.reopen });
       return asset;

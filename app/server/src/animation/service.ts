@@ -7,13 +7,15 @@ import type { TextLLMProvider } from '../providers/llm/types.ts';
 import type { Studio } from '../services.ts';
 import type { StoryboardContent } from '../studios/storyboard.ts';
 import { FRAME } from '../research/sketch.ts';
-import { bad, canonicalArtwork, drawFrame, parseArtwork, readMotion, readRig } from './model.ts';
-import { ANIMATED_SVG_PRESETS, renderAnimatedSvg, renderAnimatedSvgFrame } from './render.ts';
-import { extractApprovedGroup, generateAnimatedScene, type ImageReference } from './generate.ts';
+import { bad, canonicalArtwork, drawFrame, drawingTarget, parseArtwork, readMotion, readRig } from './model.ts';
+import { ANIMATED_SVG_PRESETS, animatedSvgRenderPreference, animatedSvgRenderCacheMatches, renderAnimatedSvg, renderAnimatedSvgFrame, type AnimatedSvgBackend } from './render.ts';
+import { extractApprovedGroup, generateAnimatedArtwork, generateAnimatedScene, type GenerateAnimatedSceneOptions, type ImageReference } from './generate.ts';
 import { buildAnimatedSketchPrompt } from './prompts.ts';
+import { bindMotionClip, exportMotionClip } from './motion-clip.ts';
+import { readAnimatedGenerationControls, readTimedMouthCues } from './generation-controls.ts';
 
 export const animatedSvgDefaults = {mode:'static',quality:'professional',style:'dark-folklore',fps:30,complexity:'standard',character:true,environment:true,dialogue:false,camera:true,detail:70,strategy:'multi-pass',advancedShading:true,visualReview:true,reuseApproved:true,customDirection:''} as const;
-const styles = 'dark-folklore cinematic-25d professional-cartoon anime folklore graphic-novel watercolor documentary motion-graphics minimalist historical-graphic-novel cinematic-anime painterly-storybook engraved-horror custom'.split(' ');
+const styles = 'archival-sepia dark-folklore cinematic-25d professional-cartoon anime folklore graphic-novel watercolor documentary motion-graphics minimalist historical-graphic-novel cinematic-anime painterly-storybook engraved-horror custom'.split(' ');
 export function readSettings(o: Record<string,unknown> = {}) {
   const options = (k:keyof typeof animatedSvgDefaults, allowed:readonly unknown[]) => {
     const v=o[k]??animatedSvgDefaults[k];if(!allowed.includes(v))return bad('Invalid animation '+k+'.');return v;
@@ -21,18 +23,23 @@ export function readSettings(o: Record<string,unknown> = {}) {
   const flag = (k:keyof typeof animatedSvgDefaults) => options(k,[true,false]) as boolean;
   const detail=o.detail??70;
   if(typeof detail!=='number'||!Number.isInteger(detail)||detail<0||detail>100)return bad('Detail must be from 0 to 100.');
-  return {mode:options('mode',['static','animated','mixed']) as 'static'|'animated'|'mixed',quality:options('quality',['draft','standard','professional','studio']) as 'draft'|'standard'|'professional'|'studio',style:options('style',styles) as string,fps:options('fps',[24,30,60]) as 24|30|60,complexity:options('complexity',['basic','standard','advanced']) as 'basic'|'standard'|'advanced',character:flag('character'),environment:flag('environment'),dialogue:flag('dialogue'),camera:flag('camera'),detail,strategy:options('strategy',['single-pass','multi-pass']) as 'single-pass'|'multi-pass',advancedShading:flag('advancedShading'),visualReview:flag('visualReview'),reuseApproved:flag('reuseApproved'),customDirection:str(o.customDirection,2000)};
+  return {...readAnimatedGenerationControls(o),mode:options('mode',['static','animated','mixed']) as 'static'|'animated'|'mixed',quality:options('quality',['draft','standard','professional','studio']) as 'draft'|'standard'|'professional'|'studio',style:options('style',styles) as string,fps:options('fps',[24,30,60]) as 24|30|60,complexity:options('complexity',['basic','standard','advanced']) as 'basic'|'standard'|'advanced',character:flag('character'),environment:flag('environment'),dialogue:flag('dialogue'),camera:flag('camera'),detail,strategy:options('strategy',['single-pass','multi-pass']) as 'single-pass'|'multi-pass',advancedShading:flag('advancedShading'),visualReview:flag('visualReview'),reuseApproved:flag('reuseApproved'),customDirection:str(o.customDirection,2000)};
 }
 function str(v:unknown,max:number){if(v===undefined||v===null)return '';if(typeof v!=='string'||v.length>max)return bad('Animation text exceeds its allowed length.');return v.trim();}
 function json(v:unknown,limit:number){if(v===undefined||v===null)return undefined;const x=JSON.stringify(v);if(x.length>limit)return bad('Animation metadata exceeds its allowed size.');return JSON.parse(x) as unknown;}
-type Draft = {svg:string;animation:ReturnType<typeof readMotion>;rig?:unknown;scene?:unknown;passes?:unknown;provider?:string};
+const generationOperations=['scene','artwork','motion','refine-motion'] as const;
+type GenerationOperation=(typeof generationOperations)[number];
+type ArtworkSource={kind:'still';assetId:string;sha256:string}|{kind:'animated';revision:string;sha256:string};
+type Draft = {svg:string;animation?:ReturnType<typeof readMotion>;rig?:unknown;scene?:unknown;passes?:unknown;provider?:string};
 type CapturedPrompts = Partial<Record<'baseArtwork'|'motion',string>>;
-type Stored = Draft & {prompts?:CapturedPrompts;sourceFingerprint?:string; revision:string;state:'draft'|'approved'|'rendered'|'attached';duration:number;layers:string[];assetId?:string;video?:{width:number;height:number;fps:number;frames:number;durationSeconds:number}};
+type Stored = Draft & {cameraBaked?:boolean;artworkHash?:string;artworkApproved?:boolean;artworkSource?:ArtworkSource;parentRevision?:string;prompts?:CapturedPrompts;sourceFingerprint?:string; revision:string;state:'draft'|'approved'|'rendered'|'attached';duration:number;layers:string[];assetId?:string;video?:{width:number;height:number;fps:number;frames:number;durationSeconds:number;backend?:AnimatedSvgBackend}};
 type LibraryItem={id:string;revision:string;name:string;kind:string;groupId:string;createdAt:string;svg:string};
 type Key = ReturnType<AnimatedSvgStudio['locate']>;
 export class AnimatedSvgStudio {
   private s:Studio;
-  private referenceBatches=new Map<string,{provider:TextLLMProvider;model?:string;images:ImageReference[]}>();
+  private referenceBatches=new Map<string,{provider:TextLLMProvider;model?:string;images:ImageReference[];settings:ReturnType<typeof readSettings>}>();
+  private previews=new Map<string,{bytes:Buffer;until:number}>();
+  private previewsInFlight=new Map<string,Promise<Buffer>>();
   constructor(studio:Studio){this.s=studio;}
   settings(projectId:string,b:Record<string,unknown>){
     const p=this.s.engine.getProject(projectId);const settings=readSettings(b);
@@ -71,30 +78,118 @@ export class AnimatedSvgStudio {
     return entry;
   }
   private put(k:Key,e:Stored){
-    this.s.engine.db.prepare('INSERT INTO animated_svg_scenes(storyboard_id,scene_id,package_json) VALUES(?,?,?) ON CONFLICT(storyboard_id,scene_id) DO UPDATE SET package_json=excluded.package_json').run(k.a.id,k.sceneId,JSON.stringify(e));return e;
+    const db=this.s.engine.db, serialized=JSON.stringify(e);
+    db.exec('SAVEPOINT wander_animated_revision');
+    try {
+      db.prepare('INSERT INTO animated_svg_revisions(storyboard_id,scene_id,revision,package_json) VALUES (?,?,?,?) ON CONFLICT(storyboard_id,scene_id,revision) DO UPDATE SET package_json=excluded.package_json')
+        .run(k.a.id,k.sceneId,e.revision,serialized);
+      db.prepare('INSERT INTO animated_svg_scenes(storyboard_id,scene_id,package_json) VALUES(?,?,?) ON CONFLICT(storyboard_id,scene_id) DO UPDATE SET package_json=excluded.package_json')
+        .run(k.a.id,k.sceneId,serialized);
+      db.exec('RELEASE wander_animated_revision');
+    }catch(e){db.exec('ROLLBACK TO wander_animated_revision; RELEASE wander_animated_revision');throw e;}
+    return e;
+  }
+  private revision(k:Key,revision:string):Stored{
+    const row=this.s.engine.db.prepare('SELECT package_json FROM animated_svg_revisions WHERE storyboard_id=? AND scene_id=? AND revision=?')
+      .get(k.a.id,k.sceneId,revision) as {package_json:string}|undefined;
+    if(!row)throw new EngineError('NOT_FOUND','That scene revision was not found.');
+    return JSON.parse(row.package_json);
+  }
+  history(id:string,i:number){
+    const k=this.locate(id,i),current=this.get(k)?.revision;
+    const rows=this.s.engine.db.prepare("SELECT revision,saved_at,json_extract(package_json,'$.state') AS state,json_extract(package_json,'$.parentRevision') AS parentRevision,json_extract(package_json,'$.artworkHash') AS artworkHash,json_type(package_json,'$.video')='object' AS hasVideo FROM animated_svg_revisions WHERE storyboard_id=? AND scene_id=? ORDER BY rowid DESC LIMIT 50").all(id,k.sceneId);
+    return rows.map(row=>({...row,current:row.revision===current}));
   }
   private fingerprint(k:Key){const {scene_id:_,order_index:__,...scene}=k.scene;return createHash('sha256').update(JSON.stringify({format:k.format,scene})).digest('hex');}
   private current(k:Key,e:Stored){
     if(e.sourceFingerprint&&e.sourceFingerprint!==this.fingerprint(k))throw new EngineError('STALE','Storyboard direction changed. Edit or reimport the animation as a new draft before using it.');
   }
-  import(id:string,i:number,b:Record<string,unknown>, internal?:{passes?:unknown;provider?:string;prompts?:CapturedPrompts}) {
-    const k=this.locate(id,i);this.check(k,b.revision,true);
-    const d=parseArtwork(b.svg), animation=readMotion(b.animation,d), rig=readRig(b.rig,d,animation);
+  private savePackage(k:Key,b:Record<string,unknown>,internal:{passes?:unknown;provider?:string;prompts?:CapturedPrompts;artworkOnly?:boolean;artworkApproved?:boolean;artworkSource?:ArtworkSource}={}) {
+    const previous=this.check(k,b.revision,true);
+    const d=parseArtwork(b.svg), svg=canonicalArtwork(d);
+    const animation=internal.artworkOnly?undefined:readMotion(b.animation,d), rig=animation?readRig(b.rig,d,animation):undefined;
     const layers=[...d.ids].filter(([,el])=>el.tag==='g').map(([id])=>id);
-    return this.put(k,{svg:canonicalArtwork(d),animation,rig,scene:json(b.scene,64_000),passes:json(internal?.passes,36_000),provider:internal?.provider,prompts:internal?.prompts,sourceFingerprint:this.fingerprint(k),revision:randomUUID(),state:'draft',duration:animation.duration,layers});
+    return this.put(k,{svg,animation,rig,scene:json(b.scene,64_000),passes:json(internal.passes,36_000),provider:internal.provider,prompts:internal.prompts,
+      sourceFingerprint:this.fingerprint(k),revision:randomUUID(),parentRevision:previous?.revision,state:'draft',duration:animation?.duration??Math.min(60,Math.max(0.1,k.scene.target_duration??5)),layers,
+      artworkHash:createHash('sha256').update(svg).digest('hex'),artworkApproved:internal.artworkApproved??false,artworkSource:internal.artworkSource});
+  }
+  import(id:string,i:number,b:Record<string,unknown>,internal?:{passes?:unknown;provider?:string;prompts?:CapturedPrompts;artworkSource?:ArtworkSource}) {
+    return this.savePackage(this.locate(id,i),b,{...internal,artworkOnly:b.artworkOnly===true});
+  }
+  restoreRevision(id:string,i:number,b:Record<string,unknown>){
+    const k=this.locate(id,i);
+    if(typeof b.sourceRevision!=='string')return bad('Choose a previously saved revision.');
+    const source=this.revision(k,b.sourceRevision);
+    return this.savePackage(k,{svg:source.svg,animation:source.animation,rig:source.rig,scene:source.scene,revision:b.revision},
+      {artworkOnly:!source.animation,provider:source.provider,artworkSource:{kind:'animated',revision:source.revision,sha256:source.artworkHash??createHash('sha256').update(source.svg).digest('hex')}});
+  }
+  copyApprovedStill(id:string,i:number,revision:unknown){
+    const k=this.locate(id,i);this.check(k,revision,true);
+    const art=this.s.engine.list(k.project.id,{kind:'scene_asset'}).find(x=>x.scene_id===k.sceneId);
+    const primary=art&&this.s.engine.getContent(art.id) as {primary_asset_id?:string}|null|undefined;
+    if(art?.state!=='approved'||!primary?.primary_asset_id)return bad('Approve a still illustration for this scene first.');
+    const asset=this.s.assets.get(primary.primary_asset_id);
+    if(asset.project_id!==k.project.id||asset.type!=='illustration'||asset.approval_status!=='approved')return bad('The approved primary asset is not a project still illustration.');
+    const src=this.s.engine.db.prepare('SELECT svg,source_hash FROM storyboard_svg_sources WHERE asset_id=?').get(asset.id) as {svg:string;source_hash:string}|undefined;
+    if(!src)throw new EngineError('NOT_FOUND','This still has no saved editable SVG. Import the original SVG or draw it again before copying.');
+    if(createHash('sha256').update(src.svg).digest('hex')!==src.source_hash)return bad('The retained still source did not match its recorded hash.');
+    return this.savePackage(k,{svg:src.svg,revision},{artworkOnly:true,artworkSource:{kind:'still',assetId:asset.id,sha256:src.source_hash}});
+  }
+  exportClip(id:string,i:number,b:Record<string,unknown>){
+    const k=this.locate(id,i),e=this.check(k,b.revision)!;
+    this.current(k,e);
+    if(!e.animation||e.state==='draft')return bad('Approve the motion before exporting a reusable clip.');
+    const drawing=parseArtwork(e.svg);
+    return exportMotionClip(readMotion(e.animation,drawing),drawing,b.roles);
+  }
+  motionLibrary(){
+    return this.s.engine.db.prepare('SELECT id,name,source_revision,created_at FROM animated_motion_library ORDER BY rowid DESC LIMIT 200').all();
+  }
+  motionLibraryClip(id:string){
+    const row=this.s.engine.db.prepare('SELECT clip_json FROM animated_motion_library WHERE id=?').get(id) as {clip_json:string}|undefined;
+    if(!row)throw new EngineError('NOT_FOUND','That reusable motion was not found.');
+    return JSON.parse(row.clip_json) as unknown;
+  }
+  saveMotionClip(id:string,i:number,b:Record<string,unknown>){
+    const clip=this.exportClip(id,i,b),name=str(b.name,100);
+    if(!name)return bad('Name the reusable motion preset.');
+    const count=this.s.engine.db.prepare('SELECT COUNT(*) AS n FROM animated_motion_library').get() as {n:number};
+    if(count.n>=200)return bad('The reusable motion library is full. Export the motion as JSON instead.');
+    const entry={id:randomUUID(),name,source_revision:b.revision as string};
+    this.s.engine.db.prepare('INSERT INTO animated_motion_library(id,name,source_revision,clip_json) VALUES (?,?,?,?)')
+      .run(entry.id,entry.name,entry.source_revision,JSON.stringify(clip));
+    return entry;
+  }
+  bindClip(id:string,i:number,b:Record<string,unknown>){
+    const k=this.locate(id,i),e=this.check(k,b.revision)!;
+    this.current(k,e);
+    if(!e.artworkApproved)return bad('Approve the destination artwork before binding motion.');
+    const drawing=parseArtwork(e.svg);
+    if(b.translationScale!==undefined&&typeof b.translationScale!=='number')return bad('Translation scale must be a number.');
+    const animation=bindMotionClip(typeof b.libraryClipId==='string'?this.motionLibraryClip(b.libraryClipId):b.clip,drawing,{bindings:b.bindings,duration:Math.min(60,Math.max(0.1,k.scene.target_duration??5)),translationScale:b.translationScale});
+    return this.savePackage(k,{svg:e.svg,animation,revision:e.revision,scene:{artwork:(e.scene as {artwork?:unknown}|undefined)?.artwork??(e.animation?undefined:e.scene),reusedMotion:true}},{artworkApproved:true,prompts:{baseArtwork:e.prompts?.baseArtwork},
+      artworkSource:e.artworkSource?.kind==='still'?e.artworkSource:{kind:'animated',revision:e.revision,sha256:e.artworkHash??createHash('sha256').update(e.svg).digest('hex')}});
+  }
+  approveArtwork(id:string,i:number,revision:unknown){
+    const k=this.locate(id,i),e=this.check(k,revision)!;
+    this.current(k,e);
+    if(e.artworkApproved)return e;
+    if(!e.layers.length)return bad('Add named, drawable groups before approving artwork for motion.');
+    return this.put(k,{...e,artworkApproved:true});
   }
   reuse(id:string,i:number,b:Record<string,unknown>){
     const k=this.locate(id,i);this.check(k,b.revision,true);
     if(typeof b.fromIndex!=='number'||b.fromIndex===i)return bad('Choose another approved scene.');
     const source=this.get(this.locate(id,b.fromIndex));
-    if(!source||source.state==='draft')return bad('The source scene must be approved.');
+    if(!source?.animation||source.state==='draft')return bad('The source scene must have approved motion.');
     return this.import(id,i,{svg:source.svg,animation:source.animation,rig:source.rig,scene:{reusedFrom:source.revision,metadata:source.scene},revision:b.revision},{provider:source.provider});
   }
   approve(id:string,i:number,revision:unknown){
     const k=this.locate(id,i),e=this.check(k,revision)!;
     this.current(k,e);
+    if(!e.animation)return bad('Approve the artwork, then generate or import motion before approving the animation.');
     if(e.state!=='draft')return e;
-    return this.put(k,{...e,state:'approved'});
+    return this.put(k,{...e,artworkApproved:true,state:'approved'});
   }
   private unbusy(projectId:string){
     const row=this.s.engine.db.prepare("SELECT 1 FROM jobs WHERE project_id=? AND kind IN ('animated_svg_generate','animated_svg_render') AND state IN ('queued','running') LIMIT 1").get(projectId);
@@ -104,13 +199,27 @@ export class AnimatedSvgStudio {
     const k=this.locate(id,i), e=this.check(k,b.revision,kind==='animated_svg_generate');
     this.unbusy(k.project.id);
     if(kind==='animated_svg_generate'){
+      const operation=b.operation??'scene';
+      if(typeof operation!=='string'||!generationOperations.includes(operation as GenerationOperation))return bad('Unknown illustration generation operation.');
+      if(operation==='motion'||operation==='refine-motion'){
+        if(!e||!e.artworkApproved)return bad('Approve the exact artwork revision before generating or refining motion.');
+        this.current(k,e);
+        if(operation==='refine-motion'&&(!e.animation||b.targetLayerIds===undefined))return bad('Select motion targets in a scene with saved animation.');
+      }
       if(b.consent!==true)return bad('Confirm the selected provider may receive the scene and reference notes.');
       const provider=this.s.llm.active();
       if(!provider)throw new EngineError('PROVIDER_ERROR','Choose an AI provider in Settings first.');
       if(b.expectedProvider!==undefined&&b.expectedProvider!==provider.id)throw new EngineError('STALE','The active provider changed. Review its name and confirm again.');
       const model=this.s.config.videoModels?.storyboard??this.s.config.selectedLLMModel??undefined;
       const targetLayerIds=b.targetLayerIds;
-      if(targetLayerIds!==undefined&&(!e||!Array.isArray(targetLayerIds)||!targetLayerIds.length||targetLayerIds.length>6||!targetLayerIds.every(x=>typeof x==='string'&&e.layers.includes(x))))return bad('Select up to six named layers in the current draft or artwork.');
+      if(targetLayerIds!==undefined&&operation==='motion')return bad('Use targeted motion refinement to select layers.');
+      if(targetLayerIds!==undefined){
+        if(!e||!Array.isArray(targetLayerIds)||!targetLayerIds.length||targetLayerIds.length>6||new Set(targetLayerIds).size!==targetLayerIds.length)
+          return bad('Select up to six distinct named targets in the current artwork.');
+        const d=operation==='refine-motion'?parseArtwork(e.svg):undefined;
+        if(!targetLayerIds.every(x=>typeof x==='string'&&(d?drawingTarget(d,x):e.layers.includes(x))))
+          return bad('Select up to six named drawable targets in the current artwork.');
+      }
       const reuseLayer=typeof b.reuseLayer==='object'&&b.reuseLayer&&!Array.isArray(b.reuseLayer)?b.reuseLayer as Record<string,unknown>:undefined;
       if(reuseLayer){
         if(typeof reuseLayer.fromIndex!=='number'||reuseLayer.fromIndex===i||typeof reuseLayer.sourceGroupId!=='string'||typeof reuseLayer.targetId!=='string')return bad('Choose a named group from an approved previous scene.');
@@ -124,20 +233,25 @@ export class AnimatedSvgStudio {
         this.libraryItem(libraryReuse.id);
       }
       const images=this.images(b.references);
-      const vision=b.visionConsent===true;
-      if(images.length&&!vision)return bad('Confirm that reference images may be sent to the selected provider.');
-      if(vision&&typeof provider.generateVision!=='function')return bad('This provider has no image-capable adapter. Use the reference notes or select a supported vision model.');
-      if(vision&&b.expectedProvider!==provider.id)return bad('Confirm image use for the currently selected provider.');
+      const legacyVision=b.visionConsent===true;
+      const analyzeVision=legacyVision||b.referenceVisionConsent===true, reviewVision=legacyVision||b.reviewVisionConsent===true;
+      if(images.length&&!analyzeVision)return bad('Confirm that reference images may be sent to the selected provider.');
+      if((analyzeVision||reviewVision)&&typeof provider.generateVision!=='function')return bad('This provider has no image-capable adapter. Use the reference notes or select a supported vision model.');
+      if((analyzeVision||reviewVision)&&b.expectedProvider!==provider.id)return bad('Confirm image use for the currently selected provider.');
       const brief=str(b.brief,5000),referenceNotes=str(b.referenceNotes,3000);
       const referenceBatch=randomUUID();
       if(this.referenceBatches.size>=12)throw new EngineError('BUSY','Generation queue is full.');
-      this.referenceBatches.set(referenceBatch,{provider,model,images});
+      if((operation==='motion'||operation==='refine-motion')&&(reuseLayer||libraryReuse||images.length))return bad('Motion-only generation cannot replace artwork or analyze new image references.');
+      const settings=readSettings(k.project.settings.animatedSvg as Record<string,unknown>|undefined);
+      const dialogueCues=readTimedMouthCues(b.dialogueCues,Math.min(60,Math.max(0.1,k.scene.target_duration??5)));
+      if(dialogueCues?.length&&(operation!=='motion'||!settings.dialogue))return bad('Enable dialogue and request motion before supplying timed mouth cues.');
+      this.referenceBatches.set(referenceBatch,{provider,model,images,settings});
       setTimeout(()=>this.referenceBatches.delete(referenceBatch),60*60*1000).unref();
-      return {job:this.s.jobs.enqueue(kind,{projectId:k.project.id,artifactId:id,params:{id,i,sceneId:k.sceneId,storyboardVersion:k.a.current_version_id,revision:e?.revision,provider:provider.id,brief,referenceNotes,targetLayerIds,reuseLayer,libraryReuse,vision,referenceBatch}})};
+      return {job:this.s.jobs.enqueue(kind,{projectId:k.project.id,artifactId:id,params:{id,i,sceneId:k.sceneId,storyboardVersion:k.a.current_version_id,revision:e?.revision,provider:provider.id,brief,referenceNotes,targetLayerIds,reuseLayer,libraryReuse,analyzeVision,reviewVision,operation,dialogueCues,referenceBatch}})};
     }
     if(e)this.current(k,e);
     if(e?.state==='attached')return bad('Save a new draft to render a replacement for an attached clip.');
-    if(e?.state!=='approved'&&e?.state!=='rendered')return bad('Approve the animation first.');
+    if(!e?.animation||(e.state!=='approved'&&e.state!=='rendered'))return bad('Approve the animation first.');
     if(typeof b.preset!=='string'||!Object.hasOwn(ANIMATED_SVG_PRESETS,b.preset))return bad('Unknown render preset.');
     return {job:this.s.jobs.enqueue(kind,{projectId:k.project.id,artifactId:id,params:{id,i,sceneId:k.sceneId,storyboardVersion:k.a.current_version_id,revision:e.revision,preset:b.preset}})};
   }
@@ -173,11 +287,28 @@ export class AnimatedSvgStudio {
     }finally{await rm(temp,{recursive:true,force:true});}
   }
   private dims(k:Key,edge:number){const even=(n:number)=>Math.round(n/2)*2;const max=(edge===2160?3840:Infinity),r=Math.min(edge/Math.min(k.size.w,k.size.h),max/Math.max(k.size.w,k.size.h));return {width:even(k.size.w*r),height:even(k.size.h*r)};}
-  async preview(id:string,i:number,t:number,revision?:string){
-    const k=this.locate(id,i),e=revision?this.check(k,revision):this.get(k);
+  async preview(id:string,i:number,t:number,revision?:string,artworkOnly=false,historical=false){
+    const k=this.locate(id,i),e=revision?(historical?this.revision(k,revision):this.check(k,revision)):this.get(k);
     if(!e)throw new EngineError('NOT_FOUND','No animated artwork for this scene.');
-    const d=parseArtwork(e.svg), m=readMotion(e.animation,d), {width,height}=this.dims(k,360);
-    return this.raster(drawFrame(d,m,t,width,height),width,height);
+    if(!Number.isFinite(t))return bad('Use a finite preview time.');
+    const {width,height}=this.dims(k,360),backend=animatedSvgRenderPreference();
+    const time=artworkOnly?0:Math.max(0,Math.min(e.duration,t));
+    const key=[e.revision,width,height,backend,artworkOnly,time].join(':');
+    const now=Date.now(),cached=this.previews.get(key),pending=this.previewsInFlight.get(key);
+    if(cached&&cached.until>now)return cached.bytes;
+    if(pending)return pending;
+    if(this.previewsInFlight.size>=3)throw new EngineError('BUSY','Other frames are previewing; retry shortly.');
+    const d=parseArtwork(e.svg),m=e.animation&&!artworkOnly?readMotion(e.animation,d):{duration:e.duration,tracks:[]};
+    const run=this.raster(drawFrame(d,m,time,width,height),width,height).then(bytes=>{
+      for(const [entry,old] of this.previews)if(old.until<=Date.now())this.previews.delete(entry);
+      if(bytes.byteLength<=1_000_000){
+        if(this.previews.size>=8)this.previews.delete(this.previews.keys().next().value!);
+        this.previews.set(key,{bytes,until:Date.now()+12_000});
+      }
+      return bytes;
+    }).finally(()=>this.previewsInFlight.delete(key));
+    this.previewsInFlight.set(key,run);
+    return run;
   }
   capturedPrompt(id:string,i:number,revision:unknown,stage:keyof CapturedPrompts){
     const prompt=this.check(this.locate(id,i),revision)?.prompts?.[stage];
@@ -186,13 +317,20 @@ export class AnimatedSvgStudio {
   }
   async generate(ctx:JobCtx) {
     const p=ctx.params,k=this.jobKey(ctx),e=this.check(k,p.revision,true);
-    const settings=readSettings(k.project.settings.animatedSvg as Record<string,unknown>|undefined);
+    const operation=(p.operation??'scene') as GenerationOperation;
     const pinned=this.referenceBatches.get(p.referenceBatch);
     this.referenceBatches.delete(p.referenceBatch);
     if(!pinned)return bad('Provider selection expired. Choose Generate again to confirm the current provider.');
-    const {provider,model,images}=pinned;
+    const {provider,model,images,settings}=pinned;
+    const artOnly=operation==='artwork'||(operation==='scene'&&!!e&&!e.animation);
+    const baseArtworkPrompt=buildAnimatedSketchPrompt(k.scene,{
+      size:k.size,category:k.project.category??undefined,number:k.index+1,total:k.total,
+      styleNotes:k.styleNotes,captionSpace:k.project.settings.reserve_caption_space===true,
+    });
+    const additionalArt=artOnly&&!p.targetLayerIds&&p.brief&&p.brief!==k.scene.visual_description.trim()?p.brief:undefined;
+    const stageDefaults=artOnly&&settings.strategy==='multi-pass'?{artDirection:true,renderedReview:settings.visualReview,targetedCorrections:true}:{};
     const reusable=settings.reuseApproved?this.list(k.a.id).filter((v,i)=>i!==k.index&&v&&v.state!=='draft').slice(0,6):[];
-    const vision = p.vision && provider.generateVision ? provider.generateVision.bind(provider) : undefined;
+    const vision = provider.generateVision?.bind(provider);
     const reuse=reusable.map(x=>({id:x!.revision,version:x!.revision,kind:'background',notes:'Approved scene layers: '+x!.layers.join(', '),layers:undefined as {target:string;svg:string}[]|undefined}));
     if(p.reuseLayer){
       const r=p.reuseLayer,source=this.get(this.locate(p.id,r.fromIndex));
@@ -203,47 +341,58 @@ export class AnimatedSvgStudio {
       const asset=this.libraryItem(p.libraryReuse.id);
       reuse.unshift({id:asset.id,version:asset.revision,kind:asset.kind,notes:'Explicitly selected immutable library artwork',layers:[extractApprovedGroup(asset.svg,asset.groupId,p.libraryReuse.targetId)]});
     }
-    const prompts:CapturedPrompts={};
-    const generated=await generateAnimatedScene({
-      provider,model,settings,
-      baseArtworkPrompt:buildAnimatedSketchPrompt(k.scene,{
-        size:k.size,category:k.project.category??undefined,number:k.index+1,total:k.total,
-        styleNotes:k.styleNotes,captionSpace:k.project.settings.reserve_caption_space===true,
-      }),
+    const motionOperation=operation==='motion'||operation==='refine-motion';
+    const prompts:CapturedPrompts=motionOperation?{baseArtwork:e?.prompts?.baseArtwork}:{};
+    const opts:GenerateAnimatedSceneOptions={
+      provider,model,settings:{...settings,stages:{...stageDefaults,...settings.stages}},
+      baseArtworkPrompt:additionalArt?baseArtworkPrompt+'\nAdditional scene artwork direction: '+additionalArt:baseArtworkPrompt,
+      dialogueCues:p.dialogueCues,
       scene:{id:k.sceneId,visualDescription:[k.scene.visual_description,p.brief].filter(Boolean).join('\n'),duration:Math.min(60,Math.max(0.1,k.scene.target_duration??5)),width:k.size.w,height:k.size.h,context:k.scene.animation_plan?JSON.stringify(k.scene.animation_plan):undefined},
       referenceNotes:p.referenceNotes,
       reuse,images,
-      ...(vision?{
-        analyzeReferences:({images:refs,prompt,signal})=>vision({model,prompt,images:refs.map(x=>x.bytes),signal}),
-        visionReview:({image,prompt,signal})=>vision({model,prompt,images:[image],signal}),
-      }:{}),
-      ...(e&&p.targetLayerIds?{refine:{svg:e.svg,animation:e.animation,rig:e.rig,scene:e.scene,targetLayerIds:p.targetLayerIds,notes:p.brief}}:{}),
+      ...(vision&&(p.analyzeVision||p.vision)?{analyzeReferences:({images:refs,prompt,signal})=>vision({model,prompt,images:refs.map(x=>x.bytes),signal})}:{}),
+      ...(vision&&(p.reviewVision||p.vision)?{visionReview:({image,prompt,signal})=>vision({model,prompt,images:[image],signal})}:{}),
+      ...(operation==='motion'&&e?{motionOnly:{svg:e.svg,scene:e.scene}}:{}),
+      ...(operation==='refine-motion'&&e?{refineMotion:{svg:e.svg,animation:e.animation,rig:e.rig,scene:e.scene,targetLayerIds:p.targetLayerIds,notes:p.brief}}:{}),
+      ...(!motionOperation&&e&&p.targetLayerIds?{refine:{svg:e.svg,animation:e.animation,rig:e.rig,scene:e.scene,targetLayerIds:p.targetLayerIds,notes:p.brief}}:{}),
       signal:ctx.signal,
       onPromptRequest:(stage,prompt)=>{if(Buffer.byteLength(prompt,'utf8')<=128_000)prompts[stage]=prompt;},
       onProgress:(fraction,message)=>ctx.progress(fraction,message),
       validateArtwork:parseArtwork,
       validate:(v)=>{const d=parseArtwork(v.svg);const m=readMotion(v.animation,d);readRig(v.rig,d,m);},
       rasterizePreview:(svg,signal)=>{const d=parseArtwork(svg);const {width,height}=this.dims(k,360);return this.raster(drawFrame(d,{duration:1,tracks:[]},0,width,height),width,height,signal);},
-    });
+    };
+    this.check(k,p.revision,true);
+    if(motionOperation&&(!e?.artworkApproved))return bad('This artwork revision has not been approved.');
+    const generated=artOnly?await generateAnimatedArtwork(opts):await generateAnimatedScene(opts);
     this.jobKey(ctx);
     if(ctx.signal.aborted)throw new EngineError('CANCELLED','Animation generation cancelled.');
-    const saved=this.import(p.id,p.i,{...generated,revision:p.revision,scene:{metadata:generated.scene,artPlan:generated.artPlan,review:generated.review,finalReview:generated.finalReview,referenceAnalysis:generated.referenceAnalysis,reused:generated.reused}},{passes:generated.passes,provider:provider.id,prompts});
+    if(motionOperation&&generated.svg!==e?.svg)throw new EngineError('PROVIDER_ERROR','A motion-only request attempted to change artwork.');
+    const metadata:Record<string,unknown>={metadata:'scene' in generated?generated.scene:undefined,artPlan:generated.artPlan,review:generated.review,finalReview:generated.finalReview,referenceAnalysis:generated.referenceAnalysis,reused:generated.reused,preparation:generated.preparation};
+    if(motionOperation){
+      const prior=e?.scene as {artwork?:unknown;metadata?:unknown}|undefined;
+      metadata.artwork=prior?.artwork??(e?.animation?undefined:prior);
+      if(operation==='refine-motion')metadata.metadata=prior?.metadata??prior;
+    }
+    const saved=this.savePackage(k,{...generated,revision:p.revision,scene:metadata},{passes:generated.passes,provider:provider.id,prompts,artworkOnly:artOnly,artworkApproved:motionOperation,
+      artworkSource:motionOperation&&e?.artworkHash?(e.artworkSource?.kind==='still'?e.artworkSource:{kind:'animated',revision:e.revision,sha256:e.artworkHash}):e&&p.targetLayerIds&&e.artworkHash?{kind:'animated',revision:e.revision,sha256:e.artworkHash}:undefined});
     return {revision:saved.revision,state:saved.state};
   }
   async render(ctx:JobCtx){
     const p=ctx.params,k=this.jobKey(ctx),e=this.check(k,p.revision)!;
     this.current(k,e);
-    if(e.state==='draft'||e.state==='attached')return bad('Approve an unattached animation first.');
+    if(!e.animation||e.state==='draft'||e.state==='attached')return bad('Approve an unattached animation first.');
     const d=parseArtwork(e.svg), m=readMotion(e.animation,d);
     if(typeof p.preset!=='string'||!Object.hasOwn(ANIMATED_SVG_PRESETS,p.preset))return bad('Unknown render preset.');
     const preset=ANIMATED_SVG_PRESETS[p.preset as keyof typeof ANIMATED_SVG_PRESETS],{width,height}=this.dims(k,preset.shortEdge);
     const outputPath=this.filename(k,e); const fps=p.preset==='ultra'?readSettings(k.project.settings.animatedSvg as Record<string,unknown>|undefined).fps:preset.fps;
-    if(e.video?.width===width&&e.video.height===height&&e.video.fps===fps&&await stat(outputPath).then(x=>x.isFile()).catch(()=>false)){ctx.progress(1,'Using existing verified render');return {revision:e.revision,video:e.video};}
+    const backend=animatedSvgRenderPreference();
+    if(e.video?.width===width&&e.video.height===height&&e.video.fps===fps&&animatedSvgRenderCacheMatches(e.video.backend,backend)&&await stat(outputPath).then(x=>x.isFile()).catch(()=>false)){ctx.progress(1,'Using existing verified render');return {revision:e.revision,video:e.video};}
     await mkdir(this.dir(k),{recursive:true});
     const cache=join(this.s.config.root,'cache');await mkdir(cache,{recursive:true});
     const staging=await mkdtemp(join(cache,'animated-svg-'));
     try{
-      const {outputPath:_,...video}=await renderAnimatedSvg({outputPath:join(staging,'scene.mp4'),width,height,fps,durationSeconds:m.duration,frameAt:(t)=>drawFrame(d,m,t,width,height),assertSafeSvg:parseArtwork,ffprobeOverride:this.s.config.ffprobePath,signal:ctx.signal,onProgress:(p)=>ctx.progress(p.stage==='verifying'?0.98:Math.min(.97,p.completed/Math.max(1,p.total)),p.stage==='frames'?'Preparing animation frames':p.stage==='encoding'?'Encoding MP4':'Verifying output')});
+      const {outputPath:_,...video}=await renderAnimatedSvg({outputPath:join(staging,'scene.mp4'),width,height,fps,durationSeconds:m.duration,backend,onBackend:(name)=>ctx.progress(0.01,`Preparing ${name} animation frames`),frameAt:(t)=>drawFrame(d,m,t,width,height),assertSafeSvg:parseArtwork,ffprobeOverride:this.s.config.ffprobePath,signal:ctx.signal,onProgress:(p)=>ctx.progress(p.stage==='frames'?.02+.76*p.completed/Math.max(1,p.total):p.stage==='encoding'?.79+.17*p.completed/Math.max(1,p.total):.98,p.stage==='frames'?'Preparing animation frames':p.stage==='encoding'?'Encoding MP4':'Verifying output')});
       this.jobKey(ctx);
       const fresh=this.check(k,p.revision)!;
       if(ctx.signal.aborted)throw new EngineError('CANCELLED','Animation render cancelled.');
@@ -275,15 +424,15 @@ export class AnimatedSvgStudio {
     return entry;
   }
   part(id:string,i:number,name:string,revision?:string){
-    const k=this.locate(id,i),e=revision?this.check(k,revision):this.get(k);
+    const k=this.locate(id,i),e=revision?this.revision(k,revision):this.get(k);
     if(!e)throw new EngineError('NOT_FOUND','No package for this scene.');
-    const data:Record<string,unknown>={'animation.json':e.animation,'rig.json':e.rig,'scene.json':{id:k.sceneId,revision:e.revision,duration:e.duration,state:e.state,provider:e.provider,metadata:e.scene,passes:e.passes,layers:e.layers,video:e.video}};
+    const data:Record<string,unknown>={'animation.json':e.animation,'rig.json':e.rig,'scene.json':{id:k.sceneId,revision:e.revision,duration:e.duration,state:e.state,provider:e.provider,artworkHash:e.artworkHash,artworkApproved:e.artworkApproved,artworkSource:e.artworkSource,parentRevision:e.parentRevision,metadata:e.scene,passes:e.passes,layers:e.layers,video:e.video}};
     if(name==='scene.svg')return {mime:'image/svg+xml',bytes:Buffer.from(canonicalArtwork(parseArtwork(e.svg)))};
     if(!Object.hasOwn(data,name)||data[name]===undefined)throw new EngineError('NOT_FOUND','This package file is unavailable.');
     return {mime:'application/json',bytes:Buffer.from(JSON.stringify(data[name],null,2))};
   }
-  async video(id:string,i:number,revision?:string){
-    const k=this.locate(id,i),e=revision?this.check(k,revision):this.get(k);
+  async video(id:string,i:number,revision?:string,historical=false){
+    const k=this.locate(id,i),e=revision?(historical?this.revision(k,revision):this.check(k,revision)):this.get(k);
     if(!e?.video)throw new EngineError('NOT_FOUND','Render a video first.');
     const path=this.filename(k,e);try{return {path,bytes:(await stat(path)).size};}catch{throw new EngineError('NOT_FOUND','Render file no longer exists.');}
   }
@@ -295,19 +444,28 @@ export class AnimatedSvgStudio {
     const art=this.s.engine.list(k.project.id,{kind:'scene_asset'}).find(a=>a.scene_id===k.sceneId);
     if(!art)throw new EngineError('NOT_FOUND','Scene asset artifact not found.');
     if(art.state==='approved'&&b.reopen!==true)throw new EngineError('PROTECTED','Reopen the approved scene asset in Visuals before replacing it.');
+    const sceneMeta=e.scene as {cameraBaked?:unknown;metadata?:{cameraBaked?:unknown}}|undefined;
+    const cameraBaked=sceneMeta?.metadata?.cameraBaked===true||sceneMeta?.cameraBaked===true;
+    const sourceFingerprint=e.sourceFingerprint??this.fingerprint(k);
+    const attachment={camera_baked:cameraBaked,source_fingerprint:sourceFingerprint,duration_seconds:e.video.durationSeconds};
+    const original=e.artworkSource?.kind==='still'?e.artworkSource.assetId:undefined;
     let assetId:string;
     try{
-      const asset=await this.s.assets.importLocal(k.project.id,this.filename(k,e),{type:'motion_graphic',name:'Animated SVG: scene '+(i+1),license:{type:e.provider?'ai-generated':'other',commercial_use:'unknown',notes:'Approved animated scene. Verify rights to imported artwork and provider outputs before commercial use.'},provider:e.provider??'animated-svg-import',tags:['animated-svg'],params:{scene_id:k.sceneId,revision:e.revision}});
+      const asset=await this.s.assets.importLocal(k.project.id,this.filename(k,e),{type:'motion_graphic',name:'Animated SVG: scene '+(i+1),license:{type:e.provider?'ai-generated':'other',commercial_use:'unknown',notes:'Approved animated scene. Verify rights to imported artwork and provider outputs before commercial use.'},provider:e.provider??'animated-svg-import',tags:['animated-svg'],params:{scene_id:k.sceneId,revision:e.revision,animated_svg:attachment,...(original?{source_asset_id:original}:{})}});
       assetId=asset.id;
     }catch(err){
       const x=err as EngineError;
       if(x.code!=='DUPLICATE_ASSET'||typeof (x.details as any)?.existing_id!=='string')throw err;
       assetId=(x.details as any).existing_id;
+      const existing=this.s.assets.get(assetId);
+      const meta=existing.params.animated_svg as {camera_baked?:unknown;source_fingerprint?:unknown}|undefined;
+      if(existing.params.scene_id!==k.sceneId||meta?.source_fingerprint!==sourceFingerprint||meta.camera_baked!==cameraBaked)
+        throw new EngineError('DUPLICATE_ASSET','Identical video already exists with a different scene or provenance. Render this scene with a different preset or revision.');
     }
     const fresh=this.check(k,b.revision)!;
     this.current(this.locate(id,i),fresh);
     if(this.locate(id,i).a.current_version_id!==k.a.current_version_id)throw new EngineError('STALE','Storyboard changed before attachment.');
     this.s.setSceneAssets(k.sceneId,[{asset_id:assetId,role:'primary'}],assetId,{reopen:b.reopen===true});
-    return this.put(k,{...fresh,assetId,state:'attached'});
+    return this.put(k,{...fresh,assetId,cameraBaked,state:'attached'});
   }
 }

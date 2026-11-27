@@ -268,6 +268,8 @@ export function buildApi(engine: Engine, config: Partial<AppConfig> = {}, llm?: 
 
   // Animated SVG is an opt-in companion to the existing static sketch pipeline.
   app.put('/projects/:id/animated-svg-settings', async (req) => studio.animation.settings((req.params as { id: string }).id, body(req)));
+  app.get('/animated-motion-library',async()=>studio.animation.motionLibrary());
+  app.get('/animated-motion-library/:id',async(req,reply)=>reply.header('Cache-Control','no-store').send(studio.animation.motionLibraryClip((req.params as {id:string}).id)));
   app.get('/animated-svg-library', async () => studio.animation.library());
   app.get('/artifacts/:id/animated-svg', async (req) => studio.animation.list((req.params as { id: string }).id));
   const sceneAnimation = (req: {params?:unknown}) => {
@@ -282,6 +284,13 @@ export function buildApi(engine: Engine, config: Partial<AppConfig> = {}, llm?: 
     reply.header('Cache-Control','no-store');
     return studio.animation.capturedPrompt(id,i,(req.query as {revision?:string}).revision,stage==='artwork'?'baseArtwork':'motion');
   });
+  app.get('/artifacts/:id/animated-svg/:index/history', async (req) => {const {id,i}=sceneAnimation(req);return studio.animation.history(id,i);});
+  app.post('/artifacts/:id/animated-svg/:index/restore', async (req) => {const {id,i}=sceneAnimation(req);return studio.animation.restoreRevision(id,i,body(req));});
+  app.post('/artifacts/:id/animated-svg/:index/from-still', async (req) => {const {id,i}=sceneAnimation(req);return studio.animation.copyApprovedStill(id,i,body(req).revision);});
+  app.post('/artifacts/:id/animated-svg/:index/approve-artwork', async (req) => {const {id,i}=sceneAnimation(req);return studio.animation.approveArtwork(id,i,body(req).revision);});
+  app.post('/artifacts/:id/animated-svg/:index/motion-clip/export', async (req) => {const {id,i}=sceneAnimation(req);return studio.animation.exportClip(id,i,body(req));});
+  app.post('/artifacts/:id/animated-svg/:index/motion-clip/save', async (req) => {const {id,i}=sceneAnimation(req);return studio.animation.saveMotionClip(id,i,body(req));});
+  app.post('/artifacts/:id/animated-svg/:index/motion-clip/bind', async (req) => {const {id,i}=sceneAnimation(req);return studio.animation.bindClip(id,i,body(req));});
   app.post('/artifacts/:id/animated-svg/:index/import', async (req) => {const {id,i}=sceneAnimation(req);return studio.animation.import(id,i,body(req));});
   app.post('/artifacts/:id/animated-svg/:index/library', async (req) => {const {id,i}=sceneAnimation(req);return studio.animation.promote(id,i,body(req));});
   app.post('/artifacts/:id/animated-svg/:index/reuse', async (req) => {const {id,i}=sceneAnimation(req);return studio.animation.reuse(id,i,body(req));});
@@ -290,14 +299,14 @@ export function buildApi(engine: Engine, config: Partial<AppConfig> = {}, llm?: 
   app.post('/artifacts/:id/animated-svg/:index/render', async (req,reply) => {const {id,i}=sceneAnimation(req);return reply.status(202).send(studio.animation.start(id,i,body(req),'animated_svg_render'));});
   app.post('/artifacts/:id/animated-svg/:index/attach', async (req) => {const {id,i}=sceneAnimation(req);return studio.animation.attach(id,i,body(req));});
   app.get('/artifacts/:id/animated-svg/:index/preview', async (req,reply) => {
-    const {id,i}=sceneAnimation(req);const {time,revision}=req.query as {time?:string;revision?:string};
-    return reply.header('Cache-Control','no-store').type('image/png').send(await studio.animation.preview(id,i,Number(time??0),revision));
+    const {id,i}=sceneAnimation(req);const {time,revision,artwork}=req.query as {time?:string;revision?:string;artwork?:string};
+    return reply.header('Cache-Control','no-store').type('image/png').send(await studio.animation.preview(id,i,Number(time??0),revision,artwork==='1'));
   });
   app.get('/artifacts/:id/animated-svg/:index/package/:file',async(req,reply)=>{
     const {id,i}=sceneAnimation(req),{file} = req.params as {file:string};
     const revision=(req.query as {revision?:string}).revision;
-    if(file==='preview.png')return reply.header('Content-Disposition','attachment; filename="preview.png"').type('image/png').send(await studio.animation.preview(id,i,0,revision));
-    if(file==='scene.mp4'){const {path,bytes}=await studio.animation.video(id,i,revision);return reply.header('Content-Disposition','attachment; filename="scene.mp4"').header('Content-Length',bytes).type('video/mp4').send(createReadStream(path));}
+    if(file==='preview.png')return reply.header('Content-Disposition','attachment; filename="preview.png"').type('image/png').send(await studio.animation.preview(id,i,0,revision,false,true));
+    if(file==='scene.mp4'){const {path,bytes}=await studio.animation.video(id,i,revision,true);return reply.header('Content-Disposition','attachment; filename="scene.mp4"').header('Content-Length',bytes).type('video/mp4').send(createReadStream(path));}
     const {mime,bytes}=studio.animation.part(id,i,file,revision);
     return reply.header('Content-Disposition',`attachment; filename="${file}"`).header('X-Content-Type-Options','nosniff').type(mime).send(bytes);
   });

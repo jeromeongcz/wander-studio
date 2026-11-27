@@ -12,6 +12,7 @@ const MAX_REFINEMENT_LAYERS = 6;
 const GROUP_ID = /^[A-Za-z_][A-Za-z0-9_.:-]{0,79}$/;
 
 const STYLES = {
+  'archival-sepia': 'Archival Sepia',
   'dark-folklore': 'Dark Folklore Horror',
   'cinematic-25d': 'Cinematic Semi-realistic 2.5D',
   'professional-cartoon': 'Professional 2D Cartoon',
@@ -38,6 +39,13 @@ const CAPABILITIES = {
   advancedShading: 'Advanced shading and textures', visualReview: 'Review rendered artwork when supported', reuseApproved: 'Reuse approved assets',
 } as const;
 type Capability = keyof typeof CAPABILITIES;
+const OPTIONAL_STAGES = {
+  referenceAnalysis:'Reference analysis', artDirection:'Art direction', composition:'Composition planning',
+  anatomy:'Anatomy cleanup', environmentMaterials:'Materials cleanup', lighting:'Lighting refinement',
+  texture:'Texture refinement', renderedReview:'Rendered quality review', targetedCorrections:'Targeted corrections',
+  animationPreparation:'Animation preparation',
+} as const;
+type OptionalStage = keyof typeof OPTIONAL_STAGES;
 
 export interface AnimatedSvgSettings {
   mode: keyof typeof MODES;
@@ -55,6 +63,9 @@ export interface AnimatedSvgSettings {
   visualReview: boolean;
   reuseApproved: boolean;
   customDirection: string;
+  stages?: Partial<Record<OptionalStage, boolean>>;
+  maxRevisions?: number;
+  reviewFallback?: 'source-only' | 'skip';
 }
 export const DEFAULT_ANIMATED_SVG: AnimatedSvgSettings = {
   mode: 'static', quality: 'professional', style: 'dark-folklore', fps: 30, complexity: 'standard',
@@ -81,6 +92,24 @@ export function AnimatedSvgSettingsFields({ value, change }: { value: AnimatedSv
       <div className="row gap wrap" role="group" aria-label="Animation and illustration capabilities">
         {(Object.keys(CAPABILITIES) as Capability[]).map((key) => <label key={key} className="row gap small"><input type="checkbox" checked={value[key]} onChange={(e) => set(key, e.target.checked)} /> {CAPABILITIES[key]}</label>)}
       </div>
+      <details className="stack">
+        <summary>Optional generation and review passes</summary>
+        <div className="form">
+          {(Object.keys(OPTIONAL_STAGES) as OptionalStage[]).map((stage) => <Field key={stage} label={OPTIONAL_STAGES[stage]}>
+            <select value={value.stages?.[stage] === undefined ? 'auto' : value.stages[stage] ? 'on' : 'off'} onChange={(e) => {
+              const next = {...value.stages};
+              if (e.target.value === 'auto') delete next[stage]; else next[stage] = e.target.value === 'on';
+              set('stages', next);
+            }}><option value="auto">Use workflow default</option><option value="on">On</option><option value="off">Off</option></select>
+          </Field>)}
+          <Field label="Automatic correction limit"><select value={value.maxRevisions ?? 1} onChange={(e) => set('maxRevisions', Number(e.target.value))}>
+            {[0,1,2,3].map(n => <option key={n} value={n}>{n}</option>)}
+          </select></Field>
+          <Field label="When pixel review is unavailable"><select value={value.reviewFallback ?? 'source-only'} onChange={(e) => set('reviewFallback', e.target.value as 'source-only'|'skip')}>
+            <option value="source-only">Use source review, clearly labeled</option><option value="skip">Skip review</option>
+          </select></Field>
+        </div>
+      </details>
       <div className="row gap wrap">
         <p className="hint">{MODES[value.mode]} · {QUALITIES[value.quality]} · {value.fps} FPS. Static remains the default; animated clips are reviewed separately.</p>
         <CopyBtn text={JSON.stringify(value, null, 2)} label="Copy configuration" />
@@ -104,6 +133,10 @@ interface AnimatedRecord {
   passes?: unknown[];
   hasArtworkPrompt?: boolean;
   hasMotionPrompt?: boolean;
+  artworkApproved?: boolean;
+  parentRevision?: string;
+  artworkHash?: string;
+  artworkSource?: {kind:string;assetId?:string;revision?:string};
   job?: { id: string };
   layers?: string[];
 }
@@ -145,13 +178,14 @@ function PackageField({ label, value, change, accept, max, required }: { label: 
   );
 }
 
-export function AnimatedSvgSceneModal({ artifactId, projectId, sceneId, index, title, brief, targetDuration, approvedStoryboard, onAttached, onClose }: {
-  artifactId: string; projectId: string; sceneId?: string; index: number; title: string; brief: string; targetDuration: number; approvedStoryboard: boolean; onAttached: () => void; onClose: () => void;
+export function AnimatedSvgSceneModal({ artifactId, projectId, sceneId, index, title, brief, targetDuration, approvedStoryboard, hasApprovedStill, onAttached, onClose }: {
+  artifactId: string; projectId: string; sceneId?: string; index: number; title: string; brief: string; targetDuration: number; approvedStoryboard: boolean; hasApprovedStill?: boolean; onAttached: () => void; onClose: () => void;
 }) {
   const path = `/artifacts/${artifactId}/animated-svg/${index}`;
   const data = useAsync(() => api.get<(AnimatedRecord | null)[]>(`/artifacts/${artifactId}/animated-svg`), [artifactId]);
   const jobs = useAsync(() => api.get<Job[]>(`/jobs?project_id=${projectId}`), [projectId]);
   const library = useAsync(listAnimatedVectors, []);
+  const history = useAsync(() => api.get<{revision:string;saved_at:string;state:string;current:boolean;hasVideo?:number}[]>(`${path}/history`), [path]);
   const provider = useAsync(() => api.get<{ active: string | null; selectedModel?: string | null }>('/llm/active'), []);
   const { push, fail } = useToast();
   const record = data.data?.[index] ?? null;
@@ -168,6 +202,16 @@ export function AnimatedSvgSceneModal({ artifactId, projectId, sceneId, index, t
   const [referenceImages, setReferenceImages] = useState<SceneReferenceImage[]>([]);
   const [preparingImages, setPreparingImages] = useState(false);
   const [reviewPreview, setReviewPreview] = useState(false);
+  const [motionBrief, setMotionBrief] = useState('');
+  const [dialogueCues, setDialogueCues] = useState('');
+  const [motionTargets, setMotionTargets] = useState<string[]>([]);
+  const savedMotion = useAsync(() => api.get<{id:string;name:string}[]>('/animated-motion-library'), []);
+  const [clipRoles, setClipRoles] = useState('');
+  const [clipName, setClipName] = useState('');
+  const [clipData, setClipData] = useState('');
+  const [clipBindings, setClipBindings] = useState('');
+  const [artworkPreviewed, setArtworkPreviewed] = useState<string>();
+  const [artworkPreviewError, setArtworkPreviewError] = useState(false);
   const [reuseSource, setReuseSource] = useState('');
   const [reuseGroup, setReuseGroup] = useState('');
   const [reuseTarget, setReuseTarget] = useState('');
@@ -204,7 +248,10 @@ export function AnimatedSvgSceneModal({ artifactId, projectId, sceneId, index, t
   }, [pending, data.reload]);
   useEffect(() => {
     setTime(0); setPreviewTime(0); setPreviewError(false);
+    history.reload();
     setTargetLayers([]);
+    setMotionTargets([]);
+    setArtworkPreviewError(false);
     setProviderPrompt(undefined);
     setLibrarySourceGroup('');
     setLibraryName('');
@@ -220,7 +267,7 @@ export function AnimatedSvgSceneModal({ artifactId, projectId, sceneId, index, t
     jobs.reload();
     data.reload();
   };
-  const mutate = async (action: 'import' | 'approve' | 'attach' | 'reuse', body?: ObjectRecord) => {
+  const mutate = async (action: 'import' | 'approve' | 'approve-artwork' | 'from-still' | 'restore' | 'attach' | 'reuse', body?: ObjectRecord) => {
     if (action === 'attach') await withReopen((reopen) => api.post(`${path}/attach`, { revision, reopen, ...body }));
     else await api.post(`${path}/${action}`, { revision, ...body });
     data.reload();
@@ -239,7 +286,7 @@ export function AnimatedSvgSceneModal({ artifactId, projectId, sceneId, index, t
     if (!svg.trim()) throw new Error('Supply the layered SVG.');
     if (record && record.state !== 'draft' && !confirm('Save this as a new draft? It must be approved again before rendering.')) return;
     await mutate('import', {
-      revision: editRevision.current, svg, animation: parse(animation, 'Animation'), rig: parse(rig, 'Rig', true), scene: parse(scene, 'Scene metadata', true),
+      revision: editRevision.current, svg, artworkOnly: !animation.trim(), animation: parse(animation, 'Animation', true), rig: parse(rig, 'Rig', true), scene: parse(scene, 'Scene metadata', true),
     });
     setEditing(false);
     push('ok', 'Animated package saved as a draft.');
@@ -259,32 +306,37 @@ export function AnimatedSvgSceneModal({ artifactId, projectId, sceneId, index, t
     } catch (error) { fail(error); }
     finally { setPreparingImages(false); }
   };
-  const generateScene = async (targeted: boolean) => {
+  const generateScene = async (operation: 'artwork' | 'motion' | 'refine-motion', targeted = false) => {
+    const isArt = operation === 'artwork';
+    const isMotionRefinement = operation === 'refine-motion';
     // Refresh before displaying consent: Settings may have changed in another tab.
     const active = await api.get<{ active: string | null; selectedModel?: string | null }>('/llm/active');
     if (!active.active) throw new Error('Select an AI provider in Settings first.');
     provider.setData(active);
     const providerName = active.active;
-    const intent = targeted ? 'Refine the selected layers only?' : 'Generate a layered scene?';
+    const intent = isMotionRefinement ? 'Refine motion on the selected targets?' : !isArt ? 'Generate motion for this approved artwork?' : targeted ? 'Refine the selected artwork layers only?' : 'Generate layered artwork?';
     if (!confirm(`${intent} The scene brief and reference notes will be sent to ${providerName}. The result will need fresh human approval.`)) return;
-    const images = referenceImages;
-    const allowVision = images.length > 0 || reviewPreview;
-    if (allowVision) {
-      const what = images.length ? `${images.length} resized reference image${images.length === 1 ? '' : 's'} and any generated previews used for visual review` : 'generated previews used for visual review';
-      if (!confirm(`Also send ${what} to ${providerName}? Only include images you have permission to share.`)) return;
+    const images = isArt ? referenceImages : [];
+    if (images.length && !confirm(`Send ${images.length} resized reference image(s) to ${providerName} for analysis? Only include images you have permission to share.`)) return;
+    const allowReview = isArt && reviewPreview;
+    if (allowReview && !confirm(`Send rendered artwork previews to ${providerName} for visual review?`)) return;
+    const libraryReuse = isArt && !targeted && libraryId ? { id: libraryId, targetId: libraryTarget.trim() } : undefined;
+    const reuseLayer = isArt && !targeted && reuseSource ? { fromIndex: Number(reuseSource), sourceGroupId: reuseGroup, targetId: reuseTarget.trim() } : undefined;
+    let cues:unknown;
+    if(operation==='motion'&&dialogueCues.trim()){
+      try { cues = JSON.parse(dialogueCues); } catch { throw new Error('Dialogue cues must be a valid JSON array.'); }
+      if(!Array.isArray(cues)) throw new Error('Dialogue cues must be a JSON array.');
     }
-    const libraryReuse = !targeted && libraryId ? { id: libraryId, targetId: libraryTarget.trim() } : undefined;
-    const reuseLayer = !targeted && reuseSource ? { fromIndex: Number(reuseSource), sourceGroupId: reuseGroup, targetId: reuseTarget.trim() } : undefined;
     await start('generate', {
-      brief: targeted ? refineFeedback.trim() : prompt,
-      referenceNotes: references,
-      consent: true,
-      expectedProvider: providerName,
-      ...(images.length ? { references: images } : {}),
-      ...(allowVision ? { visionConsent: true } : {}),
+      operation, brief: isArt ? (targeted ? refineFeedback.trim() : prompt) : motionBrief,
+      ...(isArt ? { referenceNotes: references } : {}),
+      consent: true, expectedProvider: providerName,
+      ...(images.length ? { references: images, referenceVisionConsent: true } : {}),
+      ...(allowReview ? { reviewVisionConsent: true } : {}),
       ...(reuseLayer ? { reuseLayer } : {}),
       ...(libraryReuse ? { libraryReuse } : {}),
-      ...(targeted ? { targetLayerIds: targetLayers } : {}),
+      ...(targeted || isMotionRefinement ? { targetLayerIds: isArt ? targetLayers : motionTargets } : {}),
+      ...(cues ? { dialogueCues: cues } : {}),
     });
   };
   const duration = record?.duration ?? (typeof record?.animation?.duration === 'number' ? record.animation.duration : targetDuration);
@@ -305,8 +357,9 @@ export function AnimatedSvgSceneModal({ artifactId, projectId, sceneId, index, t
     setLibraryName('');
     push('ok', 'Approved layer copied to the local vector library.');
   };
-  const partFiles = record ? ['scene.svg', 'animation.json', ...(record.rig ? ['rig.json'] : []), 'scene.json'] : [];
+  const partFiles = record ? ['scene.svg', ...(record.animation ? ['animation.json'] : []), ...(record.rig ? ['rig.json'] : []), 'scene.json'] : [];
   const packageUrl = (file: string) => url(`${path}/package/${file}?revision=${encodeURIComponent(revision ?? '')}`);
+  const artworkPreviewUrl = url(`${path}/preview?revision=${encodeURIComponent(revision ?? '')}&artwork=1`);
   const previewUrl = url(`${path}/preview?revision=${encodeURIComponent(revision ?? '')}&time=${previewTime}&attempt=${previewAttempt}`);
 
   const exactPrompt = (stage: 'artwork' | 'motion') => {
@@ -347,6 +400,12 @@ export function AnimatedSvgSceneModal({ artifactId, projectId, sceneId, index, t
           {(['artwork', 'animation', 'layers', 'render'] as const).map((name) => <button key={name} type="button" className={`chip${tab === name ? ' on' : ''}`} aria-pressed={tab === name} onClick={() => setTab(name)}>{name[0].toUpperCase() + name.slice(1)}</button>)}
         </div>
         {tab === 'artwork' && <>
+          {record && revision && <>
+            <Pill tone={record.artworkApproved ? 'good' : 'warn'}>{record.artworkApproved ? 'Artwork approved' : 'Artwork awaiting approval'}</Pill>
+            {!artworkPreviewError && <img className="animated-preview" key={artworkPreviewUrl} src={artworkPreviewUrl} alt="Current layered artwork without motion" onLoad={() => setArtworkPreviewed(revision)} onError={() => setArtworkPreviewError(true)} />}
+            {artworkPreviewError && <p role="status" className="notice warn">The artwork preview could not be loaded.</p>}
+            {!record.artworkApproved && <Btn kind="primary" disabled={working || artworkPreviewError || artworkPreviewed !== revision} onClick={() => mutate('approve-artwork')}>Approve previewed artwork</Btn>}
+          </>}
           <Field label="Scene art direction" wide><textarea value={prompt} onChange={(e) => setPrompt(e.target.value)} maxLength={4000} rows={3} placeholder="Anatomy, materials, foreground, background, lighting and mood…" /></Field>
           <Field label="Reference notes (optional)" wide><textarea value={references} onChange={(e) => setReferences(e.target.value)} maxLength={3000} rows={2} placeholder="Describe an approved character, background, costume, palette or style reference." /></Field>
           <Field label="Reference images (optional)" hint="Choose up to two PNG, JPEG, or WebP files. They are resized on this device and not sent until you explicitly agree. A compatible vision model is required." wide>
@@ -407,7 +466,11 @@ export function AnimatedSvgSceneModal({ artifactId, projectId, sceneId, index, t
           </details>
           <div className="row gap wrap">
             <Btn kind="primary" disabled={!provider.data?.active || !prompt.trim() || !reuseReady || !libraryReady || working || preparingImages || !!data.error || (data.loading && !data.data)}
-              onClick={() => generateScene(false)}>Generate layered scene</Btn>
+              onClick={() => generateScene('artwork')}>Generate layered artwork</Btn>
+            {hasApprovedStill && <Btn disabled={working} onClick={async () => {
+              if (record && !confirm('Start a new layered draft from the approved still? The existing revision stays in history.')) return;
+              await mutate('from-still');
+            }}>Copy approved still SVG</Btn>}
             <Btn disabled={working} onClick={beginEdit}>{record ? 'Edit or replace package…' : 'Import layered SVG + JSON…'}</Btn>
           </div>
           {provider.data && !provider.data.active && <p className="hint">Select Codex, Claude, Ollama, or another available provider in <a href="#/settings">Settings</a> to generate. Import is always available.</p>}
@@ -429,11 +492,69 @@ export function AnimatedSvgSceneModal({ artifactId, projectId, sceneId, index, t
         </>}
         {tab === 'animation' && <>
           {exactPrompt('motion')}
-          {record && !previewError && <img className="animated-preview" key={previewUrl} src={previewUrl} alt={`Scene ${index + 1} at ${previewTime.toFixed(2)} seconds`} onLoad={() => setPreviewedRevision(revision)} onError={() => setPreviewError(true)} />}
-          {record && previewError && <div className="notice warn">This frame could not be previewed. <Btn small onClick={() => { setPreviewError(false); setPreviewAttempt((x) => x + 1); }}>Retry frame</Btn></div>}
-          {record ? <Field label={`Preview playhead · ${time.toFixed(2)} s`} wide><input type="range" aria-label="Preview playhead in seconds" min={0} max={maxTime} step={0.02} value={time} onChange={(e) => setTime(Number(e.target.value))} /></Field> : <p className="muted small">Generate or import a package first to preview it.</p>}
+          {record?.artworkApproved ? <>
+            <Field label="Motion direction" wide><textarea value={motionBrief} onChange={e => setMotionBrief(e.target.value)} maxLength={3000} rows={2} placeholder="Describe the beats, contacts, holds, atmosphere and camera." /></Field>
+            <details className="stack"><summary>Optional manual dialogue timing</summary>
+              <Field label="Scene-relative viseme cues (JSON array)" wide><textarea value={dialogueCues} onChange={e => setDialogueCues(e.target.value)} maxLength={7000} rows={3} placeholder='[{"start":0.2,"end":0.4,"shape":"open"}]' /></Field>
+              <p className="hint">Enable dialogue in the project settings and supply already-aligned cues. Wander does not automatically align these to narration.</p>
+            </details>
+            <Btn kind="primary" disabled={!provider.data?.active || working} onClick={() => generateScene('motion')}>{record.animation ? 'Generate replacement motion' : 'Generate motion for approved artwork'}</Btn>
+            <details className="stack"><summary>Reuse motion without replacing artwork</summary>
+              <p className="hint">Transfer reusable track timing, opacity and transforms by role. Drawings, path geometry and source pivots are not copied.</p>
+              {!!record.animation && record.state !== 'draft' && <>
+                <Field label="Source roles (JSON object)" wide><textarea value={clipRoles} maxLength={5000} rows={2} onChange={e=>setClipRoles(e.target.value)} placeholder='{"lantern":"source_lantern"}'/></Field>
+                <Btn disabled={working || !clipRoles.trim()} onClick={async () => {
+                  const clip = await api.post(`${path}/motion-clip/export`, {revision,roles:parse(clipRoles,'Motion roles')});
+                  setClipData(JSON.stringify(clip,null,2)); push('ok','Reusable motion JSON is ready to copy.');
+                }}>Export reusable motion</Btn>
+              </>}
+              {!!record.animation && record.state !== 'draft' && <div className="row gap wrap">
+                <Field label="Preset name"><input value={clipName} onChange={e=>setClipName(e.target.value)} maxLength={100}/></Field>
+                <Btn disabled={working || !clipName.trim() || !clipRoles.trim()} onClick={async()=>{
+                  await api.post(`${path}/motion-clip/save`,{revision,name:clipName,roles:parse(clipRoles,'Motion roles')});
+                  savedMotion.reload();setClipName('');push('ok','Saved to the local motion library.');
+                }}>Save reusable motion preset</Btn>
+              </div>}
+              {(savedMotion.data?.length ?? 0)>0 && <Field label="Load saved motion">
+                <select value="" onChange={async e=>{
+                  try{
+                    const clip=await api.get(`/animated-motion-library/${encodeURIComponent(e.target.value)}`);
+                    setClipData(JSON.stringify(clip,null,2));
+                  }catch(err){fail(err);}
+                }}><option value="" disabled>Choose a saved motion preset</option>{savedMotion.data?.map(item=><option key={item.id} value={item.id}>{item.name}</option>)}</select>
+              </Field>}
+              <Field label="Reusable motion clip JSON" wide><textarea value={clipData} maxLength={240000} rows={3} onChange={e=>setClipData(e.target.value)}/></Field>
+              {!!clipData && <CopyBtn label="Copy motion clip JSON" text={clipData}/>}
+              <Field label="Destination bindings (JSON object)" wide><textarea value={clipBindings} maxLength={8000} rows={2} onChange={e=>setClipBindings(e.target.value)} placeholder='{"lantern":{"target":"new_lantern","pivot":[100,150]}}'/></Field>
+              <Btn disabled={working || !clipData.trim() || !clipBindings.trim()} onClick={async () => {
+                if(!confirm('Bind this reusable motion as a new draft? The current artwork remains unchanged.'))return;
+                await api.post(`${path}/motion-clip/bind`,{revision,clip:parse(clipData,'Reusable motion'),bindings:parse(clipBindings,'Destination bindings')});
+                data.reload();push('ok','Motion bound without changing the artwork. Review the new draft.');
+              }}>Bind motion to this artwork</Btn>
+            </details>
+            {record.animation && tracks.length > 0 && <fieldset className="choices">
+              <legend>Refine selected motion targets only</legend>
+              <div className="row gap wrap">
+                {[...new Set(tracks.map(t => String(t.target)))].map(id => <label className="row gap small" key={id}>
+                  <input type="checkbox" checked={motionTargets.includes(id)} disabled={working || (!motionTargets.includes(id) && motionTargets.length >= 6)}
+                    onChange={e => setMotionTargets(old => e.target.checked ? [...old,id] : old.filter(x => x !== id))}/><code>{id}</code>
+                </label>)}
+              </div>
+              <Btn disabled={!provider.data?.active || working || !motionTargets.length || !motionBrief.trim()} onClick={() => generateScene('refine-motion')}>Refine selected motion</Btn>
+            </fieldset>}
+          </> : <p className="hint">Review and approve the layered artwork before asking for motion.</p>}
+          {record?.animation && !previewError && <img className="animated-preview" key={previewUrl} src={previewUrl} alt={`Scene ${index + 1} at ${previewTime.toFixed(2)} seconds`} onLoad={() => setPreviewedRevision(revision)} onError={() => setPreviewError(true)} />}
+          {record?.animation && previewError && <div className="notice warn">This frame could not be previewed. <Btn small onClick={() => { setPreviewError(false); setPreviewAttempt((x) => x + 1); }}>Retry frame</Btn></div>}
+          {record?.animation ? <Field label={`Preview playhead · ${time.toFixed(2)} s`} wide><input type="range" aria-label="Preview playhead in seconds" min={0} max={maxTime} step={0.02} value={time} onChange={(e) => setTime(Number(e.target.value))} /></Field> : <p className="muted small">Generate or import motion to use the playhead.</p>}
+          {tracks.length > 0 && <details className="stack"><summary>Track timeline</summary>
+            {tracks.map((track,idx)=><div key={String(track.id ?? idx)} className="row gap wrap">
+              <code>{String(track.target)} · {String(track.property)}</code>
+              {Array.isArray(track.keys) && (track.keys as {time:number}[]).map((key,i)=><button key={i} type="button" className="chip"
+                title={`Preview ${String(track.target)} at ${key.time.toFixed(2)} seconds`} onClick={()=>setTime(key.time)}>{key.time.toFixed(2)}s</button>)}
+            </div>)}
+          </details>}
           {tracks.length > 0 && <p className="muted small">{tracks.length} motion track{tracks.length === 1 ? '' : 's'} over {duration.toFixed(2)} seconds.</p>}
-          {record?.state === 'draft' && <Btn kind="primary" disabled={working || previewError || previewedRevision !== revision} onClick={() => mutate('approve')}>Approve previewed animation</Btn>}
+          {record?.state === 'draft' && record.animation && <Btn kind="primary" disabled={working || previewError || previewedRevision !== revision} onClick={() => mutate('approve')}>Approve previewed animation</Btn>}
           {record && <Btn disabled={working} onClick={beginEdit}>Edit animation JSON…</Btn>}
         </>}
         {tab === 'layers' && <>
@@ -452,8 +573,21 @@ export function AnimatedSvgSceneModal({ artifactId, projectId, sceneId, index, t
             <Field label="Refinement feedback" wide><textarea value={refineFeedback} onChange={(e) => setRefineFeedback(e.target.value)} maxLength={3000}
               rows={3} placeholder="For example: improve the character's hand anatomy and make the cloth catch warm rim light." /></Field>
             <Btn disabled={!revision || !provider.data?.active || !targetLayers.length || !refineFeedback.trim() || working || preparingImages}
-              onClick={() => generateScene(true)}>Refine selected layers</Btn>
+              onClick={() => generateScene('artwork', true)}>Refine selected layers</Btn>
           </fieldset>}
+          {history.data && history.data.length > 0 && <details className="stack">
+            <summary>Revision history ({history.data.length})</summary>
+            <ul>{history.data.map(item => <li key={item.revision}>
+              <code>{item.revision.slice(0,8)}</code> · {item.state}{item.current ? ' · current' : ' '}
+              {!item.current && <>
+                <a className="btn btn-sm" href={url(`${path}/package/scene.svg?revision=${encodeURIComponent(item.revision)}`)} download={`scene-${item.revision.slice(0,8)}.svg`}>Download SVG</a>
+                {!!item.hasVideo && <a className="btn btn-sm" href={url(`${path}/package/scene.mp4?revision=${encodeURIComponent(item.revision)}`)} download={`scene-${item.revision.slice(0,8)}.mp4`}>Download MP4</a>}
+                <Btn small disabled={working} onClick={async () => {
+                  if(confirm('Restore this revision as a new draft for review?')) await mutate('restore', {sourceRevision:item.revision});
+                }}>Restore as draft</Btn>
+              </>}
+            </li>)}</ul>
+          </details>}
           {tracks.length > 0 && <details><summary>Track timing and keyframes</summary><pre>{JSON.stringify(tracks, null, 2)}</pre></details>}
           {record?.rig && <details><summary>Character rig</summary><pre>{stringify(record.rig)}</pre></details>}
           {record?.scene && <details><summary>Scene and continuity metadata</summary><pre>{stringify(record.scene)}</pre></details>}
@@ -501,7 +635,7 @@ export function AnimatedSvgSceneModal({ artifactId, projectId, sceneId, index, t
           <h3>Layered scene package</h3>
           <p className="muted small">The artwork must be a standalone, inert SVG. Its named groups are animated by the JSON tracks, not by scripts embedded in the SVG.</p>
           <PackageField label="Layered SVG" value={svg} change={setSvg} accept=".svg,image/svg+xml" max={700_000} required />
-          <PackageField label="Animation JSON" value={animation} change={setAnimation} accept=".json,application/json" max={250_000} required />
+          <PackageField label="Animation JSON (optional for artwork-only draft)" value={animation} change={setAnimation} accept=".json,application/json" max={250_000} />
           <PackageField label="Rig JSON (optional)" value={rig} change={setRig} accept=".json,application/json" max={100_000} />
           <PackageField label="Scene JSON (optional)" value={scene} change={setScene} accept=".json,application/json" max={100_000} />
           <div className="row gap"><Btn kind="primary" disabled={working || !svg.trim() || !animation.trim()} onClick={savePackage}>Save as draft</Btn><Btn kind="ghost" onClick={() => setEditing(false)}>Cancel editing</Btn></div>

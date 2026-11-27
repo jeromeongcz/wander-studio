@@ -263,6 +263,18 @@ export function StoryboardStage() {
                   <Field label="Script section"><select value={s.script_segment_id} onChange={(e) => setScene(i, { script_segment_id: e.target.value })}>{sections.map((x) => <option key={x.id} value={x.id}>{x.kind}: {x.text.slice(0, 28)}</option>)}</select></Field>
                   <Field label="Duration (s)"><input type="number" step={0.1} min={0.5} value={s.target_duration} onChange={(e) => setScene(i, { target_duration: Number(e.target.value) })} /></Field>
                   <Field label="Visual type"><select value={s.asset_type} onChange={(e) => setScene(i, { asset_type: e.target.value })}>{ASSET_TYPES.map((t) => <option key={t} value={t}>{t.replace(/_/g, ' ')}</option>)}</select></Field>
+                  {project.settings.animatedSvg?.mode === 'mixed' && <Field label="Scene production mode">
+                    <select value={s.animation_plan?.mode ?? 'auto'} onChange={e => {
+                      const mode=e.target.value;
+                      if(mode==='auto'){setScene(i,{animation_plan:undefined});return;}
+                      const duration=Math.max(.1,Math.min(60,s.target_duration));
+                      setScene(i,{animation_plan:{...s.animation_plan,mode,duration,beats:mode==='static'?[]:
+                        (s.animation_plan?.mode==='animated'&&s.animation_plan.duration===duration?s.animation_plan.beats:
+                          [{start:0,end:duration,actor:'',action:'Follow the saved storyboard direction.'}])}});
+                    }}>
+                      <option value="auto">Use the approved primary visual</option><option value="static">Static illustration</option><option value="animated">Animated SVG clip</option>
+                    </select>
+                  </Field>}
                   <Field label="Look"><input value={s.visual_style ?? ''} onChange={(e) => setScene(i, { visual_style: e.target.value })} /></Field>
                   <Field label="Camera"><select value={s.camera.movement} onChange={(e) => setScene(i, { camera: { ...s.camera, movement: e.target.value, direction: directions(e.target.value)[0] } })}>{moves.map((m) => <option key={m.id} value={m.id}>{m.label}</option>)}</select></Field>
                   {directions(s.camera.movement).length > 0 && <Field label="Direction"><select value={s.camera.direction ?? ''} onChange={(e) => setScene(i, { camera: { ...s.camera, direction: e.target.value } })}>{directions(s.camera.movement).map((d) => <option key={d}>{d}</option>)}</select></Field>}
@@ -287,7 +299,7 @@ export function StoryboardStage() {
       {animated !== null && c?.scenes[animated] && (
         <AnimatedSvgSceneModal key={c.scenes[animated].scene_id ?? animated} artifactId={art.id} projectId={project.id} sceneId={c.scenes[animated].scene_id} index={animated}
           title={c.scenes[animated].title ?? ''} brief={c.scenes[animated].visual_description ?? ''}
-          targetDuration={c.scenes[animated].target_duration ?? 0} approvedStoryboard={art.state === 'approved'}
+          targetDuration={c.scenes[animated].target_duration ?? 0} approvedStoryboard={art.state === 'approved'} hasApprovedStill={sketches.data?.[animated]?.state === 'approved'}
           onAttached={() => { sketches.reload(); done(); }} onClose={() => setAnimated(null)} />
       )}
       {customSvg !== null && (

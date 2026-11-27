@@ -28,6 +28,7 @@ export const words = (s: string) => s.replace(/_/g, ' ');
 const SOURCE: Record<string, string> = {
   scene_override: 'set here',
   storyboard_user: 'your storyboard',
+  animated_clip: 'baked into animation',
   composition_override: 'whole video',
   ai: 'generated',
   draft: 'automatic draft',
