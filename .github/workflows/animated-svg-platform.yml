@@ -1,0 +1,105 @@
+name: Animated SVG platform smoke
+
+on:
+  push:
+    branches: [animated-svg]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: animated-svg-platform-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  smoke:
+    name: ${{ matrix.os }} CPU smoke
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2025, macos-15]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          path: Wander Studio
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '22.x'
+      - name: Install native MSYS2 FFmpeg
+        if: runner.os == 'Windows'
+        id: msys2
+        uses: msys2/setup-msys2@3c51bf698df1e37b2261f53cb67797b97761185c # v2
+        with:
+          msystem: UCRT64
+          update: true
+          install: mingw-w64-ucrt-x86_64-ffmpeg
+      - name: Select the Windows FFmpeg and ffprobe
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          MSYS2_LOCATION: ${{ steps.msys2.outputs.msys2-location }}
+        run: |
+          $probe = Join-Path $env:MSYS2_LOCATION 'ucrt64/bin/ffprobe.exe'
+          if (!(Test-Path -LiteralPath $probe)) { throw "Expected native ffprobe at $probe" }
+          "WANDER_FFPROBE=$probe" >> $env:GITHUB_ENV
+      - name: Install and select FFmpeg with librsvg on macOS
+        if: runner.os == 'macOS'
+        shell: bash
+        env:
+          HOMEBREW_NO_AUTO_UPDATE: '1'
+        run: |
+          brew tap homebrew-ffmpeg/ffmpeg
+          # This is a disposable runner; its preinstalled core ffmpeg may conflict with the tap.
+          if brew list --versions ffmpeg >/dev/null 2>&1; then
+            brew uninstall --ignore-dependencies --force ffmpeg
+          fi
+          brew install homebrew-ffmpeg/ffmpeg/ffmpeg --with-librsvg
+          probe="$(brew --prefix homebrew-ffmpeg/ffmpeg/ffmpeg)/bin/ffprobe"
+          test -x "$probe"
+          printf 'WANDER_FFPROBE=%s\n' "$probe" >> "$GITHUB_ENV"
+      - name: Install locked dependencies
+        working-directory: Wander Studio
+        run: npm ci --include=dev
+      - name: Check Storyboard export and mixed composition
+        working-directory: Wander Studio
+        run: npm run smoke:animated-svg
+      - name: Start the built app and verify the local UI
+        working-directory: Wander Studio
+        shell: pwsh
+        run: |
+          $fixture = Join-Path $env:RUNNER_TEMP 'Wander startup fixture'
+          New-Item -ItemType Directory -Force $fixture | Out-Null
+          $env:WANDER_ROOT = $fixture
+          $env:WANDER_DB = Join-Path $fixture 'wander.db'
+          $env:WANDER_PORT = '43179'
+          $stdout = Join-Path $fixture 'stdout.log'
+          $stderr = Join-Path $fixture 'stderr.log'
+          $base = 'http://127.0.0.1:43179'
+          $server = Start-Process -FilePath (Get-Command node).Source -ArgumentList 'app/server/src/server.ts' -PassThru -RedirectStandardOutput $stdout -RedirectStandardError $stderr
+          try {
+            $ready = $false
+            for ($attempt = 0; $attempt -lt 40; $attempt++) {
+              if ($server.HasExited) { throw 'Wander exited before responding' }
+              try {
+                if ((Invoke-RestMethod "$base/health" -TimeoutSec 2).ok -eq $true) {
+                  $ready = $true
+                  break
+                }
+              } catch {
+                Start-Sleep -Milliseconds 500
+              }
+            }
+            if (!$ready) { throw 'Wander did not respond to /health' }
+            $homePage = Invoke-WebRequest "$base/" -TimeoutSec 5
+            $assetPath = [regex]::Match($homePage.Content, 'src="(/ui/[^"]+\.js)"').Groups[1].Value
+            if ($homePage.StatusCode -ne 200 -or !$assetPath) { throw 'Wander did not serve its built UI' }
+            if ((Invoke-WebRequest "$base$assetPath" -TimeoutSec 5).StatusCode -ne 200) { throw 'Built JavaScript did not load' }
+            Write-Host 'Verified /health, the built UI, and its JavaScript.'
+          } finally {
+            if (!$server.HasExited) { Stop-Process -Id $server.Id -Force -ErrorAction SilentlyContinue }
+            $null = $server.WaitForExit(5000)
+            Get-Content $stdout, $stderr -ErrorAction SilentlyContinue
+          }

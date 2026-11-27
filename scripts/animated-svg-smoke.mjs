@@ -8,11 +8,26 @@ const root = fileURLToPath(new URL('../', import.meta.url));
 async function run() {
   if (!requireSupportedNode()) return 1;
   const { ffmpegBinary, ffprobeBinary } = await import('../app/server/src/media.ts');
-  const decoders = spawnSync(ffmpegBinary(), ['-hide_banner', '-decoders'], { encoding: 'utf8', windowsHide: true });
-  const probe = spawnSync(ffprobeBinary(), ['-version'], { encoding: 'utf8', windowsHide: true });
-  if (decoders.status !== 0 || !/\blibrsvg\b/.test(decoders.stdout) || probe.status !== 0) {
-    console.error('Animated SVG smoke requires FFmpeg with librsvg and ffprobe. See docs/animated-svg/V3-PLATFORM-SMOKE.md.');
-    return 1;
+  const ffmpeg = ffmpegBinary();
+  const ffprobe = ffprobeBinary();
+  const query = (bin, arg) => spawnSync(bin, ['-hide_banner', arg], {
+    encoding: 'utf8', windowsHide: true, timeout: 15_000,
+  });
+  const required = [
+    [ffmpeg, '-version', /ffmpeg version/, 'FFmpeg'],
+    [ffprobe, '-version', /ffprobe version/, 'ffprobe'],
+    [ffmpeg, '-decoders', /\blibrsvg\b/, 'librsvg SVG decoder'],
+    [ffmpeg, '-encoders', /\blibx264\b/, 'libx264 H.264 encoder'],
+    [ffmpeg, '-filters', /^\s*\S+\s+subtitles\s/m, 'libass subtitles filter'],
+  ];
+  for (const [bin, arg, pattern, capability] of required) {
+    const result = query(bin, arg);
+    if (result.status !== 0 || !pattern.test(result.stdout ?? '')) {
+      console.error(`Missing ${capability} from ${bin}. Set WANDER_FFPROBE to a compatible build's ffprobe and see docs/animated-svg/V3-PLATFORM-SMOKE.md.`);
+      if (result.error) console.error(result.error.message);
+      return 1;
+    }
+    if (arg === '-version') console.log(result.stdout.split(/\r?\n/, 1)[0]);
   }
 
   const env = { ...process.env, WANDER_ANIMATION_RENDERER: 'librsvg' };
