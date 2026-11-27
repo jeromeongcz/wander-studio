@@ -1,7 +1,10 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { extractApprovedGroup, generateAnimatedScene, professionalIllustrationGuidance } from '../src/animation/generate.ts';
+import { extractApprovedGroup, generateAnimatedArtwork, generateAnimatedScene, professionalIllustrationGuidance, readAnimatedGenerationControls } from '../src/animation/generate.ts';
 import type { AnimatedCandidate, GenerateAnimatedSceneOptions } from '../src/animation/generate.ts';
+import { buildAnimatedSketchPrompt, buildBaseArtworkPrompt, generationRequestPrompt } from '../src/animation/prompts.ts';
+import { buildSketchPrompt } from '../src/research/sketch.ts';
+import type { Scene } from '../src/studios/storyboard.ts';
 
 const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="360" height="640" viewBox="0 0 360 640">
   <g id="forest"><path fill="#303739" d="M0 640C71 472 57 220 128 16L180 0C100 265 129 504 85 640Z"/></g>
@@ -70,11 +73,11 @@ test('professional generation validates and renders artwork, reviews by true vis
   assert.equal(f.validated.length, 1);
 });
 
-test('draft is exactly one configured-provider request and never implies visual approval', async () => {
-  const f = fake({ 'Quick draft': JSON.stringify({ svg, animation, rig, scene }) }, { settings: { quality: 'draft', style: 'cinematic-anime', dialogue: false } });
+test('draft uses one direct artwork call and a separate motion call, with no implied visual approval', async () => {
+  const f = fake({ 'Layered vector artwork': svg, 'Rig and motion': JSON.stringify({ animation, rig, scene }) }, { settings: { quality: 'draft', style: 'cinematic-anime', dialogue: false } });
   const result = await generateAnimatedScene(f.opts);
-  assert.deepEqual(f.marks, ['Quick draft']);
-  assert.deepEqual(result.passes.map((p) => p.status), ['complete', 'skipped']);
+  assert.deepEqual(f.marks, ['Layered vector artwork', 'Rig and motion']);
+  assert.ok(result.passes.some((p) => p.name === 'art-review' && p.status === 'skipped'));
   assert.equal(result.review, undefined);
   assert.match(f.prompts[0], /"dialogue":false/);
 });
@@ -118,7 +121,7 @@ test('approved reusable groups cannot be refined; model edits outside named scop
 
 test('live image data must stay with an explicitly image-capable adapter, or use typed notes', async () => {
   const images = [{ label: 'test palette', mime: 'image/png' as const, bytes: Uint8Array.of(137, 80, 78, 71) }];
-  const f = fake({ 'Quick draft': JSON.stringify({ svg, animation }) }, { settings: { quality: 'draft' }, images });
+  const f = fake({ 'Layered vector artwork': svg, 'Rig and motion': JSON.stringify({ animation }) }, { settings: { quality: 'draft' }, images });
   await assert.rejects(generateAnimatedScene(f.opts), /accepts only text/);
   assert.equal(f.marks.length, 0);
   const withNotes = await generateAnimatedScene({ ...f.opts, referenceNotes: 'Edge lit by muted amber' });
@@ -158,4 +161,127 @@ test('reuse extraction carries only local dependencies, styles and stable collis
   assert.match(next.svg, /M0 11Q8 40 26 29/);
   assert.doesNotMatch(next.svg, /unused|traveler/);
   assert.throws(() => extractApprovedGroup(source, 'branches', 'not-a-group'), /named SVG group/);
+});
+
+const sceneForPrompt: Scene = {
+  title: 'The Lantern', script_segment_id: 's1', target_duration: 10, asset_type: 'illustration',
+  visual_description: 'A lantern catches the bark on a Philippine balete in a foggy glade.', camera: {movement: 'static'},
+};
+const promptOptions = {number: 1, total: 1, size: {w: 360, h: 640}, category: 'Dark Folklore Horror', captionSpace: true, styleNotes: 'Ink and shadow'};
+
+test('direct animated artwork uses the exact shipped still prompt plus layered instructions, then stops before motion', async () => {
+  const original = buildSketchPrompt(sceneForPrompt, promptOptions);
+  const animated = buildAnimatedSketchPrompt(sceneForPrompt, promptOptions);
+  assert.ok(animated.startsWith(`${original}\n\nLayered artwork preparation`));
+  assert.match(animated, /Style with presentation attributes or style/);
+  assert.match(animated, /stable, descriptive IDs/);
+  assert.match(animated, /lower fifth quiet|bottom fifth/);
+  assert.doesNotMatch(original, /Layered artwork preparation/);
+  const f = fake({ 'Layered vector artwork': svg }, {baseArtworkPrompt: animated, settings: {quality: 'professional', strategy: 'multi-pass'}});
+  const artwork = await generateAnimatedArtwork(f.opts);
+  assert.deepEqual(f.marks, ['Layered vector artwork']);
+  assert.equal(f.prompts[0], generationRequestPrompt('Layered vector artwork', buildBaseArtworkPrompt({baseArtworkPrompt: animated})));
+  assert.equal(artwork.svg, svg);
+  assert.ok(!Object.hasOwn(artwork, 'animation'));
+});
+
+test('opt-in quality passes have independent order and no effect when not selected', async () => {
+  const empty = JSON.stringify({patches:[]});
+  const f = fake({
+    'Art direction': plan, 'Composition direction': JSON.stringify({framing:'Frame the raised lantern in a profile at hand height.'}),
+    'Layered vector artwork': svg, 'Anatomy refinement': empty, 'Environment and material refinement': empty, 'Lighting refinement': empty, 'Texture refinement': empty,
+  }, {stages:{artDirection:true,composition:true,anatomy:true,environmentMaterials:true,lighting:true,texture:true}});
+  const result = await generateAnimatedArtwork(f.opts);
+  assert.deepEqual(f.marks, ['Art direction', 'Composition direction', 'Layered vector artwork', 'Anatomy refinement', 'Environment and material refinement', 'Lighting refinement', 'Texture refinement']);
+  assert.equal(result.composition?.framing, 'Frame the raised lantern in a profile at hand height.');
+  assert.match(f.prompts[2], /Additional composition guidance/);
+  assert.equal(result.svg, svg);
+  assert.ok(!Object.hasOwn(result, 'animation'));
+});
+
+test('motion generation can use existing artwork with a separately selected preparation stage', async () => {
+  const prep = {targets:[{id:'traveler',role:'figure',pivot:[104,510],purpose:'Weight-bearing lean'}], beats:[{start:1,end:2,actor:'traveler',action:'Brace for a sound'}]};
+  const f = fake({'Animation preparation':JSON.stringify(prep), 'Rig and motion':JSON.stringify({animation,rig,scene})}, {
+    motionOnly:{svg,scene}, stages:{animationPreparation:true},
+  });
+  const result = await generateAnimatedScene(f.opts);
+  assert.deepEqual(f.marks, ['Animation preparation','Rig and motion']);
+  assert.equal(result.svg, svg);
+  assert.equal(result.preparation?.targets[0].id, 'traveler');
+  assert.match(f.prompts[1], /Brace for a sound/);
+  assert.match(f.prompts[1], /destination key sets easing: step/);
+});
+
+test('targeted motion edits preserve drawable bytes, rig, selected track identity and unrelated tracks', async () => {
+  const selected = {...animation.tracks[0], id: 'draft-traveler-turn'};
+  const unselected = {id: 'watcher-opacity', target:'watcher', property:'opacity', keys:[{time:0,value:0}, {time:10,value:1}]};
+  const before = {duration:10,tracks:[selected,unselected]};
+  const proposed = {...selected, id:'new-model-id', keys:[{time:0,value:0}, {time:10,value:2}]};
+  const f = fake({'Targeted motion refinement':JSON.stringify({tracks:[proposed]})}, {
+    refineMotion:{svg, animation:before, rig, scene, notes:'Make the glance less abrupt.', targetLayerIds:['traveler']},
+    validate:(c) => assert.deepEqual(c.animation, {duration:10,tracks:[{...proposed,id:selected.id},unselected]}),
+  });
+  const result = await generateAnimatedScene(f.opts);
+  assert.deepEqual(f.marks, ['Targeted motion refinement']);
+  assert.equal(result.svg, svg);
+  assert.equal(result.rig, rig);
+  assert.equal(result.scene, scene);
+  assert.match(f.prompts[0], /Make the glance less abrupt/);
+  assert.doesNotMatch(f.prompts[0], /watcher-opacity/);
+  const outside = fake({'Targeted motion refinement': JSON.stringify({tracks:[unselected]})}, {
+    refineMotion:{svg, animation:before, rig, notes:'Try outside scope.', targetLayerIds:['traveler']},
+  });
+  await assert.rejects(generateAnimatedScene(outside.opts), /unauthorized/);
+  assert.equal(outside.validated.length, 0);
+});
+
+test('artwork-only targeted corrections do not call a motion provider, even if existing motion is supplied', async () => {
+  const f = fake({'Targeted vector refinement':JSON.stringify({patches:[{id:'traveler',svg:travelerRefined}]})}, {
+    refine:{svg, animation, rig, notes:'Define the lantern edge.', targetLayerIds:['traveler']},
+  });
+  const result = await generateAnimatedArtwork(f.opts);
+  assert.deepEqual(f.marks,['Targeted vector refinement']);
+  assert.ok(result.svg.includes(travelerRefined));
+  assert.ok(!Object.hasOwn(result,'animation'));
+});
+
+test('revision and per-stage budget controls are bounded, optional and reliably enforced', async () => {
+  assert.deepEqual(readAnimatedGenerationControls({quality:'professional'}), {});
+  assert.throws(() => readAnimatedGenerationControls({stages:{notAStage:true}}), /Invalid animated SVG stage/);
+  assert.throws(() => readAnimatedGenerationControls({maxRevisions:4}), /0 to 3/);
+  assert.throws(() => readAnimatedGenerationControls({stageBudgets:{baseArtwork:{timeoutMs:2}}}), /100 to 480000/);
+  const f = fake({'Layered vector artwork':svg}, {stageBudgets:{baseArtwork:{maxOutputBytes:10}}});
+  await assert.rejects(generateAnimatedArtwork(f.opts), /configured output budget/);
+  let sent: AbortSignal | undefined;
+  const timeout = fake({}, {stageBudgets:{baseArtwork:{timeoutMs:100}}, provider:{id:'codex',generateText:async ({signal}) => {sent = signal; return new Promise<string>(() => {});}}});
+  await assert.rejects(generateAnimatedArtwork(timeout.opts), /configured time budget/);
+  assert.equal(sent?.aborted,true);
+  const current = fake({'Art direction':plan,'Layered vector artwork':svg,'SVG source art critique':JSON.stringify(review),'Rig and motion':JSON.stringify({animation,rig,scene})}, {maxRevisions:0});
+  await generateAnimatedScene(current.opts);
+  assert.ok(!current.marks.includes('Targeted vector refinement'));
+});
+
+test('targeted corrections can be enabled by themselves and the revision limit caps repeated critiques', async () => {
+  const patch1 = JSON.stringify({patches:[{id:'traveler',svg:travelerRefined}]});
+  const direct = fake({'Layered vector artwork':svg, 'Targeted vector refinement':patch1}, {stages:{targetedCorrections:true}});
+  const refined = await generateAnimatedArtwork(direct.opts);
+  assert.deepEqual(direct.marks,['Layered vector artwork','Targeted vector refinement']);
+  assert.ok(refined.svg.includes(travelerRefined));
+  let round = 0;
+  const revise: GenerateAnimatedSceneOptions['provider'] = {id:'codex', async generateText({prompt}) {
+    if (prompt.startsWith('Wander Studio • Layered vector artwork')) return svg;
+    if (prompt.startsWith('Wander Studio • Targeted vector refinement')) {
+      round++;
+      return JSON.stringify({patches:[{id:'traveler',svg:travelerRefined.replace('#b38360', round === 1 ? '#b58360' : '#b88360')}]});
+    }
+    throw new Error('Unexpected provider request');
+  }};
+  const f = fake({}, {
+    provider:revise, stages:{renderedReview:true,targetedCorrections:true}, maxRevisions:2,
+    rasterizePreview:async () => Uint8Array.of(137,80,78,71), visionReview:async () => JSON.stringify(review),
+  });
+  const result = await generateAnimatedArtwork(f.opts);
+  assert.equal(round, 2);
+  assert.equal(result.finalReview?.method, 'rendered');
+  assert.equal(result.passes.filter((p) => p.name === 'targeted-refinement').length, 2);
 });
