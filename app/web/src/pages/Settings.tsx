@@ -1,7 +1,23 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { api } from '../api';
 import { useAsync, useInterval } from '../hooks';
 import { Btn, Card, Empty, ErrorBox, Field, Icon, Loading, Modal, Pill, Tabs, fmtBytes, useToast } from '../ui';
+
+interface LLMProviderSummary {
+  id: string;
+  kind: string;
+  name: string;
+  terms: { freeTier: string };
+  health?: { ok: boolean; detail: string };
+}
+
+interface JobSummary {
+  id: string;
+  kind: string;
+  state: 'queued' | 'running' | 'succeeded' | 'failed' | 'cancelled';
+  created_at: string;
+  error: { message: string } | null;
+}
 
 /** A small catalogue of popular Ollama models to pick from when downloading. Sizes are approximate. */
 const OLLAMA_LIBRARY: { id: string; label: string; params: string; size: string; desc: string }[] = [
@@ -21,7 +37,7 @@ const OLLAMA_LIBRARY: { id: string; label: string; params: string; size: string;
 
 export function SettingsPage() {
   const { push } = useToast();
-  const jobs = useAsync(() => api.get<any[]>('/jobs'), []);
+  const jobs = useAsync(() => api.get<JobSummary[]>('/jobs'), []);
   const pf = useAsync(() => api.get<any>('/preflight'), []);
   const cache = useAsync(() => api.get<any>('/cache'), []);
   const tts = useAsync(() => api.get<any[]>('/tts/providers'), []);
@@ -29,20 +45,26 @@ export function SettingsPage() {
   const locales = useAsync(() => api.get<any[]>('/locales'), []);
   const i2v = useAsync(() => api.get<any[]>('/providers/image-to-video'), []);
   const stock = useAsync(() => api.get<any[]>('/providers'), []);
-  const llmProviders = useAsync(() => api.get<any[]>('/llm/providers'), []);
+  const llmProviders = useAsync(() => api.get<LLMProviderSummary[]>('/llm/providers'), []);
+  const [checkingCodex, setCheckingCodex] = useState(false);
   const activeLLM = useAsync(() => api.get<any>('/llm/active'), []);
+  const reloadActiveLLM = activeLLM.reload;
+  useEffect(() => {
+    window.addEventListener('wander-llm-changed', reloadActiveLLM);
+    return () => window.removeEventListener('wander-llm-changed', reloadActiveLLM);
+  }, [reloadActiveLLM]);
   const templates = useAsync(() => api.get<any[]>('/templates'), []);
   useInterval(jobs.reload, 2500);
 
   // Ollama process status
   const [ollamaStatus, setOllamaStatus] = useState<{ running: boolean; installed: boolean; pid?: number } | null>(null);
 
-  const checkOllamaStatus = async () => {
+  const checkOllamaStatus = useCallback(async () => {
     try {
       const s = await api.get<{ running: boolean; installed: boolean; pid?: number; health?: any }>('/llm/providers/ollama/status');
       setOllamaStatus({ running: s.running, installed: s.installed, pid: s.pid });
     } catch { setOllamaStatus({ running: false, installed: false }); }
-  };
+  }, []);
 
   const startOllama = async () => {
     try {
@@ -78,6 +100,19 @@ export function SettingsPage() {
     }
   };
 
+  const checkCodex = async () => {
+    setCheckingCodex(true);
+    try {
+      const health = await api.post<{ ok: boolean; detail: string }>('/llm/providers/codex/health');
+      llmProviders.reload();
+      push(health.ok ? 'ok' : 'warn', health.detail);
+    } catch (e) {
+      push('error', `Codex status check failed: ${(e as Error).message}`);
+    } finally {
+      setCheckingCodex(false);
+    }
+  };
+
   const installOllama = async () => {
     try {
       const s = await api.post<{ installed: boolean }>('/llm/providers/ollama/install');
@@ -104,8 +139,9 @@ export function SettingsPage() {
     } catch { /* silent */ }
   }, 30000);
 
-  // Initial ollama status check
-  checkOllamaStatus();
+  useEffect(() => {
+    void checkOllamaStatus();
+  }, [checkOllamaStatus]);
 
   const [loc, setLoc] = useState({ code: '', name: '', bcp47: '', default_wpm: 140 });
   const [tab, setTab] = useState<'jobs' | 'system' | 'voices' | 'languages' | 'providers' | 'templates' | 'ai-provider'>('ai-provider');
@@ -117,6 +153,11 @@ export function SettingsPage() {
   const [switching, setSwitching] = useState<string | null>(null);
   const [modalOpen, setModalOpen] = useState(false);
   const [modalProvider, setModalProvider] = useState<{ id: string; name: string } | null>(null);
+  const [codexModel, setCodexModel] = useState('');
+  const codexPickerOpen = modalOpen && modalProvider?.id === 'codex';
+  const codexModels = useAsync(() => codexPickerOpen
+    ? api.get<Array<{ id: string; name: string }>>('/llm/providers/codex/models')
+    : Promise.resolve([]), [codexPickerOpen]);
   const [configOpen, setConfigOpen] = useState(false);
   const [ollamaHostInput, setOllamaHostInput] = useState(activeLLM.data?.active === 'ollama' ? '' : '');
   const [apiBaseUrlInput, setApiBaseUrlInput] = useState('');
@@ -296,9 +337,9 @@ export function SettingsPage() {
     }
   };
 
-  const selectable = (jobs.data ?? []).filter((j: any) => j.state !== 'queued' && j.state !== 'running');
-  const allSel = selectable.length > 0 && selectable.every((j: any) => sel.includes(j.id));
-  const toggleAll = () => setSel(allSel ? [] : selectable.map((j: any) => j.id));
+  const selectable = (jobs.data ?? []).filter((j) => j.state !== 'queued' && j.state !== 'running');
+  const allSel = selectable.length > 0 && selectable.every((j) => sel.includes(j.id));
+  const toggleAll = () => setSel(allSel ? [] : selectable.map((j) => j.id));
   const toggle = (id: string) => setSel(sel.includes(id) ? sel.filter((x) => x !== id) : [...sel, id]);
   const deleteSelected = async () => {
     if (!sel.length) return;
@@ -312,11 +353,7 @@ export function SettingsPage() {
   const activeId = activeLLM.data?.active ?? null;
   const providers = llmProviders.data ?? [];
   const isActive = (id: string) => id === activeId;
-  const providerHealth = (id: string) => {
-    const p = providers.find((x: any) => x.id === id);
-    return p?.health;
-  };
-  const providerStatusColor = (p: any) => {
+  const providerStatusColor = (p: LLMProviderSummary) => {
     const h = p.health;
     if (!h) return 'neutral';
     return h.ok ? 'good' : 'bad';
@@ -442,7 +479,8 @@ export function SettingsPage() {
     }
   };
 
-  const switchProvider = async (p: { id: string; name: string }) => {
+  const switchProvider = (p: { id: string; name: string }) => {
+    if (p.id === 'codex') setCodexModel(activeId === 'codex' ? activeLLM.data?.selectedModel ?? '' : '');
     setModalProvider(p);
     setModalOpen(true);
   };
@@ -465,19 +503,21 @@ export function SettingsPage() {
 
   const confirmSwitch = async () => {
     if (!modalProvider) return;
+    const changingCodexModel = modalProvider.id === 'codex' && activeId === 'codex';
     setSwitching(modalProvider.id);
     setModalOpen(false);
     try {
       // Only keep the selected model if it belongs to the provider being switched to
-      let model: string | null = selectedModel ?? null;
+      let model: string | null = activeId === 'codex' ? null : selectedModel ?? null;
+      if (modalProvider.id === 'codex') model = codexModel || null;
       if (model && modalProvider.id === 'ollama' && !ollamaModels.some((m) => m.id === model)) model = null;
       if (model && modalProvider.id === 'openrouter' && !openRouterModels.some((m) => m.id === model)) model = null;
       await api.put('/llm/active', { providerId: modalProvider.id, selectedModel: model });
       await activeLLM.reload();
       await llmProviders.reload();
-      setSelectedModel(activeLLM.data?.selectedModel ?? null);
+      setSelectedModel(model);
       window.dispatchEvent(new Event('wander-llm-changed'));
-      push('ok', `Global AI provider switched to ${modalProvider.name}`);
+      push('ok', changingCodexModel ? 'Codex model saved' : `Global AI provider switched to ${modalProvider.name}`);
     } catch (e) {
       push('error', `Switch failed: ${(e as Error).message}`);
     } finally {
@@ -507,7 +547,7 @@ export function SettingsPage() {
 
   return (
     <>
-      <div style={{ padding: 24, maxWidth: 960, margin: '0 auto' }}>
+      <div style={{ paddingBlock: 24 }}>
         <Tabs
           items={[
             { id: 'ai-provider', label: 'AI Provider' },
@@ -530,207 +570,213 @@ export function SettingsPage() {
             </p>
 
             {/* Provider cards */}
-            <Card title="Available Providers">
-              {providers.map((p: any) => {
-                const active = isActive(p.id);
-                const ok = providerHealth(p.id)?.ok ?? false;
-                const isOllama = p.id === 'ollama';
-                const isClaude = p.id === 'claude';
-                const isOpenAI = p.id === 'openai-compatible';
-                return (
-                  <div key={p.id} className="scene" style={{ border: active ? '2px solid var(--good)' : '1px solid var(--muted)', borderRadius: 8, padding: 12, background: active ? 'rgba(34,197,94,0.05)' : 'transparent', marginBottom: 12 }}>
-                    <div className="row gap" style={{ marginBottom: 6 }}>
-                      <div>
-                        <div className="row gap" style={{ alignItems: 'baseline' }}>
-                          <strong style={{ fontSize: 15 }}>{p.name}</strong>
-                          {active && <span style={{ color: 'var(--good)', fontWeight: 600, fontSize: 12 }}>● ACTIVE</span>}
-                        </div>
-                        <div className="muted small">{p.kind} · {p.terms}</div>
-                      </div>
-                      <div style={{ textAlign: 'right' }}>
-                        <Pill tone={providerStatusColor(p)}>{ok ? 'Available' : 'Unavailable'}</Pill>
-                        {!ok && isOllama && ollamaStatus && (
-                          <div className="muted small" style={{ marginTop: 4 }}>
-                            {ollamaStatus.running ? 'Running' : 'Stopped'} · {ollamaStatus.installed ? 'Installed' : 'Not installed'}
+            <Card title="Available Providers" className="available-providers">
+              <div className="provider-grid">
+                {providers.filter((p) => p.id !== 'openrouter').map((p) => {
+                  const active = isActive(p.id);
+                  const ok = p.health?.ok ?? false;
+                  const isOllama = p.id === 'ollama';
+                  const isClaude = p.id === 'claude';
+                  const isCodex = p.id === 'codex';
+                  const isOpenAI = p.id === 'openai-compatible';
+                  return (
+                    <Card key={p.id} className={`provider-card${active ? ' provider-card-active' : ''}`}>
+                      <div className="row gap wrap provider-card-header">
+                        <div>
+                          <div className="row gap wrap" style={{ alignItems: 'baseline' }}>
+                            <strong style={{ fontSize: 15 }}>{p.name}</strong>
+                            {active && <span style={{ color: 'var(--good)', fontWeight: 600, fontSize: 12 }}>● ACTIVE</span>}
                           </div>
+                          <div className="muted small">{p.kind} · {p.terms.freeTier}</div>
+                        </div>
+                        <div>
+                          <Pill tone={providerStatusColor(p)}>{isCodex && !p.health ? 'Not checked' : ok ? 'Available' : 'Unavailable'}</Pill>
+                          {!ok && isOllama && ollamaStatus && (
+                            <div className="muted small" style={{ marginTop: 4 }}>
+                              {ollamaStatus.running ? 'Running' : 'Stopped'} · {ollamaStatus.installed ? 'Installed' : 'Not installed'}
+                            </div>
+                          )}
+                        </div>
+                      </div>
+
+                      {isCodex && <p className="muted small">{p.health?.detail ?? 'Sign in from a terminal with codex login, then check status here.'}</p>}
+                      {isCodex && active && <p className="muted small">Model · {activeLLM.data?.selectedModel ?? 'Codex default'}</p>}
+
+                      {isClaude && !ok && (
+                        <div style={{ marginTop: 8 }}>
+                          <Btn small kind="primary" onClick={signInClaude} disabled={switching !== null}>
+                            <Icon name="key" small /> Sign in to Claude
+                          </Btn>
+                        </div>
+                      )}
+
+                      {isOllama && !ollamaStatus?.installed && (
+                        <div style={{ marginTop: 8 }}>
+                          <Btn small kind="primary" onClick={installOllama} disabled={switching !== null}>
+                            <Icon name="download" small /> Install Ollama
+                          </Btn>
+                        </div>
+                      )}
+
+                      <div className="row gap wrap provider-card-actions">
+                        <Btn small
+                          disabled={switching !== null || (active && !isCodex)}
+                          onClick={() => switchProvider({ id: p.id, name: p.name })}
+                        >
+                          {switching === p.id ? 'Saving…' : active ? (isCodex ? 'Change model' : 'Active') : 'Use this Provider'}
+                        </Btn>
+                        {isOllama && ok && (
+                          <div style={{ fontSize: 12 }}><Btn small onClick={loadOllamaModels}>
+                            <Icon name="refresh" small />
+                          </Btn></div>
                         )}
+                        {isOpenAI && (
+                          <div style={{ fontSize: 12 }}><Btn small kind="ghost" onClick={() => setConfigOpen(true)}>
+                            Configure
+                          </Btn></div>
+                        )}
+                        {isCodex && <Btn small kind="ghost" onClick={checkCodex} disabled={checkingCodex}>{checkingCodex ? 'Checking…' : 'Check status'}</Btn>}
                       </div>
-                    </div>
-
-                    {isClaude && !ok && (
-                      <div style={{ marginTop: 8 }}>
-                        <Btn small kind="primary" onClick={signInClaude} disabled={switching !== null}>
-                          <Icon name="key" small /> Sign in to Claude
-                        </Btn>
-                      </div>
-                    )}
-
-                    {isOllama && !ollamaStatus?.installed && (
-                      <div style={{ marginTop: 8 }}>
-                        <Btn small kind="primary" onClick={installOllama} disabled={switching !== null}>
-                          <Icon name="download" small /> Install Ollama
-                        </Btn>
-                      </div>
-                    )}
-
-                    <div className="row gap" style={{ marginTop: 10 }}>
-                      <Btn small
-                        disabled={switching !== null || active}
-                        onClick={() => switchProvider({ id: p.id, name: p.name })}
-                      >
-                        {switching === p.id ? 'Switching…' : active ? 'Active' : 'Use this Provider'}
-                      </Btn>
-                      {isOllama && ok && (
-                        <div style={{ fontSize: 12 }}><Btn small onClick={loadOllamaModels}>
-                          <Icon name="refresh" small />
-                        </Btn></div>
-                      )}
-                      {p.id === 'openai-compatible' && (
-                        <div style={{ fontSize: 12 }}><Btn small kind="ghost" onClick={() => setConfigOpen(true)}>
-                          Configure
-                        </Btn></div>
-                      )}
-                    </div>
-                  </div>
-                );
-              })}
-
-              {/* OpenRouter detailed card */}
-              {(() => {
-                const activeOR = isActive('openrouter');
-                const hasKey = !!openRouterApiKey.trim();
-                const currentModel = activeLLM.data?.active === 'openrouter' ? activeLLM.data?.selectedModel : null;
-                return (
-                  <div className="scene" style={{ border: activeOR ? '2px solid var(--good)' : '1px solid var(--muted)', borderRadius: 8, padding: 12, background: activeOR ? 'rgba(34,197,94,0.05)' : 'transparent' }}>
-                    <div className="row gap" style={{ marginBottom: 6 }}>
-                      <div>
-                        <div className="row gap" style={{ alignItems: 'baseline' }}>
-                          <strong style={{ fontSize: 15 }}>OpenRouter</strong>
-                          {activeOR && <span style={{ color: 'var(--good)', fontWeight: 600, fontSize: 12 }}>● ACTIVE</span>}
-                        </div>
-                        <div className="muted small">openrouter · free models</div>
-                      </div>
-                      <div style={{ textAlign: 'right' }}>
-                        <Pill tone={hasKey ? 'good' : 'neutral'}>{hasKey ? 'Configured' : 'Needs key'}</Pill>
-                        <div className="muted small" style={{ marginTop: 2 }}>{openRouterModels.length} free model{openRouterModels.length === 1 ? '' : 's'}</div>
-                      </div>
-                    </div>
-
-                    {/* Step 1: API Key */}
-                    <Field label="API key">
-                      <input type="password" value={openRouterApiKey} onChange={(e) => setOpenRouterApiKey(e.target.value)} placeholder="sk-or-…" disabled={savingOpenRouter} />
-                    </Field>
-
-                    {/* Step 2: Fetch Models */}
-                    {hasKey && (
-                      <div className="row gap" style={{ marginTop: 8, alignItems: 'center' }}>
-                        <Btn small onClick={fetchOpenRouterModels} disabled={savingOpenRouter || fetchingOpenRouterModels}>
-                          {fetchingOpenRouterModels ? 'Fetching…' : openRouterModels.length === 0 ? 'Fetch free models' : 'Refresh models'}
-                        </Btn>
-                        {openRouterModels.length > 0 && <span className="muted small">{openRouterModels.length} models available</span>}
-                      </div>
-                    )}
-
-                    {/* Step 3: Model Selection & Status */}
-                    {openRouterModels.length > 0 && (
-                      <div style={{ marginTop: 12 }}>
-                        {/* Current Selection Status */}
-                        <div className="form" style={{ marginBottom: 12, padding: 10, background: 'rgba(0,0,0,0.02)', borderRadius: 6, border: '1px solid var(--muted)' }}>
-                          <div className="row gap" style={{ alignItems: 'center', marginBottom: 6 }}>
-                            <strong style={{ fontSize: 13 }}>Selected Model</strong>
-                            {currentModel && activeOR && <Pill tone="good">ACTIVE</Pill>}
+                    </Card>
+                  );
+                })}
+                {/* OpenRouter detailed card */}
+                {(() => {
+                  const activeOR = isActive('openrouter');
+                  const hasKey = !!openRouterApiKey.trim();
+                  const currentModel = activeLLM.data?.active === 'openrouter' ? activeLLM.data?.selectedModel : null;
+                  return (
+                    <Card className={`provider-card${activeOR ? ' provider-card-active' : ''}`}>
+                      <div className="row gap wrap provider-card-header" style={{ marginBottom: 6 }}>
+                        <div>
+                          <div className="row gap wrap" style={{ alignItems: 'baseline' }}>
+                            <strong style={{ fontSize: 15 }}>OpenRouter</strong>
+                            {activeOR && <span style={{ color: 'var(--good)', fontWeight: 600, fontSize: 12 }}>● ACTIVE</span>}
                           </div>
-                          <div style={{ fontSize: 14, fontWeight: 500, fontFamily: 'monospace', color: currentModel ? 'var(--fg)' : 'var(--muted)' }}>
-                            {currentModel ? currentModel : activeOR ? '(none selected)' : '— not active —'}
+                          <div className="muted small">openrouter · free models</div>
+                        </div>
+                        <div>
+                          <Pill tone={hasKey ? 'good' : 'neutral'}>{hasKey ? 'Configured' : 'Needs key'}</Pill>
+                          <div className="muted small" style={{ marginTop: 2 }}>{openRouterModels.length} free model{openRouterModels.length === 1 ? '' : 's'}</div>
+                        </div>
+                      </div>
+
+                      {/* Step 1: API Key */}
+                      <Field label="API key">
+                        <input type="password" value={openRouterApiKey} onChange={(e) => setOpenRouterApiKey(e.target.value)} placeholder="sk-or-…" disabled={savingOpenRouter} />
+                      </Field>
+
+                      {/* Step 2: Fetch Models */}
+                      {hasKey && (
+                        <div className="row gap wrap" style={{ marginTop: 8, alignItems: 'center' }}>
+                          <Btn small onClick={fetchOpenRouterModels} disabled={savingOpenRouter || fetchingOpenRouterModels}>
+                            {fetchingOpenRouterModels ? 'Fetching…' : openRouterModels.length === 0 ? 'Fetch free models' : 'Refresh models'}
+                          </Btn>
+                          {openRouterModels.length > 0 && <span className="muted small">{openRouterModels.length} models available</span>}
+                        </div>
+                      )}
+
+                      {/* Step 3: Model Selection & Status */}
+                      {openRouterModels.length > 0 && (
+                        <div style={{ marginTop: 12 }}>
+                          {/* Current Selection Status */}
+                          <div className="form" style={{ marginBottom: 12, padding: 10, background: 'rgba(0,0,0,0.02)', borderRadius: 6, border: '1px solid var(--muted)' }}>
+                            <div className="row gap" style={{ alignItems: 'center', marginBottom: 6 }}>
+                              <strong style={{ fontSize: 13 }}>Selected Model</strong>
+                              {currentModel && activeOR && <Pill tone="good">ACTIVE</Pill>}
+                            </div>
+                            <div style={{ fontSize: 14, fontWeight: 500, fontFamily: 'monospace', color: currentModel ? 'var(--fg)' : 'var(--muted)' }}>
+                              {currentModel ? currentModel : activeOR ? '(none selected)' : '— not active —'}
+                            </div>
+                            {!currentModel && activeOR && <div className="muted small" style={{ marginTop: 4 }}>No model selected for active provider. Choose one below.</div>}
                           </div>
-                          {!currentModel && activeOR && <div className="muted small" style={{ marginTop: 4 }}>No model selected for active provider. Choose one below.</div>}
-                        </div>
 
-                        {/* Model Picker */}
-                        <Field label="Choose a model">
-                          <select value={openRouterModelInput} onChange={(e) => setOpenRouterModelInput(e.target.value)} disabled={switching !== null}>
-                            <option value="">— choose a model —</option>
-                            {openRouterModels.map((m) => (
-                              <option key={m.id} value={m.id}>{m.name}</option>
-                            ))}
-                          </select>
-                        </Field>
+                          {/* Model Picker */}
+                          <Field label="Choose a model">
+                            <select value={openRouterModelInput} onChange={(e) => setOpenRouterModelInput(e.target.value)} disabled={switching !== null}>
+                              <option value="">— choose a model —</option>
+                              {openRouterModels.map((m) => (
+                                <option key={m.id} value={m.id}>{m.name}</option>
+                              ))}
+                            </select>
+                          </Field>
 
-                        {/* Actions for text model */}
-                        <div className="row gap" style={{ marginTop: 8, flexWrap: 'wrap' }}>
-                          {!activeOR && hasKey && openRouterModelInput && (
-                            <Btn small kind="primary" disabled={switching !== null} onClick={() => selectOpenRouterModel(openRouterModelInput)}>
-                              {switching === 'openrouter' ? 'Switching…' : 'Use this Provider'}
-                            </Btn>
-                          )}
-                          {activeOR && hasKey && openRouterModelInput && openRouterModelInput !== currentModel && (
-                            <Btn small kind="primary" disabled={switching !== null} onClick={() => selectOpenRouterModel(openRouterModelInput)}>
-                              {switching === 'openrouter' ? 'Switching…' : 'Use this Provider'}
-                            </Btn>
-                          )}
-                          {activeOR && hasKey && currentModel && (
-                            <Btn small kind="ghost" disabled={switching !== null} onClick={() => setOpenRouterModelInput('')}>
-                              Clear selection
-                            </Btn>
-                          )}
-                          {!openRouterKeySaved && hasKey && (
-                            <Btn small onClick={saveOpenRouterConfig} disabled={savingOpenRouter || !hasKey}>
-                              {savingOpenRouter ? 'Saving…' : 'Save key'}
-                            </Btn>
-                          )}
-                          {openRouterKeySaved && hasKey && (
-                            <Btn small kind="ghost" onClick={updateOpenRouterKey} disabled={savingOpenRouter || !hasKey}>
-                              {savingOpenRouter ? 'Updating…' : 'Update key'}
-                            </Btn>
-                          )}
-                        </div>
+                          {/* Actions for text model */}
+                          <div className="row gap" style={{ marginTop: 8, flexWrap: 'wrap' }}>
+                            {!activeOR && hasKey && openRouterModelInput && (
+                              <Btn small kind="primary" disabled={switching !== null} onClick={() => selectOpenRouterModel(openRouterModelInput)}>
+                                {switching === 'openrouter' ? 'Switching…' : 'Use this Provider'}
+                              </Btn>
+                            )}
+                            {activeOR && hasKey && openRouterModelInput && openRouterModelInput !== currentModel && (
+                              <Btn small kind="primary" disabled={switching !== null} onClick={() => selectOpenRouterModel(openRouterModelInput)}>
+                                {switching === 'openrouter' ? 'Switching…' : 'Use this Provider'}
+                              </Btn>
+                            )}
+                            {activeOR && hasKey && currentModel && (
+                              <Btn small kind="ghost" disabled={switching !== null} onClick={() => setOpenRouterModelInput('')}>
+                                Clear selection
+                              </Btn>
+                            )}
+                            {!openRouterKeySaved && hasKey && (
+                              <Btn small onClick={saveOpenRouterConfig} disabled={savingOpenRouter || !hasKey}>
+                                {savingOpenRouter ? 'Saving…' : 'Save key'}
+                              </Btn>
+                            )}
+                            {openRouterKeySaved && hasKey && (
+                              <Btn small kind="ghost" onClick={updateOpenRouterKey} disabled={savingOpenRouter || !hasKey}>
+                                {savingOpenRouter ? 'Updating…' : 'Update key'}
+                              </Btn>
+                            )}
+                          </div>
 
-                        {/* Step 4: Image Model Selection */}
-                        {openRouterImageModels.length > 0 && (
-                          <div style={{ marginTop: 12 }}>
-                            {/* Current Image Model Status */}
-                            <div className="form" style={{ marginBottom: 12, padding: 10, background: 'rgba(0,0,0,0.02)', borderRadius: 6, border: '1px solid var(--muted)' }}>
-                              <div className="row gap" style={{ alignItems: 'center', marginBottom: 6 }}>
-                                <strong style={{ fontSize: 13 }}>Selected Image Model</strong>
-                                {openRouterImageModelInput && <Pill tone="good">SET</Pill>}
+                          {/* Step 4: Image Model Selection */}
+                          {openRouterImageModels.length > 0 && (
+                            <div style={{ marginTop: 12 }}>
+                              {/* Current Image Model Status */}
+                              <div className="form" style={{ marginBottom: 12, padding: 10, background: 'rgba(0,0,0,0.02)', borderRadius: 6, border: '1px solid var(--muted)' }}>
+                                <div className="row gap" style={{ alignItems: 'center', marginBottom: 6 }}>
+                                  <strong style={{ fontSize: 13 }}>Selected Image Model</strong>
+                                  {openRouterImageModelInput && <Pill tone="good">SET</Pill>}
+                                </div>
+                                <div style={{ fontSize: 14, fontWeight: 500, fontFamily: 'monospace', color: openRouterImageModelInput ? 'var(--fg)' : 'var(--muted)' }}>
+                                  {openRouterImageModelInput || '(none selected)'}
+                                </div>
                               </div>
-                              <div style={{ fontSize: 14, fontWeight: 500, fontFamily: 'monospace', color: openRouterImageModelInput ? 'var(--fg)' : 'var(--muted)' }}>
-                                {openRouterImageModelInput || '(none selected)'}
+
+                              {/* Image Model Picker */}
+                              <Field label="Choose an image model">
+                                <select value={openRouterImageModelInput} onChange={(e) => setOpenRouterImageModelInput(e.target.value)} disabled={switching !== null}>
+                                  <option value="">— choose an image model —</option>
+                                  {openRouterImageModels.map((m) => (
+                                    <option key={m.id} value={m.id}>{m.name}</option>
+                                  ))}
+                                </select>
+                              </Field>
+
+                              {/* Actions */}
+                              <div className="row gap" style={{ marginTop: 8, flexWrap: 'wrap' }}>
+                                {hasKey && openRouterImageModelInput && (
+                                  <Btn small kind="primary" disabled={switching !== null} onClick={() => persistOpenRouterImageModel(openRouterImageModelInput)}>
+                                    {switching === 'openrouter' ? 'Saving…' : 'Save image model'}
+                                  </Btn>
+                                )}
+                                {openRouterImageModelInput && (
+                                  <Btn small kind="ghost" disabled={switching !== null} onClick={() => setOpenRouterImageModelInput('')}>
+                                    Clear selection
+                                  </Btn>
+                                )}
                               </div>
                             </div>
+                          )}
 
-                            {/* Image Model Picker */}
-                            <Field label="Choose an image model">
-                              <select value={openRouterImageModelInput} onChange={(e) => setOpenRouterImageModelInput(e.target.value)} disabled={switching !== null}>
-                                <option value="">— choose an image model —</option>
-                                {openRouterImageModels.map((m) => (
-                                  <option key={m.id} value={m.id}>{m.name}</option>
-                                ))}
-                              </select>
-                            </Field>
-
-                            {/* Actions */}
-                            <div className="row gap" style={{ marginTop: 8, flexWrap: 'wrap' }}>
-                              {hasKey && openRouterImageModelInput && (
-                                <Btn small kind="primary" disabled={switching !== null} onClick={() => persistOpenRouterImageModel(openRouterImageModelInput)}>
-                                  {switching === 'openrouter' ? 'Saving…' : 'Save image model'}
-                                </Btn>
-                              )}
-                              {openRouterImageModelInput && (
-                                <Btn small kind="ghost" disabled={switching !== null} onClick={() => setOpenRouterImageModelInput('')}>
-                                  Clear selection
-                                </Btn>
-                              )}
-                            </div>
-                          </div>
-                        )}
-
-                        {!hasKey && <span className="muted small" style={{ marginTop: 8, display: 'block' }}>Enter your API key above, then fetch models to choose one.</span>}
-                      </div>
-                    )}
-                  </div>
-                );
-              })()}
+                          {!hasKey && <span className="muted small" style={{ marginTop: 8, display: 'block' }}>Enter your API key above, then fetch models to choose one.</span>}
+                        </div>
+                      )}
+                    </Card>
+                  );
+                })()}
+              </div>
 
               {/* Video Production Models card — shown only when active provider is Claude or OpenRouter */}
               {(activeLLM.data?.active === 'claude' || activeLLM.data?.active === 'openrouter') && (
@@ -790,7 +836,7 @@ export function SettingsPage() {
                 <Field label="Fallback provider (manual retry only)">
                   <select value={fallbackProviderId ?? ''} onChange={(e) => setFallbackProviderId(e.target.value || null)}>
                     <option value="">None</option>
-                    {providers.map((p: any) => (
+                    {providers.map((p) => (
                       <option key={p.id} value={p.id}>{p.name}</option>
                     ))}
                   </select>
@@ -831,7 +877,7 @@ export function SettingsPage() {
             {/* Warning banner when switching away from Claude */}
             {activeId && activeId !== 'claude' && providers.some((p: any) => p.id === 'claude') && (
               <div className="notice warn" style={{ marginTop: 12 }}>
-                <strong>You are not using Claude.</strong> Script writing, research, and storyboard drawing use <strong>{providers.find((p: any) => p.id === activeId)?.name}</strong>. Your Claude plan is not touched. Switch back to Claude anytime in this panel.
+                <strong>You are not using Claude.</strong> Script writing, research, and storyboard drawing use <strong>{providers.find((p) => p.id === activeId)?.name}</strong>. Your Claude plan is not touched. Switch back to Claude anytime in this panel.
               </div>
             )}
           </>
@@ -884,20 +930,25 @@ export function SettingsPage() {
             )}
             {jobs.data && jobs.data.length > 0 && (
               <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                {jobs.data.map((j: any) => (
-                  <Card key={j.id} title="" className="card-padded">
-                    <div className="row gap" style={{ alignItems: 'center', justifyContent: 'space-between' }}>
-                      <div className="row gap" style={{ gap: 12, alignItems: 'center' }}>
-                        <input type="checkbox" checked={sel.includes(j.id)} onChange={() => toggle(j.id)} />
-                        <strong>{j.type}</strong>
-                        <span className="muted small">{j.id.slice(0, 12)}…</span>
-                        <Pill tone={j.state === 'done' ? 'good' : j.state === 'error' ? 'bad' : j.state === 'running' ? 'warn' : 'neutral'}>{j.state}</Pill>
-                        <span className="muted small">{new Date(j.createdAt).toLocaleString()}</span>
+                {jobs.data.map((j) => {
+                  const createdAt = new Date(j.created_at);
+                  return (
+                    <Card key={j.id} title="" className="card-padded">
+                      <div className="row gap wrap" style={{ alignItems: 'center', justifyContent: 'space-between' }}>
+                        <div className="row gap wrap" style={{ gap: 12, alignItems: 'center' }}>
+                          <input type="checkbox" checked={sel.includes(j.id)} onChange={() => toggle(j.id)} />
+                          <strong>{j.kind.replace(/_/g, ' ')}</strong>
+                          <span className="muted small">{j.id.slice(0, 12)}…</span>
+                          <Pill tone={j.state === 'succeeded' ? 'good' : j.state === 'failed' ? 'bad' : j.state === 'running' ? 'warn' : 'neutral'}>{j.state}</Pill>
+                          {Number.isFinite(createdAt.getTime()) ? (
+                            <time className="muted small" dateTime={j.created_at}>{createdAt.toLocaleString()}</time>
+                          ) : <span className="muted small">Date unavailable</span>}
+                        </div>
+                        {j.state === 'failed' && j.error?.message && <span className="muted small">{j.error.message}</span>}
                       </div>
-                      {j.state === 'error' && <span className="muted small">{j.error?.slice(0, 80)}…</span>}
-                    </div>
-                  </Card>
-                ))}
+                    </Card>
+                  );
+                })}
               </div>
             )}
           </>
@@ -1080,14 +1131,28 @@ export function SettingsPage() {
       </div>
 
       {tab === 'ai-provider' && modalOpen && (
-        <Modal title={`Switch AI provider to ${modalProvider?.name}`} onClose={() => { setModalOpen(false); setModalProvider(null); }}>
-          <p className="muted small" style={{ marginTop: 0 }}>
-            This will change the global provider used for Research, Script, and Storyboard.
-          </p>
+        <Modal title={codexPickerOpen ? 'Choose a Codex model' : `Switch AI provider to ${modalProvider?.name}`} onClose={() => { setModalOpen(false); setModalProvider(null); }}>
+          {codexPickerOpen ? (
+            <>
+              <Field label="Model">
+                <select value={codexModel} onChange={(e) => setCodexModel(e.target.value)} disabled={codexModels.loading}>
+                  <option value="">Codex default</option>
+                  {codexModel && !codexModels.data?.some((model) => model.id === codexModel) && <option value={codexModel}>{codexModel}</option>}
+                  {codexModels.data?.map((model) => <option key={model.id} value={model.id}>{model.name}</option>)}
+                </select>
+              </Field>
+              {codexModels.loading && <Loading what="Loading Codex models" />}
+              {codexModels.error && <ErrorBox error={codexModels.error} retry={codexModels.reload} />}
+            </>
+          ) : (
+            <p className="muted small" style={{ marginTop: 0 }}>
+              This will change the global provider used for Research, Script, and Storyboard.
+            </p>
+          )}
           <div className="row gap" style={{ marginTop: 16, justifyContent: 'flex-end' }}>
             <Btn kind="ghost" onClick={() => { setModalOpen(false); setModalProvider(null); }}>Cancel</Btn>
             <Btn kind="primary" onClick={confirmSwitch} disabled={switching !== null}>
-              {switching ? 'Switching…' : 'Use this Provider'}
+              {switching ? 'Saving…' : codexPickerOpen && activeId === 'codex' ? 'Save model' : 'Use this Provider'}
             </Btn>
           </div>
         </Modal>

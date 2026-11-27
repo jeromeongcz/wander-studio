@@ -7,6 +7,7 @@ import { Engine } from './engine.ts';
 import { buildApi } from './api.ts';
 import { LLMProviderRegistry } from './providers/llm/registry.ts';
 import { claudeProvider } from './providers/llm/claude.ts';
+import { codexProvider } from './providers/llm/codex.ts';
 import { ollamaProvider } from './providers/llm/ollama.ts';
 import { openAICompatibleProvider } from './providers/llm/openai-compatible.ts';
 import { openRouterProvider } from './providers/llm/openrouter.ts';
@@ -24,6 +25,7 @@ const llm = new LLMProviderRegistry();
 
 // Claude is always available (uses your own sign-in).
 llm.register(claudeProvider(process.env.WANDER_CLAUDE_BIN));
+llm.register(codexProvider());
 // Ollama is always available (local models, no key required).
 llm.register(ollamaProvider(fetch, settings.ollamaHost ?? process.env.WANDER_OLLAMA_HOST));
 // OpenAI-compatible endpoint (Qwen, DeepSeek, Gemini, etc.) only when configured.

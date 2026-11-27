@@ -6,6 +6,7 @@ import { AssetLibrary } from './pages/AssetLibrary';
 import { ProjectPage } from './pages/Project';
 import { SettingsPage } from './pages/Settings';
 import { Notifications } from './Notifications';
+import { CodexModelMenu } from './CodexModelMenu';
 import { Icon, Btn, Modal } from './ui';
 import { api } from './api';
 
@@ -158,7 +159,9 @@ export function App() {
         <div className="strip">
           <button className="icon-btn menu-btn" aria-label="Open menu" onClick={() => setMenu(true)}><Icon name="menu" /></button>
           <span className="grow" />
-          {activeAI?.id && (activeAI.id === 'ollama' || activeAI.id === 'openrouter' ? (
+          {activeAI?.id === 'codex' ? (
+            <CodexModelMenu model={activeAI.model ?? null} onChange={(model) => setActiveAI({ id: 'codex', model })} />
+          ) : activeAI?.id && (activeAI.id === 'ollama' || activeAI.id === 'openrouter' ? (
             <button
               className="ai-label"
               onClick={() => openModelPicker(activeAI.id as 'ollama' | 'openrouter')}

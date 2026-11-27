@@ -457,7 +457,7 @@ export function buildApi(engine: Engine, config: Partial<AppConfig> = {}, llm?: 
       activeProvider: llm.activeIdOrNull(),
       fallbackProvider: llm.fallbackIdOrNull(),
       defaultToFreeFirst: settings.defaultToFreeFirst ?? config.defaultToFreeFirst ?? false,
-      selectedModel: settings.selectedModel ?? config.selectedLLMModel ?? undefined,
+      selectedModel: config.selectedLLMModel ?? null,
       ollamaHost: config.ollamaHost,
       openaiCompatible: config.openaiCompatible,
       openrouter: config.openrouter,
