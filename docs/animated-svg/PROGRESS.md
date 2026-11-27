@@ -44,3 +44,12 @@ direction and subtitle clarity.
 Source requirements: prior *Animated SVG Scene Generation Plan*, *High-Quality
 Animated SVG Generation Plan*, and the original high-detail Balete Watcher artwork.
 The art fixture is versioned separately from the raw prior reference.
+
+### Prompt-first art direction
+
+Generate the drawing directly from the scene brief. Reference images, when
+supplied with consent, guide style and anatomy; they are not traced or embedded.
+Review the rendered frame at phone width before evaluating articulation. A
+previous color trace lost too much fabric detail and forest depth and is not
+an animation source. A new direct-vector still was rendered for review; artistic
+approval and a live in-app generation test are still open.

@@ -242,6 +242,9 @@ export function extractApprovedGroup(svg: string, sourceGroupId: string, target:
 export function professionalIllustrationGuidance(style?: string, shading = true): string {
   const direction = Object.hasOwn(ART_DIRECTIONS, style ?? '') ? ART_DIRECTIONS[style as ArtDirection] : '';
   return [direction,
+    'Draw original editable vector artwork directly from the written brief. Image references, when explicitly supplied, are art direction only. Do not trace, quantize or embed a raster; do not redraw from a repeated template.',
+    'Stage one decisive frame before planning motion. At 360 pixels wide, the viewer should identify the subject, gesture, and light source before discovering the fine detail. Decide the most important silhouette, three depth/value planes, and what to leave quiet.',
+    'For a featured person, draw one coherent, naturally weighted pose before splitting it into anatomy layers. Preserve silhouette overlap at shoulder, elbow and wrist. Show grip contact and an asymmetric gaze, and make the light and material clues visible in the final crop.',
     'Draw with layered cubic and quadratic Bézier paths, compound silhouettes, expressive variable-width ink edges and deliberate overlap. Basic shapes are acceptable for small utility forms only. Favor distinctive organic contours over generated repeated shapes; more paths or bytes do not mean better art.',
     'Give the focal character believable skeletal proportions, volume, weight-bearing stance, expressive lids/brows/iris/lips, defined nose/jaw/ears, tapered articulated limbs, fingers that follow the grip, material-specific clothing folds/seams and detailed footwear. Use visible secondary details only when they improve the composition. Match established costume, palette, proportions and lighting direction.',
     'Use color and silhouettes to separate foreground, midground, subject and background. Articulate light sources and reflected light; ground people and props with contact shadows, distinguish materials and control texture frequency so the visual story reads at screen size.',
@@ -249,7 +252,7 @@ export function professionalIllustrationGuidance(style?: string, shading = true)
   ].filter(Boolean).join('\n');
 }
 
-const RUBRIC = 'Assess anatomy and expressions, organic art detail/material, lighting and contact shadows, clear staged spatial depth, continuity, and focal storytelling. Do not score file size or path count. Name specific defects and actionable changes, not compliments.';
+const RUBRIC = 'Assess anatomy and expressions, grip and weight, material-specific detail, coherent directional light and contact shadows, distinct staged value planes, continuity, and one visually legible focal moment. If reviewing an actual preview, judge the silhouette and storytelling at a 360-pixel-wide phone view first. Find clipped or disconnected poses, muddy midtones, mechanical repeats and generic standalone shapes. Do not score file size or path count. Name specific defects, affected groups, and actionable changes, not compliments. A source-only critique is not rendered visual approval.';
 function parseReview(answer: string, method: IllustrationReview['method'], layers: ReadonlyMap<string, LayerSpan>): IllustrationReview {
   const o = parseObject(answer, 32_000, 'Illustration review');
   if (!Array.isArray(o.notes)) throw artError('The review must have a notes array.');
