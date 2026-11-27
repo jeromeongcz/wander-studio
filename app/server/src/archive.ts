@@ -114,9 +114,41 @@ export class ArchiveService {
     } catch {
       throw new EngineError('VALIDATION', 'Manifest is not valid JSON');
     }
+    if (!manifest || typeof manifest !== 'object' || Array.isArray(manifest)) throw new EngineError('VALIDATION', 'Invalid archive manifest');
     if (manifest.app !== 'wander-ai-director' || manifest.format !== FORMAT) throw new EngineError('VALIDATION', `Unsupported archive (format ${manifest.format})`);
     const current = (this.engine.db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version;
     if (manifest.schema > current) throw new EngineError('VALIDATION', `Archive was made by a newer app version (schema ${manifest.schema} > ${current})`);
+
+    // Validate untrusted manifest structure and SQL identifiers before staging any files.
+    const record = (v: unknown): v is Record<string, unknown> => !!v && typeof v === 'object' && !Array.isArray(v);
+    const validId = (v: unknown): v is string => typeof v === 'string' && /^[0-9A-HJKMNP-TV-Z]{26}$/.test(v);
+    if (!Number.isSafeInteger(manifest.schema) || manifest.schema < 1 || !validId(manifest.project_id) || !record(manifest.rows) || !Array.isArray(manifest.files)) {
+      throw new EngineError('VALIDATION', 'Invalid archive manifest structure');
+    }
+    const allowedTables = new Set(TABLES.map((t) => t.name));
+    for (const name of Object.keys(manifest.rows)) {
+      if (!allowedTables.has(name)) throw new EngineError('VALIDATION', 'Unknown archive table');
+    }
+    for (const t of TABLES) {
+      const rows = manifest.rows[t.name] ?? [];
+      if (!Array.isArray(rows)) throw new EngineError('VALIDATION', 'Invalid archive rows');
+      // The table name comes only from TABLES, never the archive.
+      const columns = new Set((this.engine.db.prepare(`PRAGMA table_info(${t.name})`).all() as { name: string }[]).map((c) => c.name));
+      for (const row of rows) {
+        if (!record(row) || !Object.keys(row).length) throw new EngineError('VALIDATION', 'Invalid archive row');
+        for (const [key, value] of Object.entries(row)) {
+          if (!columns.has(key)) throw new EngineError('VALIDATION', 'Unknown archive column');
+          if (value !== null && typeof value !== 'string' && !(typeof value === 'number' && Number.isFinite(value))) throw new EngineError('VALIDATION', 'Invalid archive column value');
+        }
+        if (ID_TABLES.includes(t.name) && !validId(row.id)) throw new EngineError('VALIDATION', 'Invalid archive row ID');
+        if (Object.hasOwn(row, 'project_id') && row.project_id !== manifest.project_id) throw new EngineError('VALIDATION', 'Archive row belongs to another project');
+      }
+    }
+    if (manifest.rows.projects?.length !== 1 || manifest.rows.projects[0].id !== manifest.project_id) throw new EngineError('VALIDATION', 'Archive project ID does not match its project row');
+    if (manifest.locales !== undefined && (!Array.isArray(manifest.locales) || !manifest.locales.every(record))) throw new EngineError('VALIDATION', 'Invalid archive locales');
+    for (const file of manifest.files) {
+      if (!record(file) || typeof file.path !== 'string' || !Number.isSafeInteger(file.bytes) || file.bytes < 0 || typeof file.sha256 !== 'string' || !/^[0-9a-f]{64}$/.test(file.sha256)) throw new EngineError('VALIDATION', 'Invalid archive file metadata');
+    }
 
     // owned ids (only these are remapped when restoring as a copy)
     const owned = new Set<string>();
