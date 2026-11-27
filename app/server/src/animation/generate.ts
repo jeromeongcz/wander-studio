@@ -81,6 +81,8 @@ export interface GenerateAnimatedSceneOptions extends AnimatedGenerationControls
   refineMotion?: { svg: string; animation: unknown; rig?: unknown; scene?: unknown; notes: string; targetLayerIds: string[] };
   signal?: AbortSignal;
   onProgress?: (value: number, message: string) => void;
+  /** Capture the exact base artwork or motion request, including all completed prerequisite stages. */
+  onPromptRequest?: (stage: 'baseArtwork' | 'motion', prompt: string) => void;
   validateArtwork: (svg: string) => void;
   validate: (candidate: AnimatedCandidate) => void;
   rasterizePreview?: (svg: string, signal?: AbortSignal) => Promise<Uint8Array>;
@@ -369,10 +371,14 @@ async function runAnimatedPipeline(o: GenerateAnimatedSceneOptions, artworkOnly:
   const step = (value: number, detail: string) => { checkCancel(); lastProgress = Math.max(lastProgress, value); o.onProgress?.(lastProgress, detail); };
   const bounded = <T>(key: AnimatedBudgetStage, label: string, run: (signal?: AbortSignal) => Promise<T>) => runWithAnimatedStageDeadline({label, timeoutMs: getBudget(key).timeoutMs, signal, run});
   const boundedOutput = (key: AnimatedBudgetStage, label: string, output: string) => checkAnimatedStageOutput(label, output, getBudget(key).maxOutputBytes);
-  const sendRaw = (label: string, prompt: string, opSignal?: AbortSignal) => provider.generateText({ model, prompt: generationRequestPrompt(label, prompt), signal: opSignal, tools: '' });
+  const sendRaw = (label: string, prompt: string, opSignal?: AbortSignal, stage?: AnimatedBudgetStage) => {
+    const request = generationRequestPrompt(label, prompt);
+    if (stage === 'baseArtwork' || stage === 'motion') o.onPromptRequest?.(stage, request);
+    return provider.generateText({ model, prompt: request, signal: opSignal, tools: '' });
+  };
   async function send(key: AnimatedBudgetStage, label: string, prompt: string): Promise<string> {
     try {
-      const result = await bounded(key, label, (opSignal) => sendRaw(label, prompt, opSignal));
+      const result = await bounded(key, label, (opSignal) => sendRaw(label, prompt, opSignal, key));
       return boundedOutput(key, label, result);
     } catch (error) {
       checkCancel();

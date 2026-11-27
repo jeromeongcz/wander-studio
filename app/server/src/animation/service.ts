@@ -10,6 +10,7 @@ import { FRAME } from '../research/sketch.ts';
 import { bad, canonicalArtwork, drawFrame, parseArtwork, readMotion, readRig } from './model.ts';
 import { ANIMATED_SVG_PRESETS, renderAnimatedSvg, renderAnimatedSvgFrame } from './render.ts';
 import { extractApprovedGroup, generateAnimatedScene, type ImageReference } from './generate.ts';
+import { buildAnimatedSketchPrompt } from './prompts.ts';
 
 export const animatedSvgDefaults = {mode:'static',quality:'professional',style:'dark-folklore',fps:30,complexity:'standard',character:true,environment:true,dialogue:false,camera:true,detail:70,strategy:'multi-pass',advancedShading:true,visualReview:true,reuseApproved:true,customDirection:''} as const;
 const styles = 'dark-folklore cinematic-25d professional-cartoon anime folklore graphic-novel watercolor documentary motion-graphics minimalist historical-graphic-novel cinematic-anime painterly-storybook engraved-horror custom'.split(' ');
@@ -25,7 +26,8 @@ export function readSettings(o: Record<string,unknown> = {}) {
 function str(v:unknown,max:number){if(v===undefined||v===null)return '';if(typeof v!=='string'||v.length>max)return bad('Animation text exceeds its allowed length.');return v.trim();}
 function json(v:unknown,limit:number){if(v===undefined||v===null)return undefined;const x=JSON.stringify(v);if(x.length>limit)return bad('Animation metadata exceeds its allowed size.');return JSON.parse(x) as unknown;}
 type Draft = {svg:string;animation:ReturnType<typeof readMotion>;rig?:unknown;scene?:unknown;passes?:unknown;provider?:string};
-type Stored = Draft & {sourceFingerprint?:string; revision:string;state:'draft'|'approved'|'rendered'|'attached';duration:number;layers:string[];assetId?:string;video?:{width:number;height:number;fps:number;frames:number;durationSeconds:number}};
+type CapturedPrompts = Partial<Record<'baseArtwork'|'motion',string>>;
+type Stored = Draft & {prompts?:CapturedPrompts;sourceFingerprint?:string; revision:string;state:'draft'|'approved'|'rendered'|'attached';duration:number;layers:string[];assetId?:string;video?:{width:number;height:number;fps:number;frames:number;durationSeconds:number}};
 type LibraryItem={id:string;revision:string;name:string;kind:string;groupId:string;createdAt:string;svg:string};
 type Key = ReturnType<AnimatedSvgStudio['locate']>;
 export class AnimatedSvgStudio {
@@ -44,7 +46,7 @@ export class AnimatedSvgStudio {
     if(!scene?.scene_id)throw new EngineError('NOT_FOUND','Save the storyboard scene first.');
     const project=this.s.engine.getProject(a.project_id);
     const format=(project.settings.formats as string[]|undefined)?.[0]??'vertical_9x16';
-    return {a,scene,sceneId:scene.scene_id,project,format,index,size:FRAME[format]??FRAME.vertical_9x16};
+    return {a,scene,sceneId:scene.scene_id,project,format,index,size:FRAME[format]??FRAME.vertical_9x16,total:c!.scenes.length,styleNotes:c!.style_notes};
   }
   private get(k:Key):Stored|null {
     const row=this.s.engine.db.prepare('SELECT package_json FROM animated_svg_scenes WHERE storyboard_id=? AND scene_id=?').get(k.a.id,k.sceneId) as {package_json:string}|undefined;
@@ -53,7 +55,12 @@ export class AnimatedSvgStudio {
   list(id:string){
     const a=this.s.engine.get(id);if(a.kind!=='storyboard')throw new EngineError('NOT_FOUND','Storyboard not found.');
     const c=this.s.engine.getContent(id) as StoryboardContent|null;
-    return (c?.scenes??[]).map((_,i)=>this.get(this.locate(id,i)));
+    return (c?.scenes??[]).map((_,i)=>{
+      const entry=this.get(this.locate(id,i));
+      if(!entry)return null;
+      const {prompts,...metadata}=entry;
+      return {...metadata,hasArtworkPrompt:!!prompts?.baseArtwork,hasMotionPrompt:!!prompts?.motion};
+    });
   }
   private check(k:Key,revision:unknown,initial=false) {
     const now=this.locate(k.a.id,k.index);
@@ -70,11 +77,11 @@ export class AnimatedSvgStudio {
   private current(k:Key,e:Stored){
     if(e.sourceFingerprint&&e.sourceFingerprint!==this.fingerprint(k))throw new EngineError('STALE','Storyboard direction changed. Edit or reimport the animation as a new draft before using it.');
   }
-  import(id:string,i:number,b:Record<string,unknown>, internal?:{passes?:unknown;provider?:string}) {
+  import(id:string,i:number,b:Record<string,unknown>, internal?:{passes?:unknown;provider?:string;prompts?:CapturedPrompts}) {
     const k=this.locate(id,i);this.check(k,b.revision,true);
     const d=parseArtwork(b.svg), animation=readMotion(b.animation,d), rig=readRig(b.rig,d,animation);
     const layers=[...d.ids].filter(([,el])=>el.tag==='g').map(([id])=>id);
-    return this.put(k,{svg:canonicalArtwork(d),animation,rig,scene:json(b.scene,64_000),passes:json(internal?.passes,36_000),provider:internal?.provider,sourceFingerprint:this.fingerprint(k),revision:randomUUID(),state:'draft',duration:animation.duration,layers});
+    return this.put(k,{svg:canonicalArtwork(d),animation,rig,scene:json(b.scene,64_000),passes:json(internal?.passes,36_000),provider:internal?.provider,prompts:internal?.prompts,sourceFingerprint:this.fingerprint(k),revision:randomUUID(),state:'draft',duration:animation.duration,layers});
   }
   reuse(id:string,i:number,b:Record<string,unknown>){
     const k=this.locate(id,i);this.check(k,b.revision,true);
@@ -172,6 +179,11 @@ export class AnimatedSvgStudio {
     const d=parseArtwork(e.svg), m=readMotion(e.animation,d), {width,height}=this.dims(k,360);
     return this.raster(drawFrame(d,m,t,width,height),width,height);
   }
+  capturedPrompt(id:string,i:number,revision:unknown,stage:keyof CapturedPrompts){
+    const prompt=this.check(this.locate(id,i),revision)?.prompts?.[stage];
+    if(!prompt)throw new EngineError('NOT_FOUND','This revision does not have a captured prompt for that stage.');
+    return {prompt};
+  }
   async generate(ctx:JobCtx) {
     const p=ctx.params,k=this.jobKey(ctx),e=this.check(k,p.revision,true);
     const settings=readSettings(k.project.settings.animatedSvg as Record<string,unknown>|undefined);
@@ -191,8 +203,13 @@ export class AnimatedSvgStudio {
       const asset=this.libraryItem(p.libraryReuse.id);
       reuse.unshift({id:asset.id,version:asset.revision,kind:asset.kind,notes:'Explicitly selected immutable library artwork',layers:[extractApprovedGroup(asset.svg,asset.groupId,p.libraryReuse.targetId)]});
     }
+    const prompts:CapturedPrompts={};
     const generated=await generateAnimatedScene({
       provider,model,settings,
+      baseArtworkPrompt:buildAnimatedSketchPrompt(k.scene,{
+        size:k.size,category:k.project.category??undefined,number:k.index+1,total:k.total,
+        styleNotes:k.styleNotes,captionSpace:k.project.settings.reserve_caption_space===true,
+      }),
       scene:{id:k.sceneId,visualDescription:[k.scene.visual_description,p.brief].filter(Boolean).join('\n'),duration:Math.min(60,Math.max(0.1,k.scene.target_duration??5)),width:k.size.w,height:k.size.h,context:k.scene.animation_plan?JSON.stringify(k.scene.animation_plan):undefined},
       referenceNotes:p.referenceNotes,
       reuse,images,
@@ -202,6 +219,7 @@ export class AnimatedSvgStudio {
       }:{}),
       ...(e&&p.targetLayerIds?{refine:{svg:e.svg,animation:e.animation,rig:e.rig,scene:e.scene,targetLayerIds:p.targetLayerIds,notes:p.brief}}:{}),
       signal:ctx.signal,
+      onPromptRequest:(stage,prompt)=>{if(Buffer.byteLength(prompt,'utf8')<=128_000)prompts[stage]=prompt;},
       onProgress:(fraction,message)=>ctx.progress(fraction,message),
       validateArtwork:parseArtwork,
       validate:(v)=>{const d=parseArtwork(v.svg);const m=readMotion(v.animation,d);readRig(v.rig,d,m);},
@@ -209,7 +227,7 @@ export class AnimatedSvgStudio {
     });
     this.jobKey(ctx);
     if(ctx.signal.aborted)throw new EngineError('CANCELLED','Animation generation cancelled.');
-    const saved=this.import(p.id,p.i,{...generated,revision:p.revision,scene:{metadata:generated.scene,artPlan:generated.artPlan,review:generated.review,finalReview:generated.finalReview,referenceAnalysis:generated.referenceAnalysis,reused:generated.reused}},{passes:generated.passes,provider:provider.id});
+    const saved=this.import(p.id,p.i,{...generated,revision:p.revision,scene:{metadata:generated.scene,artPlan:generated.artPlan,review:generated.review,finalReview:generated.finalReview,referenceAnalysis:generated.referenceAnalysis,reused:generated.reused}},{passes:generated.passes,provider:provider.id,prompts});
     return {revision:saved.revision,state:saved.state};
   }
   async render(ctx:JobCtx){

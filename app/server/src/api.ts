@@ -275,6 +275,13 @@ export function buildApi(engine: Engine, config: Partial<AppConfig> = {}, llm?: 
     if (!/^\d+$/.test(index)) throw new EngineError('VALIDATION','Unknown scene index.');
     return {id,i:Number(index)};
   };
+  app.get('/artifacts/:id/animated-svg/:index/prompt/:stage', async (req,reply) => {
+    const {id,i}=sceneAnimation(req);
+    const {stage}=req.params as {stage:string};
+    if(stage!=='artwork'&&stage!=='motion')throw new EngineError('VALIDATION','Choose the artwork or motion prompt.');
+    reply.header('Cache-Control','no-store');
+    return studio.animation.capturedPrompt(id,i,(req.query as {revision?:string}).revision,stage==='artwork'?'baseArtwork':'motion');
+  });
   app.post('/artifacts/:id/animated-svg/:index/import', async (req) => {const {id,i}=sceneAnimation(req);return studio.animation.import(id,i,body(req));});
   app.post('/artifacts/:id/animated-svg/:index/library', async (req) => {const {id,i}=sceneAnimation(req);return studio.animation.promote(id,i,body(req));});
   app.post('/artifacts/:id/animated-svg/:index/reuse', async (req) => {const {id,i}=sceneAnimation(req);return studio.animation.reuse(id,i,body(req));});

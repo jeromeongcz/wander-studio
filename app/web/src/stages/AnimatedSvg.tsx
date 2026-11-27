@@ -102,6 +102,8 @@ interface AnimatedRecord {
   video?: unknown;
   assetId?: string;
   passes?: unknown[];
+  hasArtworkPrompt?: boolean;
+  hasMotionPrompt?: boolean;
   job?: { id: string };
   layers?: string[];
 }
@@ -162,6 +164,7 @@ export function AnimatedSvgSceneModal({ artifactId, projectId, sceneId, index, t
   const completedJob = useRef<string | undefined>(undefined);
   const [prompt, setPrompt] = useState(brief);
   const [references, setReferences] = useState('');
+  const [providerPrompt, setProviderPrompt] = useState<{revision: string; stage: 'artwork' | 'motion'; prompt: string}>();
   const [referenceImages, setReferenceImages] = useState<SceneReferenceImage[]>([]);
   const [preparingImages, setPreparingImages] = useState(false);
   const [reviewPreview, setReviewPreview] = useState(false);
@@ -202,6 +205,7 @@ export function AnimatedSvgSceneModal({ artifactId, projectId, sceneId, index, t
   useEffect(() => {
     setTime(0); setPreviewTime(0); setPreviewError(false);
     setTargetLayers([]);
+    setProviderPrompt(undefined);
     setLibrarySourceGroup('');
     setLibraryName('');
   }, [revision]);
@@ -305,6 +309,23 @@ export function AnimatedSvgSceneModal({ artifactId, projectId, sceneId, index, t
   const packageUrl = (file: string) => url(`${path}/package/${file}?revision=${encodeURIComponent(revision ?? '')}`);
   const previewUrl = url(`${path}/preview?revision=${encodeURIComponent(revision ?? '')}&time=${previewTime}&attempt=${previewAttempt}`);
 
+  const exactPrompt = (stage: 'artwork' | 'motion') => {
+    if (!revision || !(stage === 'artwork' ? record?.hasArtworkPrompt : record?.hasMotionPrompt)) return null;
+    const visible = providerPrompt?.revision === revision && providerPrompt.stage === stage ? providerPrompt.prompt : undefined;
+    return <div className="stack">
+      <Btn small onClick={async () => {
+        if (visible) { setProviderPrompt(undefined); return; }
+        const result = await api.get<{prompt: string}>(`${path}/prompt/${stage}?revision=${encodeURIComponent(revision)}`);
+        setProviderPrompt({revision, stage, prompt: result.prompt});
+      }}>{visible ? 'Hide' : 'Show'} exact {stage} prompt</Btn>
+      {visible && <>
+        <p className="hint">This is the exact {stage === 'artwork' ? 'base artwork' : 'motion'} prompt sent for this revision, including any earlier planning details. It does not include image bytes.</p>
+        <textarea className="animated-code" aria-label={`Exact ${stage} prompt`} value={visible} readOnly rows={6} />
+        <CopyBtn text={visible} label={`Copy exact ${stage} prompt`} />
+      </>}
+    </div>;
+  };
+
   return (
     <Modal title={`Animated SVG · Scene ${index + 1}${title ? ` · ${title}` : ''}`} wide onClose={onClose}>
       <div className="stack animated-svg-studio">
@@ -403,9 +424,11 @@ export function AnimatedSvgSceneModal({ artifactId, projectId, sceneId, index, t
               push('ok', 'Copied as a new draft. Review and adjust its timing before approval.');
             }}>Copy previous scene</Btn>
           </div>}
+          {exactPrompt('artwork')}
           {record?.passes && record.passes.length > 0 && <details><summary>Generation passes ({record.passes.length})</summary><pre>{JSON.stringify(record.passes, null, 2)}</pre></details>}
         </>}
         {tab === 'animation' && <>
+          {exactPrompt('motion')}
           {record && !previewError && <img className="animated-preview" key={previewUrl} src={previewUrl} alt={`Scene ${index + 1} at ${previewTime.toFixed(2)} seconds`} onLoad={() => setPreviewedRevision(revision)} onError={() => setPreviewError(true)} />}
           {record && previewError && <div className="notice warn">This frame could not be previewed. <Btn small onClick={() => { setPreviewError(false); setPreviewAttempt((x) => x + 1); }}>Retry frame</Btn></div>}
           {record ? <Field label={`Preview playhead · ${time.toFixed(2)} s`} wide><input type="range" aria-label="Preview playhead in seconds" min={0} max={maxTime} step={0.02} value={time} onChange={(e) => setTime(Number(e.target.value))} /></Field> : <p className="muted small">Generate or import a package first to preview it.</p>}

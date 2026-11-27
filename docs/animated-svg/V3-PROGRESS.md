@@ -19,3 +19,10 @@ GitHub target at start: `ca22a5a62c00cc49b1f272130b30d5833bcc98fc`. Matching wor
 - [ ] 12: Real Archival Sepia and Dark Folklore verification and separate artwork acceptance.
 
 Checks are marked only when implemented and tested. Rendering success is not artistic approval.
+
+### Phase 2 checkpoint: exact Storyboard requests
+
+- Storyboard generation now starts from the protected still prompt, including the scene's dimensions, position, style notes, and caption-safe settings. Layered artwork requirements are appended separately. The motion request is still a separate stage.
+- After successful generation, Animated SVG → Artwork → Show exact artwork prompt exposes the exact text sent for the base artwork request on that revision. Animation → Show exact motion prompt independently exposes the exact motion request. Both include planning details when applicable. Copying makes no provider request, exposes no reference image bytes, and does not approximate prompts not sent yet.
+- Verified through queued Storyboard jobs with a capturing provider for single-pass and multi-pass, including generated art direction, unchanged static prompt output, and stale-revision rejection. Broader independent prompt controls and visual acceptance are still open.
+- A live Codex check could not start the ACP app-server in this read-only execution environment. The Codex CLI fallback hit the same startup restriction. No live output was generated, and no art quality result is claimed.
