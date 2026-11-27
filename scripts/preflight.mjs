@@ -4,8 +4,12 @@ import { execFileSync } from 'node:child_process';
 import os from 'node:os';
 import fs from 'node:fs';
 import { join } from 'node:path';
-import { ffmpegBinary, ffprobeBinary } from '../app/server/src/media.ts';
-import { findTool, pathLookup, systemFontDirs } from '../app/server/src/platform.ts';
+import { NODE_REQUIREMENT, requireSupportedNode } from './runtime.mjs';
+
+// Check Node in plain JS before loading an app module written in TypeScript.
+if (!requireSupportedNode()) process.exit(1);
+const { ffmpegBinary, ffprobeBinary } = await import('../app/server/src/media.ts');
+const { findTool, pathLookup, systemFontDirs } = await import('../app/server/src/platform.ts');
 
 const run = (bin, args) => { try { return execFileSync(bin, args, { stdio: ['ignore', 'pipe', 'ignore'], timeout: 30_000 }).toString().trim(); } catch { return null; } };
 const where = (name) => { const found = findTool(name); return found !== name ? found : (run(pathLookup(), [name])?.split(/\r?\n/)[0] ?? null); };
@@ -15,7 +19,7 @@ const win = process.platform === 'win32';
 const mac = process.platform === 'darwin';
 const installFfmpeg = win ? 'winget install Gyan.FFmpeg' : mac ? 'brew install ffmpeg-full' : 'install ffmpeg with libass and librsvg';
 
-check('Node >= 22', 'required', Number(process.versions.node.split('.')[0]) >= 22, process.version, win ? 'winget install OpenJS.NodeJS.LTS' : 'brew install node');
+check(NODE_REQUIREMENT, 'required', true, process.version, win ? 'winget install OpenJS.NodeJS.LTS' : 'brew install node');
 const FF = ffmpegBinary();
 const version = run(FF, ['-version'])?.split(/\r?\n/)[0];
 check('FFmpeg', 'required', !!version, version ?? 'not found', installFfmpeg);

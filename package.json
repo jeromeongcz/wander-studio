@@ -10,14 +10,14 @@
     "preflight": "node scripts/preflight.mjs",
     "test": "npm test -w @wander/server",
     "typecheck": "npm run typecheck -w @wander/server && npm run typecheck -w @wander/web",
-    "dev:server": "node app/server/src/server.ts",
+    "dev:server": "node scripts/check-runtime.mjs && node app/server/src/server.ts",
     "build:web": "npm run build -w @wander/web",
     "dev:web": "npm run dev -w @wander/web",
     "seed:demo": "node scripts/seed-demo.mjs",
     "start": "npm run build:web && npm run dev:server"
   },
   "engines": {
-    "node": ">=22"
+    "node": "^22.18.0 || >=24.0.0"
   },
   "devDependencies": {
     "@types/node": "^26.6.7",

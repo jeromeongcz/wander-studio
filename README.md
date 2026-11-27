@@ -7,13 +7,13 @@ A local-first studio for faceless, multilingual (English, Tagalog, Taglish) vide
 | Tool | Needed for | Required? |
 |---|---|---|
 | macOS, or Windows 10/11 | macOS is tested. **Windows support is new and has not been run on a Windows computer yet** | One of them |
-| Node.js 22 or newer | Running the app | Yes |
+| Node.js 22.18+ (22.x) or 24+ | Running the app | Yes |
 | FFmpeg with libass | Captions and rendering (on Windows it also needs librsvg, for storyboard pictures) | Yes |
 | [Claude Code](https://claude.com/claude-code), signed in | Topic research, script writing, storyboard pictures | For those features |
 | `edge-tts` | Filipino and English (Philippines) narration voices | Recommended for Tagalog and Taglish |
 | 8 GB RAM and 20 GB free disk | What `npm run preflight` checks for | Yes |
 
-The built-in `say` voices exist only on a Mac; on Windows use Edge TTS or import your own recording. Linux is not supported or tested.
+The built-in `say` voices exist only on a Mac; on Windows use Edge TTS or import your own recording. The v3 branch has automated Linux checks, but Linux is not a supported desktop release platform.
 
 ## Install on a Mac
 
@@ -42,7 +42,7 @@ cd wander-studio
 ```
 
 ```bash
-npm install
+npm ci --include=dev
 ```
 
 **3. Sign in to Claude Code** (install it first, from the link above)
@@ -57,7 +57,7 @@ claude auth login
 npm run preflight
 ```
 
-Fix anything it marks as required.
+Fix anything it marks as required. If startup reports missing build tools, run `npm ci --include=dev` at the repository root before retrying.
 
 ## Install on Windows
 
@@ -114,7 +114,7 @@ cd wander-studio
 ```
 
 ```powershell
-npm install
+npm ci --include=dev
 ```
 
 ```powershell
@@ -152,7 +152,7 @@ git pull
 ```
 
 ```bash
-npm install
+npm ci --include=dev
 ```
 
 Then stop the server, run `npm start` again, and refresh the page. A running server does not pick up new code by itself.
