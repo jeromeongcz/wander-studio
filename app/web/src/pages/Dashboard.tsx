@@ -85,19 +85,19 @@ export function Dashboard() {
   );
 }
 
-/** Video Production: the chosen step's title on top, then the horizontal stepper, then that step's panel. Step 1 is the research workspace. */
+/** Video Production lists all videos until a production step is selected. */
 export function VideoProduction({ stepId }: { stepId?: string }) {
   const { projects, jobs, rows } = useBoard();
-  const idx = Math.max(0, STEPS.findIndex((s) => s.id === stepId));
+  const idx = STEPS.findIndex((s) => s.id === stepId);
   const step = STEPS[idx];
   const at = (i: number) => rows.filter((r) => (r.flow.allDone ? i === STEPS.length - 1 : r.flow.current === i));
-  const list = at(idx);
+  const list = step ? at(idx) : rows;
   return (
     <div className="stack">
       <Stepper
         current={idx}
-        title={idx === 0 ? 'Research Studio' : step.label}
-        blurb={idx === 0 ? 'Search a topic, approve it, then start a video from it.' : step.blurb}
+        title={step?.label ?? 'Video Production'}
+        blurb={step?.blurb}
         items={STEPS.map((x, i) => {
           const n = at(i).length;
           return { key: x.id, label: x.label, sub: n ? `${n} video${n === 1 ? '' : 's'}` : x.short, href: `#/projects/${x.id}` };
@@ -109,6 +109,7 @@ export function VideoProduction({ stepId }: { stepId?: string }) {
       {projects.loading && !projects.data && <Loading what="Loading videos" />}
       {idx === 0 && list.length > 0 && <h3>Videos at this step</h3>}
       {list.length > 0 && <div className="stack">{list.map((r) => <VideoCard key={r.p.id} {...r} />)}</div>}
+      {!step && projects.data && list.length === 0 && <Empty>No videos yet. Go to the <a href="#/projects/topic">Research Studio</a> to search and approve a topic.</Empty>}
       {idx > 0 && projects.data && list.length === 0 && <Empty>No videos at this step. Approve a topic in <a href="#/projects/topic">step 1</a> and start a video from it.</Empty>}
     </div>
   );

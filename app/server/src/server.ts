@@ -5,6 +5,13 @@ import { join, dirname, extname, normalize, resolve } from 'node:path';
 import { openDb } from './db.ts';
 import { Engine } from './engine.ts';
 import { buildApi } from './api.ts';
+import { LLMProviderRegistry } from './providers/llm/registry.ts';
+import { claudeProvider } from './providers/llm/claude.ts';
+import { codexProvider } from './providers/llm/codex.ts';
+import { ollamaProvider } from './providers/llm/ollama.ts';
+import { openAICompatibleProvider } from './providers/llm/openai-compatible.ts';
+import { openRouterProvider } from './providers/llm/openrouter.ts';
+import { readLLMSettings, writeLLMSettings } from './llm-settings.ts';
 
 const appRoot = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
 // WANDER_ROOT keeps data (projects, db, cache) somewhere other than the source tree, e.g. for demos.
@@ -12,7 +19,62 @@ const root = process.env.WANDER_ROOT ?? appRoot;
 const dbPath = process.env.WANDER_DB ?? join(root, 'data', 'wander.db');
 const port = Number(process.env.WANDER_PORT ?? 4317);
 
-const app = buildApi(new Engine(openDb(dbPath)), { root });
+// ---- Global AI Switcher: build the LLM provider registry and restore the persisted selection ----
+const settings = await readLLMSettings();
+const llm = new LLMProviderRegistry();
+
+// Claude is always available (uses your own sign-in).
+llm.register(claudeProvider(process.env.WANDER_CLAUDE_BIN));
+llm.register(codexProvider());
+// Ollama is always available (local models, no key required).
+llm.register(ollamaProvider(fetch, settings.ollamaHost ?? process.env.WANDER_OLLAMA_HOST));
+// OpenAI-compatible endpoint (Qwen, DeepSeek, Gemini, etc.) only when configured.
+if (settings.openaiCompatible?.baseUrl) {
+  llm.register(openAICompatibleProvider({
+    baseUrl: settings.openaiCompatible.baseUrl,
+    apiKey: settings.openaiCompatible.apiKey,
+    model: settings.openaiCompatible.model,
+    fetchFn: fetch,
+  }));
+}
+// OpenRouter is always registered so a saved "openrouter" selection is valid; it needs a key to work.
+llm.register(openRouterProvider({
+  apiKey: settings.openrouter?.apiKey,
+  model: settings.openrouter?.model,
+  fetchFn: fetch,
+}));
+
+// Restore the globally active provider, fallback, defaultToFreeFirst and selected model.
+llm.applySettings({
+  activeProvider: settings.activeProvider ?? null,
+  fallbackProvider: settings.fallbackProvider ?? null,
+  defaultToFreeFirst: settings.defaultToFreeFirst ?? false,
+  selectedModel: settings.selectedModel ?? undefined,
+});
+
+// Free-first default: when no provider is explicitly chosen and Ollama is reachable, prefer it.
+if (!llm.activeIdOrNull() && settings.defaultToFreeFirst) {
+  const ollama = llm.list().find((p) => p.id === 'ollama');
+  if (ollama) {
+    try {
+      const h = await ollama.healthCheck();
+      if (h.ok) llm.setActive('ollama');
+    } catch { /* leave unset; user picks in Settings */ }
+  }
+}
+
+const config = {
+  root,
+  activeLLMProvider: llm.activeIdOrNull(),
+  fallbackLLMProvider: llm.fallbackIdOrNull(),
+  defaultToFreeFirst: settings.defaultToFreeFirst ?? false,
+  ollamaHost: settings.ollamaHost ?? process.env.WANDER_OLLAMA_HOST,
+  openaiCompatible: settings.openaiCompatible ?? undefined,
+  openrouter: settings.openrouter ?? undefined,
+  selectedLLMModel: settings.selectedModel ?? null,
+};
+
+const app = buildApi(new Engine(openDb(dbPath)), config, llm);
 
 // Serve the built web UI (app/web/dist) when it exists. API routes live at /api/* (and, for tools, at the root).
 const dist = join(appRoot, 'app', 'web', 'dist', 'ui');
@@ -29,3 +91,5 @@ if (existsSync(join(dist, 'index.html'))) {
 // Bind to loopback only: this is a local-first app with no authentication.
 await app.listen({ host: '127.0.0.1', port });
 console.log(`Wander AI Director API on http://127.0.0.1:${port} (db: ${dbPath})`);
+console.log(`Active AI provider: ${llm.activeIdOrNull() ?? '(none selected)'}`);
+console.log(`Fallback AI provider: ${llm.fallbackIdOrNull() ?? '(none)'}`);

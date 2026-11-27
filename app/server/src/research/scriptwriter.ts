@@ -191,14 +191,16 @@ export class ScriptWriter {
     return { ...saved, sections: content.sections.length, requested: b.scenes, directed, dropped: dropped.slice(0, 30) };
   }
 
-  /** Ask Claude Code (with no tools) for a script and save it as a draft. */
+  /** Ask the active AI provider for a script and save it as a draft. */
   async generate(scriptId: string, o: { seconds: unknown; scenes?: unknown; notes?: string; reopen?: boolean }) {
     const b = this.brief(scriptId, o);
     this.guard(scriptId, o.reopen); // before spending a run
     if (this.writing.has(scriptId)) throw new EngineError('BUSY', 'This script is already being written');
     this.writing.add(scriptId);
     try {
-      const answer = await this.s.research.bridge.ask(buildScriptPrompt(b), { noTools: true });
+      const active = this.s.llm.active();
+      if (!active) throw new EngineError('PROVIDER_ERROR', 'No AI provider selected. Choose one in Settings → AI Provider before writing a script.');
+      const answer = await this.s.llm.generateText({ prompt: buildScriptPrompt(b), model: this.s.config.selectedLLMModel ?? undefined });
       return this.store(scriptId, b, answer, o.reopen);
     } finally {
       this.writing.delete(scriptId);

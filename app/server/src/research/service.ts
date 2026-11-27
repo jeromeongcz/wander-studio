@@ -3,7 +3,6 @@ import { EngineError } from '../engine.ts';
 import { ulid } from '../../../shared/src/index.ts';
 import type { JobCtx } from '../jobs.ts';
 import { createProject } from '../pipeline.ts';
-import { ClaudeBridge } from './claude.ts';
 import { checkLinks } from './links.ts';
 import type { LinkResult } from './links.ts';
 import { MAX_TOPICS_PER_REQUEST, TOPICS_PER_RUN, buildResearchPrompt, parseModelJson, validateTopics } from './topics.ts';
@@ -46,12 +45,10 @@ const cleanCategory = (c: unknown) => (typeof c === 'string' ? c.trim().slice(0,
 
 export class ResearchService {
   s: Studio;
-  bridge: ClaudeBridge;
   /** Research Studio runs have no project, so they are not rows in the project-scoped job queue: they run here and report through the batch row. */
   private running = new Map<string, { ctl: AbortController; done: Promise<void> }>();
   constructor(studio: Studio) {
     this.s = studio;
-    this.bridge = new ClaudeBridge(studio.config.llm?.claudeBin);
     // a run cannot survive a restart: say so instead of leaving it "running" forever
     this.db.prepare("UPDATE topic_batches SET state = 'failed', message = 'Interrupted: the app was restarted. Run it again.', finished_at = ? WHERE project_id IS NULL AND state IN ('queued','running')").run(now());
   }
@@ -59,8 +56,14 @@ export class ResearchService {
     return this.s.engine.db;
   }
 
-  status() {
-    return this.bridge.status();
+  async status() {
+    const active = this.s.llm.active();
+    if (!active) return { installed: false, loggedIn: false, detail: 'No AI provider selected. Choose one in Settings → AI Provider.', fix: 'Open Settings → AI Provider and pick Claude, Ollama, or an OpenAI-compatible endpoint.' };
+    const h = await active.healthCheck();
+    const notFound = /not found|ENOENT/.test(h.detail);
+    let fix = h.ok ? undefined : `Select a working AI provider in Settings → AI Provider.`;
+    if (active.id === 'claude' && !h.ok) fix = 'Open a terminal and run: claude auth login   (then come back and check again)';
+    return { installed: !notFound, loggedIn: h.ok && !notFound, detail: `${active.name}: ${h.detail}`, fix };
   }
 
   /** `scope` is a project id, or null for the Research Studio. */
@@ -142,9 +145,17 @@ export class ResearchService {
   async run(batchId: string, ctx: JobCtx) {
     const b = this.batch(batchId);
     this.db.prepare("UPDATE topic_batches SET state = 'running' WHERE id = ?").run(batchId);
-    const st = await this.bridge.status();
-    if (!st.installed || !st.loggedIn) {
-      const msg = `${st.detail}. ${st.fix ?? ''}`.trim();
+    const active = this.s.llm.active();
+    if (!active) {
+      const msg = 'No AI provider selected. Choose one in Settings → AI Provider before running research.';
+      this.finish(batchId, 'failed', msg);
+      throw new EngineError('PROVIDER_ERROR', msg);
+    }
+    const st = await active.healthCheck();
+    if (!st.ok) {
+      let msg = st.detail;
+      if (active.id === 'claude' && /not signed in/.test(st.detail)) msg += '. Run: claude auth login';
+      else msg += '. Select a working AI provider in Settings → AI Provider.';
       this.finish(batchId, 'failed', msg);
       throw new EngineError('PROVIDER_ERROR', msg);
     }
@@ -157,9 +168,9 @@ export class ResearchService {
         if (ctx.signal.aborted) throw new EngineError('CANCELLED', 'Cancelled');
         const want = Math.min(TOPICS_PER_RUN, b.requested_count - found.length);
         ctx.progress(Math.min(0.85, found.length / b.requested_count), `Researching topics ${found.length + 1} to ${found.length + want} of ${b.requested_count}. This can take a few minutes.`);
-        ctx.log(`Asking Claude Code for ${want} topic(s)`);
+        ctx.log(`Asking ${active.name} for ${want} topic(s)`);
         const avoid = [...existing, ...found.map((t) => t.title)];
-        const text = await this.bridge.ask(buildResearchPrompt({ category: b.category ?? '', focus: b.focus ?? undefined, notes: b.notes ?? undefined, count: want, avoid }), { signal: ctx.signal });
+        const text = await this.s.llm.generateText({ prompt: buildResearchPrompt({ category: b.category ?? '', focus: b.focus ?? undefined, notes: b.notes ?? undefined, count: want, avoid }), tools: 'WebSearch,WebFetch', model: this.s.config.selectedLLMModel ?? undefined, signal: ctx.signal });
         try {
           const v = validateTopics(parseModelJson(text), { max: want, avoid });
           found.push(...v.topics);
@@ -179,7 +190,7 @@ export class ResearchService {
     }
     if (!found.length) {
       this.finish(batchId, 'failed', 'No usable topics came back. Try again, or use the copy-paste prompt.', rejected);
-      throw new EngineError('PROVIDER_ERROR', 'No usable topics came back from Claude Code');
+      throw new EngineError('PROVIDER_ERROR', 'No usable topics came back from the AI provider');
     }
     ctx.progress(0.9, 'Checking that each source link exists…');
     const links = await checkLinks(found.flatMap((t) => t.facts.map((f) => f.source_url)), this.s.config.fetchFn);
