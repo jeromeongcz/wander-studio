@@ -23,19 +23,21 @@ function frame(seconds: number): string {
 // These tests use only our verified, hand-built fixture, not model or imported SVG content.
 const fixtureValidator = (svg: string) => assert.match(svg, /^<svg xmlns="http:\/\/www.w3.org\/2000\/svg"/);
 
-test('renders and probes real H.264 frames and a storyboard PNG', { skip: !canRender, timeout: 30_000 }, async () => {
+for (const backend of ['librsvg', 'chromium'] as const) test(`renders and probes real H.264 frames and a storyboard PNG with ${backend}`, {
+  skip: backend === 'librsvg' ? !canRender : !process.env.WANDER_TEST_CHROMIUM, timeout: 60_000,
+}, async () => {
   const root = await mkdtemp(join(tmpdir(), 'wander-svg-test-'));
   try {
     const times: number[] = [];
     const stages = new Set<string>();
     const outputPath = join(root, 'motion.mp4');
     const result = await renderAnimatedSvg({
-      outputPath, width: 96, height: 128, durationSeconds: 0.5, fps: 24,
+      outputPath, width: 96, height: 128, durationSeconds: 0.5, fps: 24, backend,
       assertSafeSvg: fixtureValidator,
       frameAt: (t) => { times.push(t); return frame(t); },
       onProgress: ({ stage }) => stages.add(stage),
     });
-    assert.deepEqual(result, { outputPath, frames: 12, fps: 24, width: 96, height: 128, durationSeconds: 0.5 });
+    assert.deepEqual(result, { outputPath, frames: 12, fps: 24, width: 96, height: 128, durationSeconds: 0.5, backend });
     assert.deepEqual(times, Array.from({ length: 12 }, (_, index) => index / 24));
     assert.deepEqual([...stages], ['frames', 'encoding', 'verifying']);
     const raw = execFileSync(ffmpeg, [
@@ -55,7 +57,7 @@ test('renders and probes real H.264 frames and a storyboard PNG', { skip: !canRe
     };
     assert.ok(center(raw.subarray(size)) - center(raw.subarray(0, size)) > 24, 'rendered motion displaced illustration');
     const thumbnail = await renderAnimatedSvgFrame({
-      outputPath: join(root, 'storyboard.png'), width: 96, height: 128, svg: frame(0), assertSafeSvg: fixtureValidator,
+      outputPath: join(root, 'storyboard.png'), width: 96, height: 128, svg: frame(0), assertSafeSvg: fixtureValidator, backend,
     });
     assert.deepEqual((await readFile(thumbnail)).subarray(0, 8), Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]));
     assert.deepEqual((await readdir(root)).sort(), ['motion.mp4', 'storyboard.png']);
@@ -68,7 +70,7 @@ test('cancels immediately; cleans stages when any frame fails required validatio
   const root = await mkdtemp(join(tmpdir(), 'wander-svg-fail-'));
   const outputPath = join(root, 'should-not-exist.mp4');
   try {
-    const base = { outputPath, width: 96, height: 128, fps: 24, durationSeconds: 0.5, frameAt: frame };
+    const base = { outputPath, backend: 'librsvg' as const, width: 96, height: 128, fps: 24, durationSeconds: 0.5, frameAt: frame };
     await assert.rejects(renderAnimatedSvg({ ...base, assertSafeSvg: fixtureValidator, signal: AbortSignal.abort() }), {
       code: 'CANCELLED',
     });
@@ -82,6 +84,25 @@ test('cancels immediately; cleans stages when any frame fails required validatio
     }), /fixture validation stop/);
     assert.equal(validated, 2);
     assert.deepEqual(await readdir(root), []);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('auto reports the librsvg fallback, while explicit Chromium fails closed if unavailable', { skip: !canRender, timeout: 30_000 }, async () => {
+  const root = await mkdtemp(join(tmpdir(), 'wander-svg-fallback-'));
+  try {
+    const options = {
+      outputPath: join(root, 'frame.png'), chromiumExecutable: join(root, 'no-such-browser'), width: 96, height: 128,
+      svg: frame(0), assertSafeSvg: fixtureValidator,
+    };
+    let backend: string | undefined;
+    await renderAnimatedSvgFrame({ ...options, backend: 'auto', onBackend: (value) => { backend = value; } });
+    assert.equal(backend, 'librsvg');
+    await assert.rejects(renderAnimatedSvgFrame({ ...options, backend: 'chromium' }), {
+      code: 'ANIMATION_CHROMIUM_UNAVAILABLE',
+    });
+    assert.deepEqual(await readdir(root), ['frame.png']);
   } finally {
     await rm(root, { recursive: true, force: true });
   }

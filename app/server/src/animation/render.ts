@@ -3,6 +3,8 @@ import { mkdir, mkdtemp, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { basename, dirname, join, resolve } from 'node:path';
 import { EngineError } from '../engine.ts';
 import { ffmpegBinary, ffprobeBinary, run } from '../media.ts';
+import { createChromiumRasterizer } from './chromium.ts';
+import type { ChromiumRasterizer } from './chromium.ts';
 
 export const ANIMATED_SVG_PRESETS = {
   draft: { shortEdge: 360, fps: 15 },
@@ -13,14 +15,21 @@ export const ANIMATED_SVG_PRESETS = {
 } as const;
 
 export type AnimatedRenderPreset = keyof typeof ANIMATED_SVG_PRESETS;
+export type AnimatedSvgBackend = 'chromium' | 'librsvg';
+export type AnimatedSvgBackendPreference = AnimatedSvgBackend | 'auto';
 
-interface RasterOptions {
+export interface RasterOptions {
   outputPath: string;
   width: number;
   height: number;
   /** Must throw on any untrusted or unsupported SVG. Called for every frame, before rasterization. */
   assertSafeSvg: (svg: string) => unknown;
   ffprobeOverride?: string;
+  /** Defaults to env WANDER_ANIMATION_RENDERER or auto (Chromium, then librsvg only if it cannot start). */
+  backend?: AnimatedSvgBackendPreference;
+  /** An installed sandbox-capable Chromium, or env WANDER_CHROMIUM. Default uses Playwright's browser. */
+  chromiumExecutable?: string;
+  onBackend?: (backend: AnimatedSvgBackend) => void;
   signal?: AbortSignal;
 }
 
@@ -39,6 +48,7 @@ export interface AnimatedSvgRenderResult {
   fps: number;
   frames: number;
   durationSeconds: number;
+  backend: AnimatedSvgBackend;
 }
 
 const MAX_FRAME_BYTES = 2 * 1024 * 1024;
@@ -64,6 +74,28 @@ function checkFrame(svg: string, validate: RasterOptions['assertSafeSvg']): numb
   if (bytes === 0 || bytes > MAX_FRAME_BYTES) throw new EngineError('ANIMATION_SIZE', 'One SVG frame exceeds the 2 MiB limit.');
   validate(svg);
   return bytes;
+}
+
+async function createRasterizer(options: RasterOptions, signal: AbortSignal): Promise<ChromiumRasterizer | undefined> {
+  const preference = options.backend ?? process.env.WANDER_ANIMATION_RENDERER ?? 'auto';
+  if (!['auto','librsvg','chromium'].includes(preference)) {
+    throw new EngineError('ANIMATION_RENDERER', 'Choose auto, chromium, or librsvg for animated SVG rendering.');
+  }
+  if (preference === 'librsvg') return undefined;
+  try {
+    return await createChromiumRasterizer({
+      width: options.width, height: options.height, executablePath: options.chromiumExecutable ?? process.env.WANDER_CHROMIUM, signal,
+    });
+  } catch (err) {
+    if (preference === 'auto' && err instanceof EngineError && err.code === 'ANIMATION_CHROMIUM_UNAVAILABLE') return undefined;
+    throw err;
+  }
+}
+
+function reportBackend(options: RasterOptions, rasterizer: ChromiumRasterizer | undefined): AnimatedSvgBackend {
+  const backend = rasterizer ? 'chromium' : 'librsvg';
+  try { options.onBackend?.(backend); } catch { /* Reporting cannot interrupt a render. */ }
+  return backend;
 }
 
 function rasterArgs(width: number, height: number): string[] {
@@ -131,10 +163,9 @@ async function validateEncoded(file: string, options: AnimatedSvgRenderOptions, 
 }
 
 /**
- * Rasterize validated SVG frames with FFmpeg/librsvg and encode one silent H.264 clip.
- * Each isolated frame is resolved from exact timestamps; librsvg does not execute JS or SMIL.
- * No browser process, graphics hardware, or network service is used. The validation callback must
- * reject external resource references before calling this library.
+ * Rasterize validated SVG frames with sandboxed Playwright Chromium or FFmpeg/librsvg and encode one silent H.264 clip.
+ * Each isolated frame is resolved from exact timestamps; no frame executes generated JS or SMIL.
+ * The validation callback must reject external resource references before calling this library.
  */
 export async function renderAnimatedSvg(options: AnimatedSvgRenderOptions): Promise<AnimatedSvgRenderResult> {
   const { width, height, fps, durationSeconds } = options;
@@ -157,25 +188,33 @@ export async function renderAnimatedSvg(options: AnimatedSvgRenderOptions): Prom
     // A UI listener is observational and must not break a local render job.
     try { options.onProgress?.({ stage, completed, total: frames }); } catch { /* ignore listener errors */ }
   };
+  let rasterizer: ChromiumRasterizer | undefined;
   try {
+    rasterizer = await createRasterizer(options, signal);
+    const backend = reportBackend(options, rasterizer);
+    const extension = rasterizer ? 'png' : 'svg';
     let bytes = 0;
     notify('frames', 0);
     for (let i = 0; i < frames; i++) {
       checkSignal(signal);
       const svg = options.frameAt(i / fps);
-      bytes += checkFrame(svg, options.assertSafeSvg);
+      checkFrame(svg, options.assertSafeSvg);
+      const data = rasterizer ? await rasterizer.capture(svg) : svg;
+      bytes += Buffer.byteLength(data);
       if (bytes > MAX_SEQUENCE_BYTES) {
-        throw new EngineError('ANIMATION_BUDGET', 'Generated SVG frames exceed the 512 MiB temporary-storage budget.');
+        throw new EngineError('ANIMATION_BUDGET', 'Generated frames exceed the 512 MiB temporary-storage budget.');
       }
-      await writeFile(join(work, `frame_${String(i).padStart(6, '0')}.svg`), svg, { encoding: 'utf8', mode: 0o600 });
+      await writeFile(join(work, `frame_${String(i).padStart(6, '0')}.${extension}`), data, { mode: 0o600 });
       notify('frames', i + 1);
     }
+    await rasterizer?.close();
     const temp = join(work, 'encoded.mp4');
     notify('encoding', 0);
     await runEncoder(ffmpegBinary(options.ffprobeOverride), [
       '-nostdin', '-hide_banner', '-loglevel', 'error', '-progress', 'pipe:1', '-filter_threads', '1',
-      '-f', 'image2', '-framerate', String(fps), '-start_number', '0', ...rasterArgs(width, height),
-      '-i', 'frame_%06d.svg', '-frames:v', String(frames),
+      '-protocol_whitelist', 'file,pipe', '-f', 'image2', '-framerate', String(fps), '-start_number', '0',
+      ...(backend === 'librsvg' ? rasterArgs(width, height) : []),
+      '-i', `frame_%06d.${extension}`, '-frames:v', String(frames),
       '-vf', `${rasterFilter(width, height)},format=yuv420p`,
       '-an', '-c:v', 'libx264', '-threads', '2', '-preset', 'fast', '-crf', '18',
       '-movflags', '+faststart', temp,
@@ -185,8 +224,9 @@ export async function renderAnimatedSvg(options: AnimatedSvgRenderOptions): Prom
     const verifiedDuration = await validateEncoded(temp, options, frames, signal);
     checkSignal(signal);
     await rename(temp, outputPath);
-    return { outputPath, width, height, fps, frames, durationSeconds: verifiedDuration };
+    return { outputPath, width, height, fps, frames, durationSeconds: verifiedDuration, backend };
   } finally {
+    await rasterizer?.close();
     await rm(work, { recursive: true, force: true });
   }
 }
@@ -201,21 +241,29 @@ export async function renderAnimatedSvgFrame(options: RasterOptions & { svg: str
   if (!/\.png$/i.test(outputPath)) throw new EngineError('ANIMATION_OUTPUT', 'Export a frame to a .png file.');
   await mkdir(dirname(outputPath), { recursive: true });
   const work = await mkdtemp(join(dirname(outputPath), '.wander-svg-'));
+  let rasterizer: ChromiumRasterizer | undefined;
   try {
-    const input = join(work, 'frame.svg');
     const output = join(work, 'frame.png');
-    await writeFile(input, svg, { encoding: 'utf8', mode: 0o600 });
     const signal = AbortSignal.any([AbortSignal.timeout(30_000), ...(options.signal ? [options.signal] : [])]);
-    await runEncoder(ffmpegBinary(options.ffprobeOverride), [
-      '-nostdin', '-hide_banner', '-loglevel', 'error', '-filter_threads', '1',
-      ...rasterArgs(width, height), '-i', input, '-frames:v', '1',
-      '-vf', `${rasterFilter(width, height)},format=rgb24`, '-c:v', 'png', '-threads', '1', '-update', '1', output,
-    ], signal, () => {}, work);
+    rasterizer = await createRasterizer(options, signal);
+    reportBackend(options, rasterizer);
+    if (rasterizer) {
+      await writeFile(output, await rasterizer.capture(svg), { mode: 0o600 });
+    } else {
+      const input = join(work, 'frame.svg');
+      await writeFile(input, svg, { encoding: 'utf8', mode: 0o600 });
+      await runEncoder(ffmpegBinary(options.ffprobeOverride), [
+        '-nostdin', '-hide_banner', '-loglevel', 'error', '-filter_threads', '1', '-protocol_whitelist', 'file,pipe',
+        ...rasterArgs(width, height), '-i', input, '-frames:v', '1',
+        '-vf', `${rasterFilter(width, height)},format=rgb24`, '-c:v', 'png', '-threads', '1', '-update', '1', output,
+      ], signal, () => {}, work);
+    }
     if (!(await stat(output)).size) throw new EngineError('ANIMATION_FRAME', 'The rasterizer returned an empty frame.');
     checkSignal(signal);
     await rename(output, outputPath);
     return outputPath;
   } finally {
+    await rasterizer?.close();
     await rm(work, { recursive: true, force: true });
   }
 }
