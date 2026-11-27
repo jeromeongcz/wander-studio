@@ -360,6 +360,12 @@ export function buildApi(engine: Engine, config: Partial<AppConfig> = {}, llm?: 
     if (!('listModels' in p)) throw new EngineError('NOT_READY', `Provider "${p.id}" does not list models`);
     return p.listModels!();
   });
+  app.get('/llm/providers/:id/image-models', async (req) => {
+    if (!llm) throw new EngineError('NOT_READY', 'LLM provider registry is not configured');
+    const p = llm.get((req.params as { id: string }).id);
+    if (!('listImageModels' in p)) throw new EngineError('NOT_READY', `Provider "${p.id}" does not list image models`);
+    return p.listImageModels!();
+  });
   app.post('/llm/providers/:id/pull', async (req) => {
     if (!llm) throw new EngineError('NOT_READY', 'LLM provider registry is not configured');
     const p = llm.get((req.params as { id: string }).id);
@@ -484,21 +490,31 @@ export function buildApi(engine: Engine, config: Partial<AppConfig> = {}, llm?: 
       }));
     }
     if (b.openrouter !== undefined) {
-      const or = b.openrouter;
-      if (or.apiKey !== undefined && typeof or.apiKey !== 'string') throw new EngineError('VALIDATION', 'openrouter.apiKey must be a string');
-      if (or.model !== undefined && typeof or.model !== 'string') throw new EngineError('VALIDATION', 'openrouter.model must be a string');
-      const prev = config.openrouter;
-      const apiKey = or.apiKey !== undefined && or.apiKey !== '' ? or.apiKey : prev?.apiKey;
-      const model = or.model !== undefined ? or.model : (prev?.model ?? '');
-      settings.openrouter = { apiKey, model };
-      config.openrouter = settings.openrouter;
-      llm.replace('openrouter', openRouterProvider({
-        apiKey: settings.openrouter.apiKey,
-        model: settings.openrouter.model,
-        fetchFn: fetch,
-      }));
-    }
-    if (settings.selectedModel !== undefined) { config.selectedLLMModel = settings.selectedModel; studio.config.selectedLLMModel = settings.selectedModel; }
+          const or = b.openrouter;
+          if (or.apiKey !== undefined && typeof or.apiKey !== 'string') throw new EngineError('VALIDATION', 'openrouter.apiKey must be a string');
+          if (or.model !== undefined && typeof or.model !== 'string') throw new EngineError('VALIDATION', 'openrouter.model must be a string');
+          if (or.imageModel !== undefined && typeof or.imageModel !== 'string') throw new EngineError('VALIDATION', 'openrouter.imageModel must be a string');
+          const prev = config.openrouter;
+          const apiKey = or.apiKey !== undefined && or.apiKey !== '' ? or.apiKey : prev?.apiKey;
+          const model = or.model !== undefined ? or.model : (prev?.model ?? '');
+          const imageModel = or.imageModel !== undefined ? or.imageModel : (prev?.imageModel ?? '');
+          settings.openrouter = { apiKey, model, imageModel };
+          config.openrouter = settings.openrouter;
+          llm.replace('openrouter', openRouterProvider({
+            apiKey: settings.openrouter.apiKey,
+            model: settings.openrouter.model,
+            fetchFn: fetch,
+          }));
+        }
+        if (b.videoModels !== undefined) {
+          const vm = b.videoModels;
+          if (vm.research !== undefined && typeof vm.research !== 'string') throw new EngineError('VALIDATION', 'videoModels.research must be a string');
+          if (vm.script !== undefined && typeof vm.script !== 'string') throw new EngineError('VALIDATION', 'videoModels.script must be a string');
+          if (vm.storyboard !== undefined && typeof vm.storyboard !== 'string') throw new EngineError('VALIDATION', 'videoModels.storyboard must be a string');
+          settings.videoModels = { ...config.videoModels, ...vm };
+          config.videoModels = settings.videoModels;
+        }
+        if (settings.selectedModel !== undefined) { config.selectedLLMModel = settings.selectedModel; studio.config.selectedLLMModel = settings.selectedModel; }
     await writeLLMSettings({
       activeProvider: llm.activeIdOrNull(),
       fallbackProvider: llm.fallbackIdOrNull(),
@@ -507,17 +523,20 @@ export function buildApi(engine: Engine, config: Partial<AppConfig> = {}, llm?: 
       ollamaHost: settings.ollamaHost ?? config.ollamaHost,
       openaiCompatible: settings.openaiCompatible ?? config.openaiCompatible,
       openrouter: settings.openrouter ?? config.openrouter,
+      videoModels: settings.videoModels ?? config.videoModels,
     });
     return {
       ollamaHost: settings.ollamaHost ?? config.ollamaHost,
       openaiCompatible: settings.openaiCompatible ?? config.openaiCompatible,
       openrouter: settings.openrouter ?? config.openrouter,
+      videoModels: settings.videoModels ?? config.videoModels,
     };
   });
   app.get('/llm/config', async () => ({
     ollamaHost: config.ollamaHost,
     openaiCompatible: config.openaiCompatible,
     openrouter: config.openrouter,
+    videoModels: config.videoModels,
     selectedModel: config.selectedLLMModel ?? null,
   }));
   app.get('/llm/providers/ollama/status', async () => {

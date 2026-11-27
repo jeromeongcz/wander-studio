@@ -117,6 +117,35 @@ export function openRouterProvider(opts: OpenRouterOptions): TextLLMProvider {
         return [];
       }
     },
+    async listImageModels() {
+      // Only return live free IMAGE models from OpenRouter API. No static fallback.
+      // Strictly free: pricing.prompt === 0 AND pricing.completion === 0
+      if (!opts.apiKey) return [];
+      try {
+        const f: typeof fetch = opts.fetchFn ?? (fetch as typeof fetch);
+        const res = await f(`${base}/models`, {
+          method: 'GET',
+          headers: { authorization: `Bearer ${opts.apiKey}` },
+        });
+        if (!res.ok) return [];
+        const j = await res.json() as { data?: Array<{ id?: string; name?: string; pricing?: { prompt?: number | string; completion?: number | string }; architecture?: { output_modalities?: string[]; input_modalities?: string[] } }> };
+        return (j.data ?? [])
+          .filter((m) => {
+            const promptPrice = Number(m.pricing?.prompt ?? 1);
+            const completionPrice = Number(m.pricing?.completion ?? 1);
+            return promptPrice === 0 && completionPrice === 0;
+          })
+          // image models: must produce image output
+          .filter((m) => {
+            const out = m.architecture?.output_modalities;
+            return out && out.includes('image');
+          })
+          .map((m) => ({ id: m.id ?? '', name: m.name ?? m.id ?? '' }))
+          .filter((m) => m.id);
+      } catch {
+        return [];
+      }
+    },
     async generateText({ prompt, model, temperature, signal, onChunk }) {
       const usedModel = model ?? opts.model;
       if (!usedModel) throw new LLMProviderError('VALIDATION', 'No model configured for OpenRouter');

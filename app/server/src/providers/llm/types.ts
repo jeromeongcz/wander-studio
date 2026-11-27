@@ -26,6 +26,7 @@ export interface BaseLLMProvider {
   terms: LLMProviderTerms;
   healthCheck(): Promise<LLMHealthStatus>;
   listModels?(): Promise<Array<{ id: string; name: string }>>;
+  listImageModels?(): Promise<Array<{ id: string; name: string }>>;
   pullModel?(args: { model: string; onProgress?: (p: { status: string; completed?: number; total?: number; percent?: number }) => void }): Promise<void>;
   deleteModel?(args: { model: string }): Promise<void>;
   signIn?(): Promise<LLMHealthStatus>;
@@ -69,6 +70,7 @@ export interface LLMSettings {
   ollamaHost?: string;
   defaultToFreeFirst?: boolean;
   openaiCompatible?: { baseUrl: string; apiKey?: string; model: string };
-  openrouter?: { apiKey?: string; model: string };
+  openrouter?: { apiKey?: string; model: string; imageModel?: string };
+  videoModels?: { research?: string; script?: string; storyboard?: string };
   selectedModel?: string;        // model id for the active provider (Ollama / OpenAI-compatible / OpenRouter)
 }
