@@ -35,14 +35,12 @@ if (settings.openaiCompatible?.baseUrl) {
     fetchFn: fetch,
   }));
 }
-// OpenRouter free models only when an API key is configured.
-if (settings.openrouter?.apiKey) {
-  llm.register(openRouterProvider({
-    apiKey: settings.openrouter.apiKey,
-    model: settings.openrouter.model,
-    fetchFn: fetch,
-  }));
-}
+// OpenRouter is always registered so a saved "openrouter" selection is valid; it needs a key to work.
+llm.register(openRouterProvider({
+  apiKey: settings.openrouter?.apiKey,
+  model: settings.openrouter?.model,
+  fetchFn: fetch,
+}));
 
 // Restore the globally active provider, fallback, defaultToFreeFirst and selected model.
 llm.applySettings({

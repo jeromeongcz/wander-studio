@@ -32,7 +32,7 @@ export function App() {
   const [menu, setMenu] = useState(false);
   const [, , projectId, stageId] = hash.split('/'); // "/p/<id>/<stage>"
   const route = hash.startsWith('/p/') || hash.startsWith('/projects') ? 'production' : hash.startsWith('/research') ? 'research' : hash.startsWith('/assets') ? 'assets' : hash.startsWith('/settings') ? 'settings' : 'dashboard';
-  const [activeAI, setActiveAI] = useState<{ id: string | null; name?: string } | null>(null);
+  const [activeAI, setActiveAI] = useState<{ id: string | null; name?: string; model?: string | null } | null>(null);
 
   // Models for the provider model picker modal
   const [openRouterModels, setOpenRouterModels] = useState<Array<{ id: string; name: string }>>([]);
@@ -53,15 +53,25 @@ export function App() {
   }, [hash]);
 
   useEffect(() => {
+    const h = () => {
+      api.get<{ active: string | null; selectedModel: string | null }>('/llm/active')
+        .then((d) => setActiveAI({ id: d.active, model: d.selectedModel }))
+        .catch(() => {});
+    };
+    window.addEventListener('wander-llm-changed', h);
+    return () => window.removeEventListener('wander-llm-changed', h);
+  }, []);
+
+  useEffect(() => {
     let cancelled = false;
     (async () => {
       try {
         const data = await api.get<{ active: string | null; fallback: string | null; defaultToFreeFirst: boolean; selectedModel: string | null }>('/llm/active');
-        if (!cancelled) setActiveAI({ id: data.active });
+        if (!cancelled) setActiveAI({ id: data.active, model: data.selectedModel });
       } catch { /* server may not be running; label stays blank */ }
     })();
     return () => { cancelled = true; };
-  }, []);
+  }, [hash]);
 
   const fetchModels = async (providerId: 'ollama' | 'openrouter') => {
     setFetchingModels(true);
@@ -77,7 +87,7 @@ export function App() {
 
   const openModelPicker = (providerId: 'ollama' | 'openrouter') => {
     setModalProvider(providerId);
-    setModalSelectedModel('');
+    setModalSelectedModel(activeAI?.model ?? '');
     setModalOpen(true);
     fetchModels(providerId);
   };
@@ -95,7 +105,7 @@ export function App() {
     try {
       await api.put('/llm/active', { providerId: modalProvider, selectedModel: modelId });
       const data = await api.get<{ active: string | null; fallback: string | null; defaultToFreeFirst: boolean; selectedModel: string | null }>('/llm/active');
-      setActiveAI({ id: data.active });
+      setActiveAI({ id: data.active, model: data.selectedModel });
       closeModelPicker();
     } catch { /* switch failed */ }
   };
@@ -148,16 +158,19 @@ export function App() {
         <div className="strip">
           <button className="icon-btn menu-btn" aria-label="Open menu" onClick={() => setMenu(true)}><Icon name="menu" /></button>
           <span className="grow" />
-          <Notifications />
-          {activeAI?.id === 'openrouter' && (
-            <Btn small onClick={() => openModelPicker('openrouter')}>OpenRouter models</Btn>
-          )}
-          {activeAI?.id === 'ollama' && (
-            <Btn small onClick={() => openModelPicker('ollama')}>Ollama models</Btn>
-          )}
-          {activeAI?.id && activeAI.id !== 'openrouter' && activeAI.id !== 'ollama' && (
+          {activeAI?.id && (activeAI.id === 'ollama' || activeAI.id === 'openrouter' ? (
+            <button
+              className="ai-label"
+              onClick={() => openModelPicker(activeAI.id as 'ollama' | 'openrouter')}
+              title={`Change model (active: ${activeAI.id}${activeAI.model ? ` · ${activeAI.model}` : ''})`}
+              style={{ border: 'none', background: 'none', cursor: 'pointer', font: 'inherit', color: 'inherit' }}
+            >
+              {activeAI.id}{activeAI.model ? ` · ${activeAI.model}` : ''}
+            </button>
+          ) : (
             <span className="ai-label" title={`Active AI: ${activeAI.id}`}>{activeAI.id}</span>
-          )}
+          ))}
+          <Notifications />
           <button className="icon-btn" onClick={toggle} aria-label={theme === 'light' ? 'Switch to dark theme' : 'Switch to light theme'} title="Switch theme"><Icon name={theme === 'light' ? 'moon' : 'sun'} /></button>
         </div>
         <main className="content">

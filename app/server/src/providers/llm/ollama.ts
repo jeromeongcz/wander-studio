@@ -14,12 +14,27 @@ async function readStreamBody(res: Response, onChunk?: (chunk: string) => void):
   const reader = res.body.getReader();
   const decoder = new TextDecoder();
   let out = '';
+  let buffer = '';
   while (true) {
     const { done, value } = await reader.read();
     if (done) break;
-    const chunk = decoder.decode(value, { stream: true });
-    out += chunk;
-    onChunk(chunk);
+    buffer += decoder.decode(value, { stream: true });
+    // Ollama streams JSON lines - each line is a separate JSON object
+    const lines = buffer.split('\n');
+    buffer = lines.pop() ?? ''; // keep incomplete line in buffer
+    for (const line of lines) {
+      if (!line.trim()) continue;
+      try {
+        const j = JSON.parse(line) as { response?: string; done?: boolean };
+        if (j.response) {
+          out += j.response;
+          onChunk(j.response);
+        }
+        if (j.done) break;
+      } catch {
+        // ignore malformed JSON lines
+      }
+    }
   }
   return out;
 }
@@ -61,9 +76,13 @@ export function ollamaProvider(fetchFn: typeof fetch = fetch, host = DEFAULT_HOS
       return health();
     },
     async listModels() {
-      const res = await request('/api/tags');
-      const j = await res.json() as { models?: Array<{ name?: string; model?: string }> };
-      return (j.models ?? []).map((m) => ({ id: m.model ?? m.name ?? '', name: m.name ?? m.model ?? '' })).filter((m) => m.id);
+      try {
+        const res = await request('/api/tags');
+        const j = await res.json() as { models?: Array<{ name?: string; model?: string }> };
+        return (j.models ?? []).map((m) => ({ id: m.model ?? m.name ?? '', name: m.name ?? m.model ?? '' })).filter((m) => m.id);
+      } catch {
+        return [];
+      }
     },
     async generateText({ prompt, model, temperature, signal, onChunk }) {
       const usedModel = model;

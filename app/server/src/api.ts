@@ -369,6 +369,24 @@ export function buildApi(engine: Engine, config: Partial<AppConfig> = {}, llm?: 
     await p.pullModel({ model: b.model.trim() });
     return { ok: true, model: b.model.trim() };
   });
+  app.post('/llm/providers/:id/pull/stream', async (req, reply) => {
+    if (!llm) throw new EngineError('NOT_READY', 'LLM provider registry is not configured');
+    const p = llm.get((req.params as { id: string }).id);
+    if (p.kind !== 'ollama' || typeof p.pullModel !== 'function') throw new EngineError('NOT_READY', `Provider "${p.id}" does not support model pulls`);
+    const b = body(req);
+    if (typeof b.model !== 'string' || !b.model.trim()) throw new EngineError('VALIDATION', 'model is required');
+    const model = b.model.trim();
+    reply.raw.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache', connection: 'keep-alive' });
+    const send = (obj: unknown) => reply.raw.write(`data: ${JSON.stringify(obj)}\n\n`);
+    send({ type: 'progress', status: `pulling ${model}`, percent: 0 });
+    try {
+      await p.pullModel({ model, onProgress: (pr) => send({ type: 'progress', ...pr }) });
+      send({ type: 'done', model });
+    } catch (e) {
+      send({ type: 'error', message: (e as Error).message });
+    }
+    reply.raw.end();
+  });
   app.delete('/llm/providers/:id/delete', async (req) => {
     if (!llm) throw new EngineError('NOT_READY', 'LLM provider registry is not configured');
     const p = llm.get((req.params as { id: string }).id);
@@ -395,13 +413,40 @@ export function buildApi(engine: Engine, config: Partial<AppConfig> = {}, llm?: 
     if (b.selectedModel !== undefined && typeof b.selectedModel !== 'string' && b.selectedModel !== null) throw new EngineError('VALIDATION', 'selectedModel must be a string or null');
     if (b.defaultToFreeFirst !== undefined && typeof b.defaultToFreeFirst !== 'boolean') throw new EngineError('VALIDATION', 'defaultToFreeFirst must be a boolean');
 
+    // Auto-start Ollama if switching to it
+    if (b.providerId === 'ollama') {
+      const host = config.ollamaHost ?? 'http://localhost:11434';
+      await startOllama(host);
+      // Wait briefly for Ollama to become healthy
+      for (let i = 0; i < 30; i++) {
+        await new Promise((r) => setTimeout(r, 200));
+        try {
+          const p = llm.get('ollama');
+          const h = await p.healthCheck();
+          llm.setHealth('ollama', h);
+          if (h.ok) break;
+        } catch { /* keep waiting */ }
+      }
+    }
+
     const settings: Partial<LLMSettings> = {};
-    if (b.providerId !== undefined) settings.activeProvider = b.providerId;
-    if (b.fallbackProviderId !== undefined) settings.fallbackProvider = b.fallbackProviderId;
+    if (b.providerId !== undefined) {
+      // Validate provider exists before applying
+      try { llm.get(b.providerId); } catch { throw new EngineError('NOT_FOUND', `Unknown LLM provider "${b.providerId}"`); }
+      settings.activeProvider = b.providerId;
+    }
+    if (b.fallbackProviderId !== undefined) {
+      // Validate fallback provider exists
+      if (b.fallbackProviderId) {
+        try { llm.get(b.fallbackProviderId); } catch { throw new EngineError('NOT_FOUND', `Unknown LLM provider "${b.fallbackProviderId}"`); }
+      }
+      settings.fallbackProvider = b.fallbackProviderId;
+    }
     if (b.selectedModel !== undefined) settings.selectedModel = b.selectedModel;
     if (b.defaultToFreeFirst !== undefined) settings.defaultToFreeFirst = b.defaultToFreeFirst;
 
     llm.applySettings(settings);
+    if (settings.selectedModel !== undefined) { config.selectedLLMModel = settings.selectedModel; studio.config.selectedLLMModel = settings.selectedModel; }
     await writeLLMSettings({
       activeProvider: llm.activeIdOrNull(),
       fallbackProvider: llm.fallbackIdOrNull(),
@@ -409,6 +454,7 @@ export function buildApi(engine: Engine, config: Partial<AppConfig> = {}, llm?: 
       selectedModel: settings.selectedModel ?? config.selectedLLMModel ?? undefined,
       ollamaHost: config.ollamaHost,
       openaiCompatible: config.openaiCompatible,
+      openrouter: config.openrouter,
     });
     return {
       active: llm.activeIdOrNull(),
@@ -441,13 +487,18 @@ export function buildApi(engine: Engine, config: Partial<AppConfig> = {}, llm?: 
       const or = b.openrouter;
       if (or.apiKey !== undefined && typeof or.apiKey !== 'string') throw new EngineError('VALIDATION', 'openrouter.apiKey must be a string');
       if (or.model !== undefined && typeof or.model !== 'string') throw new EngineError('VALIDATION', 'openrouter.model must be a string');
-      settings.openrouter = { apiKey: or.apiKey ?? undefined, model: or.model ?? '' };
+      const prev = config.openrouter;
+      const apiKey = or.apiKey !== undefined && or.apiKey !== '' ? or.apiKey : prev?.apiKey;
+      const model = or.model !== undefined ? or.model : (prev?.model ?? '');
+      settings.openrouter = { apiKey, model };
+      config.openrouter = settings.openrouter;
       llm.replace('openrouter', openRouterProvider({
         apiKey: settings.openrouter.apiKey,
         model: settings.openrouter.model,
         fetchFn: fetch,
       }));
     }
+    if (settings.selectedModel !== undefined) { config.selectedLLMModel = settings.selectedModel; studio.config.selectedLLMModel = settings.selectedModel; }
     await writeLLMSettings({
       activeProvider: llm.activeIdOrNull(),
       fallbackProvider: llm.fallbackIdOrNull(),
@@ -463,6 +514,12 @@ export function buildApi(engine: Engine, config: Partial<AppConfig> = {}, llm?: 
       openrouter: settings.openrouter ?? config.openrouter,
     };
   });
+  app.get('/llm/config', async () => ({
+    ollamaHost: config.ollamaHost,
+    openaiCompatible: config.openaiCompatible,
+    openrouter: config.openrouter,
+    selectedModel: config.selectedLLMModel ?? null,
+  }));
   app.get('/llm/providers/ollama/status', async () => {
     const running = ollamaProcessRunning();
     const installed = isOllamaInstalled();
@@ -501,6 +558,19 @@ export function buildApi(engine: Engine, config: Partial<AppConfig> = {}, llm?: 
   app.post('/llm/providers/ollama/stop', async () => {
     stopOllama();
     return { running: false };
+  });
+  app.post('/llm/providers/claude/signin', async (req) => {
+    if (!llm) throw new EngineError('NOT_READY', 'LLM provider registry is not configured');
+    const p = llm.get('claude');
+    if (p.signIn) {
+      const h = await p.signIn();
+      llm.setHealth('claude', h);
+      return { ok: true, detail: h.detail, lastError: h.lastError };
+    }
+    // Fallback for providers without signIn method
+    const h = await p.healthCheck();
+    llm.setHealth('claude', h);
+    return { ok: true, detail: h.detail, lastError: h.lastError };
   });
 
   // ---- assets ----

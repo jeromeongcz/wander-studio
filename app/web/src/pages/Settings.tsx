@@ -1,7 +1,23 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { api } from '../api';
 import { useAsync, useInterval } from '../hooks';
 import { Btn, Card, Empty, ErrorBox, Field, Icon, Loading, Modal, Pill, Tabs, fmtBytes, useToast } from '../ui';
+
+/** A small catalogue of popular Ollama models to pick from when downloading. Sizes are approximate. */
+const OLLAMA_LIBRARY: { id: string; label: string; params: string; size: string; desc: string }[] = [
+  { id: 'llama3.2', label: 'Llama 3.2', params: '3B', size: '~2.0 GB', desc: 'Fast, capable general chat and writing model. Good default for scripts and storyboards.' },
+  { id: 'llama3.2:1b', label: 'Llama 3.2 (1B)', params: '1B', size: '~1.3 GB', desc: 'Smallest and fastest. Lower quality; useful on low-memory machines.' },
+  { id: 'llama3.1', label: 'Llama 3.1', params: '8B', size: '~4.7 GB', desc: 'Stronger reasoning and longer context than 3.2. Needs more RAM.' },
+  { id: 'qwen2.5', label: 'Qwen 2.5', params: '7B', size: '~4.7 GB', desc: 'Excellent multilingual model; strong at Chinese and other languages.' },
+  { id: 'qwen2.5-coder', label: 'Qwen 2.5 Coder', params: '7B', size: '~4.7 GB', desc: 'Specialised for code. Not ideal for narrative scripts.' },
+  { id: 'mistral', label: 'Mistral', params: '7B', size: '~4.1 GB', desc: 'Well-rounded open model, good at concise writing.' },
+  { id: 'gemma2', label: 'Gemma 2', params: '9B', size: '~5.4 GB', desc: 'Google model with strong writing quality; heavier on memory.' },
+  { id: 'phi3', label: 'Phi-3', params: '3.8B', size: '~2.3 GB', desc: 'Compact Microsoft model; decent quality for its size.' },
+  { id: 'deepseek-r1', label: 'DeepSeek R1', params: '8B', size: '~4.9 GB', desc: 'Reasoning-focused model that shows its thinking. Slower.' },
+  { id: 'llava', label: 'LLaVA', params: '7B', size: '~4.1 GB', desc: 'Vision model: can look at images. Not needed for text-only storyboards.' },
+  { id: 'codellama', label: 'Code Llama', params: '7B', size: '~3.8 GB', desc: 'Code-specialised Llama variant.' },
+  { id: 'nomic-embed-text', label: 'Nomic Embed', params: '137M', size: '~274 MB', desc: 'Embedding model for search/RAG. Not a chat model.' },
+];
 
 export function SettingsPage() {
   const { push } = useToast();
@@ -51,6 +67,17 @@ export function SettingsPage() {
     }
   };
 
+  const signInClaude = async () => {
+    try {
+      await api.post('/llm/providers/claude/signin');
+      await llmProviders.reload();
+      await activeLLM.reload();
+      push('ok', 'Claude Code sign-in started');
+    } catch (e) {
+      push('error', `Sign in failed: ${(e as Error).message}`);
+    }
+  };
+
   const installOllama = async () => {
     try {
       const s = await api.post<{ installed: boolean }>('/llm/providers/ollama/install');
@@ -81,7 +108,7 @@ export function SettingsPage() {
   checkOllamaStatus();
 
   const [loc, setLoc] = useState({ code: '', name: '', bcp47: '', default_wpm: 140 });
-  const [tab, setTab] = useState<'jobs' | 'system' | 'voices' | 'languages' | 'providers' | 'templates' | 'ai-provider' | 'terminal'>('jobs');
+  const [tab, setTab] = useState<'jobs' | 'system' | 'voices' | 'languages' | 'providers' | 'templates' | 'ai-provider'>('ai-provider');
   const [sel, setSel] = useState<string[]>([]);
 
   // AI Provider state
@@ -104,6 +131,28 @@ export function SettingsPage() {
   const [openRouterModelInput, setOpenRouterModelInput] = useState('');
   const [savingOpenRouter, setSavingOpenRouter] = useState(false);
   const [fetchingOpenRouterModels, setFetchingOpenRouterModels] = useState(false);
+  const [openRouterKeySaved, setOpenRouterKeySaved] = useState(false);
+
+  // Load saved provider config so fields (API keys, hosts, model) survive a refresh
+  useEffect(() => {
+    let cancelled = false;
+    api.get<any>('/llm/config').then((c) => {
+      if (cancelled) return;
+      if (c.ollamaHost) setOllamaHostInput(c.ollamaHost);
+      if (c.openaiCompatible) {
+        setApiBaseUrlInput(c.openaiCompatible.baseUrl || '');
+        setApiKeyInput(c.openaiCompatible.apiKey || '');
+        setApiModelInput(c.openaiCompatible.model || '');
+      }
+      if (c.openrouter) {
+        setOpenRouterApiKey(c.openrouter.apiKey || '');
+        setOpenRouterModelInput(c.openrouter.model || c.selectedModel || '');
+        if (c.openrouter.apiKey) setOpenRouterKeySaved(true);
+      }
+      if (c.selectedModel) setSelectedModel(c.selectedModel);
+    }).catch(() => {});
+    return () => { cancelled = true; };
+  }, []);
 
   const loadOpenRouterModels = async () => {
     try {
@@ -112,9 +161,30 @@ export function SettingsPage() {
     } catch { /* openrouter not configured yet */ }
   };
 
+  // Auto-load the fetched OpenRouter models once the saved key is available (so they survive a refresh)
+  useEffect(() => {
+    if (openRouterApiKey.trim() && openRouterModels.length === 0) loadOpenRouterModels();
+  }, [openRouterApiKey]);
+
+  // Persist the chosen OpenRouter model so it is still selected after a refresh
+  const persistOpenRouterModel = async (modelId: string) => {
+    setOpenRouterModelInput(modelId);
+    if (!openRouterApiKey.trim()) return;
+    try {
+      await api.put('/llm/config', { openrouter: { apiKey: openRouterApiKey.trim(), model: modelId } });
+      await activeLLM.reload();
+      window.dispatchEvent(new Event('wander-llm-changed'));
+    } catch { /* ignore */ }
+  };
+
   const fetchOpenRouterModels = async () => {
     setFetchingOpenRouterModels(true);
     try {
+      // Persist the typed key first so the server-side provider can use it
+      if (openRouterApiKey.trim()) {
+        await api.put('/llm/config', { openrouter: { apiKey: openRouterApiKey.trim(), model: openRouterModelInput.trim() } });
+        setOpenRouterKeySaved(true);
+      }
       const models = await api.get<Array<{ id: string; name: string }>>('/llm/providers/openrouter/models');
       setOpenRouterModels(models);
       push('ok', `Fetched ${models.length} free models from OpenRouter`);
@@ -136,10 +206,29 @@ export function SettingsPage() {
       await llmProviders.reload();
       await loadOpenRouterModels();
       setSavingOpenRouter(false);
+      setOpenRouterKeySaved(true);
       push('ok', 'OpenRouter configured');
     } catch (e) {
       setSavingOpenRouter(false);
       push('error', `OpenRouter config failed: ${(e as Error).message}`);
+    }
+  };
+
+  const updateOpenRouterKey = async () => {
+    const apiKey = openRouterApiKey.trim();
+    if (!apiKey) return;
+    const model = openRouterModelInput.trim();
+    setSavingOpenRouter(true);
+    try {
+      await api.put('/llm/config', { openrouter: { apiKey, model } });
+      await activeLLM.reload();
+      await llmProviders.reload();
+      await loadOpenRouterModels();
+      setSavingOpenRouter(false);
+      push('ok', 'OpenRouter key updated');
+    } catch (e) {
+      setSavingOpenRouter(false);
+      push('error', `OpenRouter key update failed: ${(e as Error).message}`);
     }
   };
 
@@ -156,6 +245,7 @@ export function SettingsPage() {
       await llmProviders.reload();
       await loadOpenRouterModels();
       setOpenRouterModelInput(modelId);
+      window.dispatchEvent(new Event('wander-llm-changed'));
       push('ok', `Switched to OpenRouter: ${modelId}`);
     } catch (e) {
       push('error', `Switch failed: ${(e as Error).message}`);
@@ -194,21 +284,75 @@ export function SettingsPage() {
     try {
       const models = await api.get<Array<{ id: string; name: string }>>('/llm/providers/ollama/models');
       setOllamaModels(models);
+      // If the saved Ollama model no longer exists (e.g. typed by hand), clear it so generation doesn't fail
+      const active = activeLLM.data;
+      if (active?.active === 'ollama' && selectedModel && models.length > 0 && !models.some((m) => m.id === selectedModel)) {
+        setSelectedModel(null);
+        api.put('/llm/active', { selectedModel: null }).then(() => {
+          activeLLM.reload();
+          window.dispatchEvent(new Event('wander-llm-changed'));
+        }).catch(() => {});
+      }
     } catch { /* ollama not reachable */ }
   };
+
+  // Load the installed Ollama models automatically (so the dropdown isn't empty until Refresh is clicked)
+  useEffect(() => {
+    loadOllamaModels();
+  }, [llmProviders.data]);
 
   // Pull/download a model from Ollama
   const [pullInput, setPullInput] = useState('');
   const [pulling, setPulling] = useState(false);
   const [pullProgress, setPullProgress] = useState<{ status: string; completed?: number; total?: number; percent?: number } | null>(null);
+  const [pullLog, setPullLog] = useState<string[]>([]);
+  const pullLogRef = useRef<HTMLPreElement | null>(null);
+  useEffect(() => {
+    const el = pullLogRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  }, [pullLog]);
 
   const pullOllamaModel = async () => {
     const model = pullInput.trim();
     if (!model) return;
     setPulling(true);
     setPullProgress({ status: 'starting' });
+    setPullLog([`$ ollama pull ${model}`]);
     try {
-      await api.post('/llm/providers/ollama/pull', { model });
+      const res = await fetch('/llm/providers/ollama/pull/stream', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ model }),
+      });
+      if (!res.ok || !res.body) throw new Error(`Pull failed (HTTP ${res.status})`);
+      const reader = res.body.getReader();
+      const dec = new TextDecoder();
+      let buf = '';
+      let failed = false;
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buf += dec.decode(value, { stream: true });
+        const parts = buf.split('\n');
+        buf = parts.pop() ?? '';
+        for (const line of parts) {
+          if (!line.startsWith('data: ')) continue;
+          let ev: any;
+          try { ev = JSON.parse(line.slice(6)); } catch { continue; }
+          if (ev.type === 'progress') {
+            setPullProgress(ev);
+            const pct = ev.percent !== undefined ? ` ${ev.percent}%` : '';
+            const bytes = ev.completed && ev.total ? ` (${(ev.completed / 1e9).toFixed(1)}/${(ev.total / 1e9).toFixed(1)} GB)` : '';
+            setPullLog((l) => [...l, `${ev.status}${pct}${bytes}`].slice(-300));
+          } else if (ev.type === 'error') {
+            failed = true;
+            setPullLog((l) => [...l, `error: ${ev.message}`]);
+          } else if (ev.type === 'done') {
+            setPullLog((l) => [...l, 'success']);
+          }
+        }
+      }
+      if (failed) throw new Error('Pull failed');
       setPullProgress({ status: 'success' });
       setPullInput('');
       await loadOllamaModels();
@@ -217,6 +361,7 @@ export function SettingsPage() {
       push('ok', `Model "${model}" downloaded`);
     } catch (e) {
       setPullProgress({ status: 'error' });
+      setPullLog((l) => [...l, `error: ${(e as Error).message}`]);
       push('error', `Pull failed: ${(e as Error).message}`);
     } finally {
       setPulling(false);
@@ -260,15 +405,36 @@ export function SettingsPage() {
     setModalOpen(true);
   };
 
+  // Save the chosen model for a provider without changing the active provider
+  const applyModel = async (providerId: string) => {
+    setSwitching(providerId);
+    try {
+      await api.put('/llm/active', { providerId, selectedModel: selectedModel ?? undefined });
+      await activeLLM.reload();
+      await llmProviders.reload();
+      window.dispatchEvent(new Event('wander-llm-changed'));
+      push('ok', `Model saved for ${providerId}`);
+    } catch (e) {
+      push('error', `Save failed: ${(e as Error).message}`);
+    } finally {
+      setSwitching(null);
+    }
+  };
+
   const confirmSwitch = async () => {
     if (!modalProvider) return;
     setSwitching(modalProvider.id);
     setModalOpen(false);
     try {
-      await api.put('/llm/active', { providerId: modalProvider.id, selectedModel: selectedModel ?? undefined });
+      // Only keep the selected model if it belongs to the provider being switched to
+      let model: string | null = selectedModel ?? null;
+      if (model && modalProvider.id === 'ollama' && !ollamaModels.some((m) => m.id === model)) model = null;
+      if (model && modalProvider.id === 'openrouter' && !openRouterModels.some((m) => m.id === model)) model = null;
+      await api.put('/llm/active', { providerId: modalProvider.id, selectedModel: model });
       await activeLLM.reload();
       await llmProviders.reload();
       setSelectedModel(activeLLM.data?.selectedModel ?? null);
+      window.dispatchEvent(new Event('wander-llm-changed'));
       push('ok', `Global AI provider switched to ${modalProvider.name}`);
     } catch (e) {
       push('error', `Switch failed: ${(e as Error).message}`);
@@ -305,13 +471,12 @@ export function SettingsPage() {
         value={tab}
         onChange={setTab}
         items={[
+          { id: 'ai-provider', label: 'AI Provider' },
           { id: 'jobs', label: 'Background jobs' },
           { id: 'system', label: 'System' },
           { id: 'voices', label: 'Voices' },
           { id: 'languages', label: 'Languages' },
           { id: 'providers', label: 'Providers' },
-          { id: 'ai-provider', label: 'AI Provider' },
-          { id: 'terminal', label: 'Terminal' },
           { id: 'templates', label: 'Templates' },
         ]}
       />
@@ -477,6 +642,7 @@ export function SettingsPage() {
                   const latency = h?.latencyMs !== undefined ? ` · ${h.latencyMs}ms` : '';
                   const isOllama = p.kind === 'ollama';
                   const isOpenAI = p.kind === 'openai-compatible';
+                  if (p.id === 'openrouter') return null; // rendered by the dedicated OpenRouter card below
 
                   return (
                     <div key={p.id} className="scene" style={{ border: active ? '2px solid var(--good)' : '1px solid var(--muted)', borderRadius: 8, padding: 12, background: active ? 'rgba(34,197,94,0.05)' : 'transparent' }}>
@@ -515,6 +681,13 @@ export function SettingsPage() {
                               )}
                             </div>
                           )}
+                          {p.id === 'claude' && !ok && (
+                            <div className="row gap" style={{ marginTop: 6 }}>
+                              <Btn small onClick={signInClaude} disabled={switching !== null}>
+                                Sign in to Claude
+                              </Btn>
+                            </div>
+                          )}
                         </div>
                       </div>
                       <div className="muted small" style={{ marginBottom: 8 }}>{p.terms.freeTier}</div>
@@ -539,15 +712,43 @@ export function SettingsPage() {
                             </select>
                           </Field>
                           {isOllama && ok && (
-                            <div style={{ marginTop: 6 }}><Btn small onClick={loadOllamaModels}>
-                              <Icon name="refresh" small /> Refresh models
-                            </Btn></div>
+                            <div className="row gap" style={{ marginTop: 6 }}>
+                              <Btn small onClick={loadOllamaModels}>
+                                <Icon name="refresh" small /> Refresh models
+                              </Btn>
+                              <Btn small disabled={switching !== null || !selectedModel} onClick={() => applyModel('ollama')}>
+                                {switching === 'ollama' ? 'Saving…' : 'Apply model'}
+                              </Btn>
+                            </div>
                           )}
                           {isOllama && ok && (
                             <div className="form" style={{ marginTop: 10 }}>
                               <Field label="Download model">
-                                <input value={pullInput} onChange={(e) => setPullInput(e.target.value)} placeholder="llama3.2" disabled={pulling} />
+                                <select value={pullInput} onChange={(e) => setPullInput(e.target.value)} disabled={pulling}>
+                                  <option value="">— choose a model —</option>
+                                  {OLLAMA_LIBRARY.map((m) => (
+                                    <option key={m.id} value={m.id}>{m.label} · {m.params} · {m.size}</option>
+                                  ))}
+                                </select>
                               </Field>
+                              {pullInput && (() => {
+                                const d = OLLAMA_LIBRARY.find((m) => m.id === pullInput);
+                                return d ? (
+                                  <div className="notice small" style={{ marginTop: 6 }}>
+                                    <strong>{d.label}</strong> <span className="muted">({d.id})</span>
+                                    <div className="muted">{d.desc}</div>
+                                    <div className="muted small" style={{ marginTop: 4 }}>Parameters: {d.params} · Download size: {d.size}</div>
+                                  </div>
+                                ) : null;
+                              })()}
+                              {pullLog.length > 0 && (
+                                <pre
+                                  ref={pullLogRef}
+                                  style={{ maxHeight: 160, overflow: 'auto', margin: '6px 0 0', padding: 8, background: '#0d1117', color: '#c9d1d9', borderRadius: 6, fontSize: 11, lineHeight: 1.5, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}
+                                >
+                                  {pullLog.join('\n')}
+                                </pre>
+                              )}
                               <div className="row gap" style={{ marginTop: 6 }}>
                                 <Btn small disabled={pulling || !pullInput.trim()} onClick={pullOllamaModel}>
                                   {pulling ? 'Pulling…' : 'Pull model'}
@@ -562,7 +763,12 @@ export function SettingsPage() {
                           {isOllama && ok && (
                             <div className="form" style={{ marginTop: 10 }}>
                               <Field label="Delete model">
-                                <input value={deleteInput} onChange={(e) => setDeleteInput(e.target.value)} placeholder="llama3.2" disabled={deleting} />
+                                <select value={deleteInput} onChange={(e) => setDeleteInput(e.target.value)} disabled={deleting}>
+                                  <option value="">— choose an installed model —</option>
+                                  {ollamaModels.map((m) => (
+                                    <option key={m.id} value={m.id}>{m.name}</option>
+                                  ))}
+                                </select>
                               </Field>
                               <div className="row gap" style={{ marginTop: 6 }}>
                                 <Btn small kind="danger" disabled={deleting || !deleteInput.trim()} onClick={() => requestDeleteOllamaModel(deleteInput.trim())}>
@@ -582,10 +788,10 @@ export function SettingsPage() {
 
                       <div className="row gap" style={{ marginTop: 10 }}>
                         <Btn small
-                          disabled={switching !== null || active || !ok}
+                          disabled={switching !== null || active}
                           onClick={() => switchProvider({ id: p.id, name: p.name })}
                         >
-                          {switching === p.id ? 'Switching…' : active ? 'Active' : 'Switch to'}
+                          {switching === p.id ? 'Switching…' : active ? 'Active' : 'Use this Provider'}
                         </Btn>
                         {isOllama && ok && (
                           <div style={{ fontSize: 12 }}><Btn small onClick={loadOllamaModels}>
@@ -601,6 +807,101 @@ export function SettingsPage() {
                     </div>
                   );
                 })}
+                {(() => {
+                  const activeOR = isActive('openrouter');
+                  const hasKey = !!openRouterApiKey.trim();
+                  const currentModel = activeLLM.data?.active === 'openrouter' ? activeLLM.data?.selectedModel : null;
+                  return (
+                    <div className="scene" style={{ border: activeOR ? '2px solid var(--good)' : '1px solid var(--muted)', borderRadius: 8, padding: 12, background: activeOR ? 'rgba(34,197,94,0.05)' : 'transparent' }}>
+                      <div className="row gap" style={{ marginBottom: 6 }}>
+                        <div>
+                          <div className="row gap" style={{ alignItems: 'baseline' }}>
+                            <strong style={{ fontSize: 15 }}>OpenRouter</strong>
+                            {activeOR && <span style={{ color: 'var(--good)', fontWeight: 600, fontSize: 12 }}>● ACTIVE</span>}
+                          </div>
+                          <div className="muted small">openrouter · free models</div>
+                        </div>
+                        <div style={{ textAlign: 'right' }}>
+                          <Pill tone={hasKey ? 'good' : 'neutral'}>{hasKey ? 'Configured' : 'Needs key'}</Pill>
+                          <div className="muted small" style={{ marginTop: 2 }}>{openRouterModels.length} free model{openRouterModels.length === 1 ? '' : 's'}</div>
+                        </div>
+                      </div>
+
+                      {/* Step 1: API Key */}
+                      <Field label="API key">
+                        <input type="password" value={openRouterApiKey} onChange={(e) => setOpenRouterApiKey(e.target.value)} placeholder="sk-or-…" disabled={savingOpenRouter} />
+                      </Field>
+
+                      {/* Step 2: Fetch Models */}
+                      {hasKey && (
+                        <div className="row gap" style={{ marginTop: 8, alignItems: 'center' }}>
+                          <Btn small onClick={fetchOpenRouterModels} disabled={savingOpenRouter || fetchingOpenRouterModels}>
+                            {fetchingOpenRouterModels ? 'Fetching…' : openRouterModels.length === 0 ? 'Fetch free models' : 'Refresh models'}
+                          </Btn>
+                          {openRouterModels.length > 0 && <span className="muted small">{openRouterModels.length} models available</span>}
+                        </div>
+                      )}
+
+                      {/* Step 3: Model Selection & Status */}
+                      {openRouterModels.length > 0 && (
+                        <div style={{ marginTop: 12 }}>
+                          {/* Current Selection Status */}
+                          <div className="form" style={{ marginBottom: 12, padding: 10, background: 'rgba(0,0,0,0.02)', borderRadius: 6, border: '1px solid var(--muted)' }}>
+                            <div className="row gap" style={{ alignItems: 'center', marginBottom: 6 }}>
+                              <strong style={{ fontSize: 13 }}>Selected Model</strong>
+                              {currentModel && activeOR && <Pill tone="good">ACTIVE</Pill>}
+                            </div>
+                            <div style={{ fontSize: 14, fontWeight: 500, fontFamily: 'monospace', color: currentModel ? 'var(--fg)' : 'var(--muted)' }}>
+                              {currentModel ? currentModel : activeOR ? '(none selected)' : '— not active —'}
+                            </div>
+                            {!currentModel && activeOR && <div className="muted small" style={{ marginTop: 4 }}>No model selected for active provider. Choose one below.</div>}
+                          </div>
+
+                          {/* Model Picker */}
+                          <Field label="Choose a model">
+                            <select value={openRouterModelInput} onChange={(e) => setOpenRouterModelInput(e.target.value)} disabled={switching !== null}>
+                              <option value="">— choose a model —</option>
+                              {openRouterModels.map((m) => (
+                                <option key={m.id} value={m.id}>{m.name}</option>
+                              ))}
+                            </select>
+                          </Field>
+
+                          {/* Actions */}
+                          <div className="row gap" style={{ marginTop: 8, flexWrap: 'wrap' }}>
+                            {!activeOR && hasKey && openRouterModelInput && (
+                              <Btn small kind="primary" disabled={switching !== null} onClick={() => selectOpenRouterModel(openRouterModelInput)}>
+                                {switching === 'openrouter' ? 'Switching…' : 'Use this Provider'}
+                              </Btn>
+                            )}
+                            {activeOR && hasKey && openRouterModelInput && openRouterModelInput !== currentModel && (
+                              <Btn small kind="primary" disabled={switching !== null} onClick={() => selectOpenRouterModel(openRouterModelInput)}>
+                                {switching === 'openrouter' ? 'Switching…' : 'Use this Provider'}
+                              </Btn>
+                            )}
+                            {activeOR && hasKey && currentModel && (
+                              <Btn small kind="ghost" disabled={switching !== null} onClick={() => setOpenRouterModelInput('')}>
+                                Clear selection
+                              </Btn>
+                            )}
+                            {!openRouterKeySaved && hasKey && (
+                              <Btn small onClick={saveOpenRouterConfig} disabled={savingOpenRouter || !hasKey}>
+                                {savingOpenRouter ? 'Saving…' : 'Save key'}
+                              </Btn>
+                            )}
+                            {openRouterKeySaved && hasKey && (
+                              <Btn small kind="ghost" onClick={updateOpenRouterKey} disabled={savingOpenRouter || !hasKey}>
+                                {savingOpenRouter ? 'Updating…' : 'Update key'}
+                              </Btn>
+                            )}
+                          </div>
+                        </div>
+                      )}
+
+                      {!hasKey && <span className="muted small" style={{ marginTop: 8, display: 'block' }}>Enter your API key above, then fetch models to choose one.</span>}
+                    </div>
+                  );
+                })()}
               </div>
             )}
 
@@ -635,66 +936,10 @@ export function SettingsPage() {
                   <input value={apiBaseUrlInput} onChange={(e) => setApiBaseUrlInput(e.target.value)} placeholder="https://api.example.com/v1" />
                   <span className="muted small">For Qwen, DeepSeek, Gemini, or any OpenAI-compatible endpoint you control.</span>
                 </Field>
-                <Field label="OpenRouter API key">
-                  <input type="password" value={openRouterApiKey} onChange={(e) => setOpenRouterApiKey(e.target.value)} placeholder="sk-or-…" />
-                  <span className="muted small">Get a free key at openrouter.ai. Used only for OpenRouter free models.</span>
-                </Field>
-                <Field label="OpenRouter default model">
-                  <input value={openRouterModelInput} onChange={(e) => setOpenRouterModelInput(e.target.value)} placeholder="openrouter/free" />
-                  <span className="muted small">Default model when using OpenRouter provider.</span>
-                </Field>
                 <div className="row gap" style={{ marginTop: 10 }}>
-                  <Btn onClick={saveOpenRouterConfig} disabled={savingOpenRouter || !openRouterApiKey.trim()}>Save OpenRouter config</Btn>
                   <Btn kind="ghost" onClick={() => setConfigOpen(false)}>Cancel</Btn>
                 </div>
               </div>
-            )}
-          </Card>
-
-          {/* Free models (OpenRouter) */}
-          <Card title="Free AI Models (OpenRouter)">
-            <p className="muted" style={{ marginTop: 0 }}>
-              Free models hosted via OpenRouter. Switching to one makes it the global AI provider for the whole app. No per-model charges from this app — OpenRouter covers the cost.
-            </p>
-            {!openRouterApiKey.trim() && (
-              <div className="notice warn" style={{ marginTop: 10 }}>
-                <strong>API key required.</strong> Enter your OpenRouter API key in the Provider Configuration panel above, then save.
-              </div>
-            )}
-            {openRouterApiKey.trim() && (
-              <>
-                <div className="row gap" style={{ marginTop: 10 }}>
-                  <Btn small onClick={loadOpenRouterModels} disabled={savingOpenRouter || fetchingOpenRouterModels}>
-                    <Icon name="refresh" small /> Refresh model list
-                  </Btn>
-                  <Btn small onClick={fetchOpenRouterModels} disabled={savingOpenRouter || fetchingOpenRouterModels || !openRouterApiKey.trim()}>
-                    {fetchingOpenRouterModels ? 'Fetching…' : 'Fetch free models from OpenRouter'}
-                  </Btn>
-                  <span className="muted small">{openRouterModels.length} models loaded</span>
-                </div>
-                {openRouterModels.length === 0 && (
-                  <div className="notice muted" style={{ marginTop: 8 }}>
-                    No free models loaded. Click "Refresh model list" or "Fetch free models from OpenRouter" to load them.
-                  </div>
-                )}
-                <div className="grid g3" style={{ marginTop: 10 }}>
-                  {openRouterModels.map((m) => (
-                    <div key={m.id} className="scene" style={{ padding: 12, border: '1px solid var(--muted)', borderRadius: 8 }}>
-                      <div className="row gap" style={{ marginBottom: 6 }}>
-                        <strong style={{ fontSize: 14 }}>{m.name}</strong>
-                        {isActive('openrouter') && selectedModel === m.id && <span style={{ color: 'var(--good)', fontWeight: 600, fontSize: 11 }}>● ACTIVE</span>}
-                      </div>
-                      <div className="muted small mono" style={{ marginBottom: 10 }}>{m.id}</div>
-                      <Btn
-                        disabled={switching !== null || !openRouterApiKey.trim()}
-                        onClick={() => selectOpenRouterModel(m.id)}
-                      >
-                        {switching === 'openrouter' ? 'Switching…' : 'Select model'}
-                      </Btn>
-                    </div>
-                  ))}
-                </div>
-              </>
             )}
           </Card>
 
@@ -719,7 +964,7 @@ export function SettingsPage() {
             <p className="muted small" style={{ marginTop: 8 }}>Selected model: <strong>{selectedModel}</strong></p>
           )}
           <div className="row gap" style={{ marginTop: 16 }}>
-            <Btn onClick={confirmSwitch} disabled={switching !== null}>Switch provider</Btn>
+            <Btn onClick={confirmSwitch} disabled={switching !== null}>Use this Provider</Btn>
             <Btn kind="ghost" onClick={() => { setModalOpen(false); setModalProvider(null); }}>Cancel</Btn>
           </div>
         </Modal>
@@ -740,47 +985,6 @@ export function SettingsPage() {
             <Btn kind="ghost" onClick={cancelDeleteOllamaModel}>Cancel</Btn>
           </div>
         </Modal>
-      )}
-
-      {tab === 'terminal' && (
-        <Card title="Terminal — what's running">
-          <p className="muted" style={{ marginTop: 0 }}>
-            Shows jobs currently queued, running, or recently finished. Use Cancel to stop a running job.
-          </p>
-          <div className="row gap" style={{ marginBottom: 10 }}>
-            <Btn small onClick={jobs.reload}>Refresh</Btn>
-            <span className="muted small">Job list refreshes automatically every 2.5s.</span>
-          </div>
-          {jobs.loading && !jobs.data && <Loading />}
-          {jobs.error && <ErrorBox error={jobs.error} />}
-          {jobs.data && jobs.data.length === 0 && <Empty>No jobs yet.</Empty>}
-          {jobs.data && jobs.data.length > 0 && (
-            <div className="jobs-scroll">
-              <table>
-                <thead><tr><th>Job</th><th>State</th><th>Progress</th><th>Details</th><th /></tr></thead>
-                <tbody>
-                  {jobs.data.map((j) => (
-                    <tr key={j.id}>
-                      <td>{j.kind.replace(/_/g, ' ')}<div className="muted small mono">{new Date(j.created_at).toLocaleTimeString()}{j.attempts > 1 ? ` · attempt ${j.attempts}` : ''}</div></td>
-                      <td><Pill tone={j.state === 'succeeded' ? 'good' : j.state === 'failed' ? 'bad' : j.state === 'cancelled' ? 'neutral' : 'info'}>{j.state}</Pill></td>
-                      <td style={{ minWidth: 120 }}><div className="bar-prog"><i style={{ width: `${Math.round(j.progress * 100)}%` }} /></div></td>
-                      <td className="small">
-                        {j.message && <div className="muted">{j.message}</div>}
-                        {j.error && <div style={{ color: 'var(--bad)' }}>{j.error.message}{j.error.recovery && <div className="muted">Fix: {j.error.recovery}</div>}</div>}
-                      </td>
-                      <td>
-                        <div className="row gap">
-                          {(j.state === 'queued' || j.state === 'running') && <Btn small kind="danger" onClick={async () => { await api.post(`/jobs/${j.id}/cancel`); jobs.reload(); }}>Cancel</Btn>}
-                          {(j.state === 'failed' || j.state === 'cancelled') && <Btn small onClick={async () => { await api.post(`/jobs/${j.id}/retry`); jobs.reload(); }}>Retry</Btn>}
-                        </div>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </Card>
       )}
 
     </div>

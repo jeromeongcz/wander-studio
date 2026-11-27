@@ -1,5 +1,0 @@
-{
-  "activeProvider": "ollama",
-  "fallbackProvider": null,
-  "defaultToFreeFirst": false
-}

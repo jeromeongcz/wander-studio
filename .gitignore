@@ -13,3 +13,4 @@ dist/
 exports/
 app/web/dist/
 .claude/skills/ui-ux-pro-max/
+data/llm-settings.json

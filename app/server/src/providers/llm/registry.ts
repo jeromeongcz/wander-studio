@@ -81,10 +81,10 @@ export class LLMProviderRegistry {
   applySettings(settings: Partial<LLMSettings>): string | null {
     this.defaults = { ...this.defaults, ...settings };
     if (settings.activeProvider !== undefined) {
-      this.setActive(settings.activeProvider);
+      try { this.setActive(settings.activeProvider); } catch { /* unknown provider in saved settings; leave unset */ }
     }
     if (settings.fallbackProvider !== undefined) {
-      this.setFallback(settings.fallbackProvider);
+      try { this.setFallback(settings.fallbackProvider); } catch { /* unknown fallback; ignore */ }
     }
     return this.activeId;
   }

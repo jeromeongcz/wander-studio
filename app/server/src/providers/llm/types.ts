@@ -28,6 +28,7 @@ export interface BaseLLMProvider {
   listModels?(): Promise<Array<{ id: string; name: string }>>;
   pullModel?(args: { model: string; onProgress?: (p: { status: string; completed?: number; total?: number; percent?: number }) => void }): Promise<void>;
   deleteModel?(args: { model: string }): Promise<void>;
+  signIn?(): Promise<LLMHealthStatus>;
 }
 
 /** Result of a streaming text generation. Each chunk is a piece of the answer. */

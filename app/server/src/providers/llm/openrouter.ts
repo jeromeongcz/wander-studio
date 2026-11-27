@@ -87,6 +87,7 @@ export function openRouterProvider(opts: OpenRouterOptions): TextLLMProvider {
     },
     async listModels() {
       // Only return live free models from OpenRouter API. No static fallback.
+      // Strictly free: pricing.prompt === 0 AND pricing.completion === 0
       if (!opts.apiKey) return [];
       try {
         const f: typeof fetch = opts.fetchFn ?? (fetch as typeof fetch);
@@ -95,9 +96,21 @@ export function openRouterProvider(opts: OpenRouterOptions): TextLLMProvider {
           headers: { authorization: `Bearer ${opts.apiKey}` },
         });
         if (!res.ok) return [];
-        const j = await res.json() as { data?: Array<{ id?: string; name?: string; pricing?: { prompt?: number; completion?: number } }> };
+        const j = await res.json() as { data?: Array<{ id?: string; name?: string; pricing?: { prompt?: number | string; completion?: number | string }; architecture?: { output_modalities?: string[]; input_modalities?: string[] } }> };
         return (j.data ?? [])
-          .filter((m) => m.pricing?.prompt === 0 && m.pricing?.completion === 0)
+          .filter((m) => {
+            const promptPrice = Number(m.pricing?.prompt ?? 1);
+            const completionPrice = Number(m.pricing?.completion ?? 1);
+            return promptPrice === 0 && completionPrice === 0;
+          })
+          // text/chat only: must accept text input and produce text output (excludes image/audio/music models)
+          .filter((m) => {
+            const out = m.architecture?.output_modalities;
+            const inp = m.architecture?.input_modalities;
+            if (out && !out.includes('text')) return false;
+            if (inp && !inp.includes('text')) return false;
+            return true;
+          })
           .map((m) => ({ id: m.id ?? '', name: m.name ?? m.id ?? '' }))
           .filter((m) => m.id);
       } catch {

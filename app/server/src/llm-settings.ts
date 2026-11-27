@@ -24,8 +24,11 @@ export async function readLLMSettings(): Promise<LLMSettings> {
   }
 }
 
-/** Persist LLM settings to disk. Creates the data directory as needed. */
+/** Persist LLM settings to disk, merging over any existing file so unrelated fields (like the OpenRouter key) are never dropped. */
 export async function writeLLMSettings(settings: LLMSettings): Promise<void> {
   await mkdir(join(defaultRoot(), 'data'), { recursive: true });
-  await writeFile(SETTINGS_FILE, JSON.stringify(settings, null, 2), 'utf8');
+  const existing = await readLLMSettings();
+  const clean = Object.fromEntries(Object.entries(settings).filter(([, v]) => v !== undefined)) as Partial<LLMSettings>;
+  const merged: LLMSettings = { ...existing, ...clean };
+  await writeFile(SETTINGS_FILE, JSON.stringify(merged, null, 2), 'utf8');
 }

@@ -2,6 +2,7 @@ import { execFile } from 'node:child_process';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { findTool } from '../../platform.ts';
 import type { TextLLMProvider, LLMProviderTerms, LLMHealthStatus } from './types.ts';
 import { LLMProviderError } from './types.ts';
 
@@ -10,7 +11,7 @@ const SIGN_IN = 'Open a terminal and run: claude auth login   (then come back an
 export function resolveClaudeBin(override?: string): string {
   if (override) return override;
   if (process.env.WANDER_CLAUDE_BIN) return process.env.WANDER_CLAUDE_BIN;
-  return require('../../platform.ts').findTool('claude');
+  return findTool('claude');
 }
 
 function exec(bin: string, args: string[], opts: { input?: string; cwd?: string; timeout: number; signal?: AbortSignal }): Promise<{ stdout: string; stderr: string; code: number | null }> {
@@ -62,6 +63,16 @@ export function claudeProvider(binOverride?: string): TextLLMProvider {
     terms,
     async healthCheck() {
       return status();
+    },
+    async signIn() {
+      const start = Date.now();
+      try {
+        const r = await exec(bin, ['auth', 'login'], { timeout: 120_000 });
+        return { ok: true, detail: 'Sign-in flow completed', latencyMs: Date.now() - start, checkedAt: new Date().toISOString() };
+      } catch (e) {
+        const msg = (e as Error).message;
+        return { ok: false, detail: `Sign-in failed: ${msg}`, latencyMs: Date.now() - start, lastError: msg, checkedAt: new Date().toISOString() };
+      }
     },
     async generateText({ prompt, model, temperature, tools, signal, onChunk }) {
       const st = await status();
