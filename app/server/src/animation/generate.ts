@@ -697,7 +697,7 @@ async function runAnimatedPipeline(o: GenerateAnimatedSceneOptions, artworkOnly:
     const motion = parseObject(await send('motion', 'Rig and motion', buildAnimatedMotionPrompt({duration: scene.duration, context, targets: known, artPlan, preparation, allowIK, allowCycles, dialogueCues, approvedRig:o.motionOnly?.rig})), 250_000, 'Rig and motion');
     const motionData = obj(motion.animation);
     if (motionData.duration !== scene.duration) throw artError('The generated motion must use the approved scene duration.');
-    if ((!allowIK && motionData.ik !== undefined) || (!allowCycles && motionData.cycles !== undefined)) throw artError('The returned motion includes a disabled motion category.');
+    if ((!allowIK && (motionData.ik !== undefined || motionData.walk !== undefined)) || (!allowCycles && motionData.cycles !== undefined)) throw artError('The returned motion includes a disabled motion category.');
     if (dialogueCues?.length && motionData.visemes === undefined) throw artError('The returned motion omitted the supplied mouth cues. Add compatible mouth groups or retry.');
     if (motionData.visemes !== undefined) {
       if (!dialogueCues?.length) throw artError('Mouth cues cannot be generated without verified dialogue timing.');

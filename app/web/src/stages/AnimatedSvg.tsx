@@ -505,6 +505,7 @@ export function AnimatedSvgSceneModal({ artifactId, projectId, sceneId, index, t
           {exactPrompt('motion')}
           {record?.artworkApproved ? <>
             <Field label="Motion direction" wide><textarea value={motionBrief} onChange={e => setMotionBrief(e.target.value)} maxLength={3000} rows={2} placeholder="Describe the beats, contacts, holds, atmosphere and camera." /></Field>
+            <p className="hint">In Advanced complexity, a side-profile rig with separate thigh, shin and foot groups can use a planted-foot walk. Ask for up to four steps in this shot.</p>
             <details className="stack"><summary>Optional dialogue timing</summary>
               <Field label="Scene-relative viseme cues (JSON array)" wide><textarea value={dialogueCues} onChange={e => setDialogueCues(e.target.value)} maxLength={7000} rows={3} placeholder='[{"start":0.2,"end":0.4,"shape":"open"}]' /></Field>
               <p className="hint">Enable dialogue in the project settings. Enter your own cues, or estimate them from a WAV excerpt that starts at this scene’s first frame. Review the estimates before sending timing to the AI. The WAV is processed locally, not sent to the provider.</p>

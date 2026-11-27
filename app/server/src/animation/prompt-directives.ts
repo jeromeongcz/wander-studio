@@ -42,6 +42,10 @@ export function buildAnimatedMotionPrompt(o: { duration: number; context: string
       `Provided timed mouth cues: ${JSON.stringify(o.dialogueCues)}`,
     ] : ['No verified timed mouth cues were supplied. Do not emit animation.visemes or claim lip synchronization.']),
     'Do not duplicate a target/property across regular and generated tracks. Use 1–80 tracks after all optional structures are baked. If an optional structure is unsuitable, keep ordinary motion on the existing drawing instead.',
+    ...(o.allowIK ? [
+      'For a requested side-profile walk only, animation.walk can plant alternating feet: {root,left:{upper,lower,foot,hip:[x,y],thigh,shin},right:{upper,lower,foot,hip:[x,y],thigh,shin},groundY,steps,stepSeconds,stepLength,lift,bob?,direction?,start?,leftArm?:{group,pivot:[x,y]},rightArm?:{group,pivot:[x,y]},armSwing?}.',
+      'Use 1–4 steps that fit the scene, a dedicated body group, straight-down rest leg artwork, and nested untransformed thigh/shin/foot groups measured from the approved art. Shorten the steps enough to keep both alternating foot targets in reach. Do not add other transforms on these groups or their ancestors, and omit walk if the drawing has no compatible articulated legs.',
+    ] : []),
     ...(o.approvedRig ? ['Use the approved rig and its joint limits below. Do not return a replacement rig.', `Approved rig: ${JSON.stringify(o.approvedRig)}`] : []),
     'Return only JSON {animation,rig?,scene}. The scene metadata includes continuity, source assets, visual notes, timing beats and cameraBaked. Use only the named groups and paths in the supplied target list. Never regenerate the artwork.',
     `Scene inputs: ${o.context}`,

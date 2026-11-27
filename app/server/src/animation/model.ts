@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { createRequire } from 'node:module';
 import { SaxesParser } from 'saxes';
 import { EngineError } from '../engine.ts';
+import { bakeWalk } from './walk.ts';
 import { bakeTwoBoneTracks, type TwoBoneBake } from './ik.ts';
 
 // Use GSAP only for trusted, seekable numeric/color interpolation. No timers, DOM, or generated JavaScript.
@@ -209,7 +210,14 @@ function compileCycles(value:unknown,duration:number):unknown[] {
 export function readMotion(input:unknown,d:Drawing):Motion {
   const o=record(input),duration=number(o.duration,0.1,60); const seen=new Set<string>(); const trackIds=new Set<string>();
   if(o.tracks!==undefined&&(!Array.isArray(o.tracks)||o.tracks.length>80))return bad('Use 1–80 animation tracks.');
-  const compiled=[...(o.tracks??[]),...compileIK(o.ik,d),...compileVisemes(o.visemes,d,duration),...compileCycles(o.cycles,duration)];
+  const authored=[...(o.tracks??[]),...compileIK(o.ik,d),...compileVisemes(o.visemes,d,duration),...compileCycles(o.cycles,duration)];
+  const walk=bakeWalk(o.walk,d,duration);
+  for(const entry of authored){
+    const t=record(entry);
+    if(walk.protectedTransforms.has(t.target)&&['translate','rotate','scale'].includes(t.property))
+      return bad('Do not layer another transform on a walk joint or its SVG ancestors.');
+  }
+  const compiled=[...authored,...walk.tracks];
   if(compiled.length<1||compiled.length>80)return bad('Use 1–80 animation tracks, including compiled cues.');
   const tracks=compiled.map((t:unknown):MotionTrack=>{
     const {id,target,property,pivot,keys}=record(t);
@@ -255,6 +263,8 @@ export function readRig(input:unknown,d:Drawing,m:Motion):unknown {
     if((v.min??-720)>(v.max??720))return bad('Invalid rig joint limits.');
     const track=m.tracks.find(t=>t.target===v.target&&t.property==='rotate');
     if(track && (track.keys.some(k=>Number(k.value)<(v.min??-720)||Number(k.value)>(v.max??720))))return bad('Rotation exceeds joint limits.');
+    if(track?.id?.startsWith('walk-v1-')&&track.pivot&&Math.hypot(track.pivot[0]-v.pivot[0],track.pivot[1]-v.pivot[1])>1e-4)
+      return bad('A walk pivot does not match the approved rig joint.');
     if(track&&!track.pivot)track.pivot=v.pivot;
     mapped.set(id,v);return v;
   });
