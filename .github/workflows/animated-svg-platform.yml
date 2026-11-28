@@ -13,7 +13,7 @@ concurrency:
 
 jobs:
   smoke:
-    name: ${{ matrix.os }} CPU smoke
+    name: ${{ matrix.os }} CPU and Chromium smoke
     strategy:
       fail-fast: false
       matrix:
@@ -68,8 +68,13 @@ jobs:
       - name: Install locked dependencies
         working-directory: Wander Studio
         run: npm ci --include=dev
+      - name: Install the lockfile-matched Chromium headless shell
+        working-directory: Wander Studio
+        run: node node_modules/playwright-core/cli.js install --only-shell chromium
       - name: Check Storyboard export and mixed composition
         working-directory: Wander Studio
+        env:
+          WANDER_TEST_CHROMIUM: '1'
         run: npm run smoke:animated-svg
       - name: Start the built app and verify the local UI
         working-directory: Wander Studio
