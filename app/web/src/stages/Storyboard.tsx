@@ -299,7 +299,7 @@ export function StoryboardStage() {
       {animated !== null && c?.scenes[animated] && (
         <AnimatedSvgSceneModal key={c.scenes[animated].scene_id ?? animated} artifactId={art.id} projectId={project.id} sceneId={c.scenes[animated].scene_id} index={animated}
           title={c.scenes[animated].title ?? ''} brief={c.scenes[animated].visual_description ?? ''}
-          targetDuration={c.scenes[animated].target_duration ?? 0} approvedStoryboard={art.state === 'approved'} hasApprovedStill={sketches.data?.[animated]?.state === 'approved'}
+          projectStrategy={project.settings.animatedSvg?.strategy} targetDuration={c.scenes[animated].target_duration ?? 0} approvedStoryboard={art.state === 'approved'} hasApprovedStill={sketches.data?.[animated]?.state === 'approved'}
           onAttached={() => { sketches.reload(); done(); }} onClose={() => setAnimated(null)} />
       )}
       {customSvg !== null && (

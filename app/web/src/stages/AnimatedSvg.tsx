@@ -178,8 +178,8 @@ function PackageField({ label, value, change, accept, max, required }: { label: 
   );
 }
 
-export function AnimatedSvgSceneModal({ artifactId, projectId, sceneId, index, title, brief, targetDuration, approvedStoryboard, hasApprovedStill, onAttached, onClose }: {
-  artifactId: string; projectId: string; sceneId?: string; index: number; title: string; brief: string; targetDuration: number; approvedStoryboard: boolean; hasApprovedStill?: boolean; onAttached: () => void; onClose: () => void;
+export function AnimatedSvgSceneModal({ artifactId, projectId, sceneId, index, title, brief, targetDuration, approvedStoryboard, hasApprovedStill, projectStrategy, onAttached, onClose }: {
+  artifactId: string; projectId: string; sceneId?: string; index: number; title: string; brief: string; targetDuration: number; approvedStoryboard: boolean; hasApprovedStill?: boolean; projectStrategy?: AnimatedSvgSettings['strategy']; onAttached: () => void; onClose: () => void;
 }) {
   const path = `/artifacts/${artifactId}/animated-svg/${index}`;
   const data = useAsync(() => api.get<(AnimatedRecord | null)[]>(`/artifacts/${artifactId}/animated-svg`), [artifactId]);
@@ -202,6 +202,7 @@ export function AnimatedSvgSceneModal({ artifactId, projectId, sceneId, index, t
   const [referenceImages, setReferenceImages] = useState<SceneReferenceImage[]>([]);
   const [preparingImages, setPreparingImages] = useState(false);
   const [reviewPreview, setReviewPreview] = useState(false);
+  const [artworkStrategy, setArtworkStrategy] = useState<'inherit' | AnimatedSvgSettings['strategy']>('inherit');
   const [motionBrief, setMotionBrief] = useState('');
   const [dialogueCues, setDialogueCues] = useState('');
   const [dialogueRecognizer, setDialogueRecognizer] = useState('phonetic');
@@ -321,7 +322,8 @@ export function AnimatedSvgSceneModal({ artifactId, projectId, sceneId, index, t
     if (!confirm(`${intent} The scene brief and reference notes will be sent to ${providerName}. The result will need fresh human approval.`)) return;
     const images = isArt ? referenceImages : [];
     if (images.length && !confirm(`Send ${images.length} resized reference image(s) to ${providerName} for analysis? Only include images you have permission to share.`)) return;
-    const allowReview = isArt && reviewPreview;
+    const strategy = isArt && !targeted && artworkStrategy !== 'inherit' ? artworkStrategy : undefined;
+    const allowReview = isArt && reviewPreview && strategy !== 'single-pass';
     if (allowReview && !confirm(`Send rendered artwork previews to ${providerName} for visual review?`)) return;
     const libraryReuse = isArt && !targeted && libraryId ? { id: libraryId, targetId: libraryTarget.trim() } : undefined;
     const reuseLayer = isArt && !targeted && reuseSource ? { fromIndex: Number(reuseSource), sourceGroupId: reuseGroup, targetId: reuseTarget.trim() } : undefined;
@@ -334,6 +336,7 @@ export function AnimatedSvgSceneModal({ artifactId, projectId, sceneId, index, t
       operation, brief: isArt ? (targeted ? refineFeedback.trim() : prompt) : motionBrief,
       ...(isArt ? { referenceNotes: references } : {}),
       consent: true, expectedProvider: providerName,
+      ...(strategy ? { artworkStrategy: strategy } : {}),
       ...(images.length ? { references: images, referenceVisionConsent: true } : {}),
       ...(allowReview ? { reviewVisionConsent: true } : {}),
       ...(reuseLayer ? { reuseLayer } : {}),
@@ -427,8 +430,16 @@ export function AnimatedSvgSceneModal({ artifactId, projectId, sceneId, index, t
               <Btn small disabled={working || preparingImages} onClick={() => setReferenceImages((v) => v.filter((_, n) => n !== i))}>Remove reference {i + 1}</Btn>
             </figure>)}
           </div>}
+          <Field label="Layered artwork passes" hint="Applies to this scene’s new artwork runs while this panel is open. It does not change the project, regular stills, or motion." wide>
+            <select value={artworkStrategy} disabled={working} onChange={(e) => setArtworkStrategy(e.target.value as typeof artworkStrategy)}>
+              <option value="inherit">Use Script default ({(projectStrategy ?? DEFAULT_ANIMATED_SVG.strategy) === 'single-pass' ? 'Single pass' : 'Multi-pass'})</option>
+              <option value="single-pass">Single pass (one drawing call)</option>
+              <option value="multi-pass">Multi-pass (planning and enabled review passes)</option>
+            </select>
+          </Field>
+          {artworkStrategy === 'single-pass' && <p className="hint">Skips optional planning, AI review and automatic refinements. Adding reference images can still require a separate analysis call.</p>}
           <label className="row gap small"><input type="checkbox" checked={reviewPreview} disabled={working}
-            onChange={(e) => setReviewPreview(e.target.checked)} /> Allow the model to review rendered previews (optional; compatible vision model required)</label>
+            onChange={(e) => setReviewPreview(e.target.checked)} /> Allow AI preview review when the selected workflow uses it (requires a compatible vision model)</label>
           {reusable.some((i) => data.data?.[i]?.layers?.length) && <details className="stack animated-reuse">
             <summary>Keep one approved artwork layer during generation</summary>
             <div className="form">
