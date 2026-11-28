@@ -114,6 +114,50 @@ for (const strategy of ['single-pass', 'multi-pass'] as const) {
       assert.equal(requests.length, requestCount, 'copying makes no provider requests');
       const stillAfter = await app.inject({ method: 'GET', url: route + '/sketches/0/prompt' });
       assert.equal(stillAfter.json<{prompt: string}>().prompt, stillPrompt);
+
+      const projectSettings = engine.getProject(projectId).settings;
+      const savedSettings = {
+        ...projectSettings,
+        animatedSvg: {...projectSettings.animatedSvg, ...(strategy === 'multi-pass' ? {
+          stages: {artDirection: true, anatomy: true, renderedReview: true, targetedCorrections: true},
+        } : {})},
+      };
+      db.prepare('UPDATE projects SET settings_json = ? WHERE id = ?').run(JSON.stringify(savedSettings), projectId);
+      const drawUrl = route + '/animated-svg/0/generate';
+      const draw = {operation: 'artwork', consent: true, expectedProvider: provider.id, revision: records[0].revision};
+      for (const payload of [
+        {...draw, artworkStrategy: 'unknown'},
+        {...draw, operation: 'scene', artworkStrategy: 'single-pass'},
+        {...draw, targetLayerIds: ['lantern'], artworkStrategy: 'multi-pass'},
+      ]) {
+        const rejected = await app.inject({method: 'POST', url: drawUrl, payload});
+        assert.equal(rejected.statusCode, 422, rejected.body);
+      }
+      assert.equal(requests.length, requestCount, 'invalid choices do not call the provider');
+
+      const artworkStrategy = strategy === 'multi-pass' ? 'single-pass' : 'multi-pass';
+      const override = await app.inject({method: 'POST', url: drawUrl, payload: {
+        ...draw, artworkStrategy, ...(artworkStrategy === 'single-pass' ? {reviewVisionConsent: true} : {}),
+      }});
+      assert.equal(override.statusCode, 202, override.body);
+      const overrideId = override.json<{job: {id: string}}>().job.id;
+      for (let tries = 0; tries < 100; tries++) {
+        job = (await app.inject({method: 'GET', url: '/jobs/' + overrideId})).json<{state: string; error?: unknown}>();
+        if (job.state !== 'queued' && job.state !== 'running') break;
+        await delay(25);
+      }
+      assert.equal(job.state, 'succeeded', JSON.stringify(job));
+      const overrideCalls = requests.slice(requestCount).map(prompt => prompt.split('\n')[0]);
+      assert.deepEqual(overrideCalls, artworkStrategy === 'single-pass'
+        ? ['Wander Studio • Layered vector artwork']
+        : ['Wander Studio • Art direction', 'Wander Studio • Layered vector artwork', 'Wander Studio • Targeted vector refinement']);
+      assert.deepEqual(engine.getProject(projectId).settings, savedSettings, 'scene job does not change Script settings');
+      const layered = (await app.inject({method: 'GET', url: route + '/animated-svg'})).json<Array<{animation?: unknown; hasArtworkPrompt: boolean}>>();
+      assert.equal(layered[0].hasArtworkPrompt, true);
+      assert.equal(layered[0].animation, undefined);
+      const stillAfterOverride = await app.inject({method: 'GET', url: route + '/sketches/0/prompt'});
+      assert.equal(stillAfterOverride.json<{prompt: string}>().prompt, stillPrompt);
+
     } finally {
       await app.close();
       db.close();

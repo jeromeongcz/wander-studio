@@ -122,7 +122,7 @@ function lookNotes(scene: Scene): string[] {
 }
 
 /** Turn the checked drawing into a PNG with whatever this computer has (see rasterCommands). */
-export async function rasterize(svgPath: string, pngPath: string, ffmpeg: string) {
+export async function rasterize(svgPath: string, pngPath: string, ffmpeg: string, o: { timeout?: number; signal?: AbortSignal } = {}) {
   const errors: string[] = [];
   try {
     const drawing = await readFile(svgPath);
@@ -134,13 +134,32 @@ export async function rasterize(svgPath: string, pngPath: string, ffmpeg: string
   }
   for (const c of rasterCommands(svgPath, pngPath, ffmpeg)) {
     try {
-      await run(c.bin, c.args, { timeout: 60_000 });
+      if (o.signal?.aborted) throw new EngineError('CANCELLED', 'Cancelled');
+      await run(c.bin, c.args, { timeout: o.timeout ?? 60_000, signal: o.signal });
       if (existsSync(pngPath)) return;
     } catch (e) {
+      if (o.signal?.aborted || (e as EngineError).code === 'CANCELLED') throw e;
       errors.push((e as Error).message.slice(0, 160));
     }
   }
   throw bad(`Could not turn the drawing into a picture. ${errors.join(' | ')}`);
+}
+
+// Exercise the same local renderer chain before spending a provider request. This is a
+// capability check only; a larger or more complex drawing may still fail later.
+async function verifySketchRenderer(root: string, ffmpeg: string, signal: AbortSignal) {
+  const dir = join(root, 'cache', `sketch_probe_${ulid()}`);
+  try {
+    await mkdir(dir, { recursive: true });
+    const src = join(dir, 'probe.svg');
+    await writeFile(src, '<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 32 32"><rect width="32" height="32" fill="#d08040"/></svg>');
+    await rasterize(src, join(dir, 'probe.png'), ffmpeg, { timeout: 5_000, signal });
+  } catch (error) {
+    if (signal.aborted || (error as EngineError).code === 'CANCELLED') throw error;
+    throw bad(`No illustration request was sent. Local SVG-to-PNG setup check failed. ${(error as Error).message}`);
+  } finally {
+    await rm(dir, { recursive: true, force: true }).catch(() => {});
+  }
 }
 
 export class SketchArtist {
@@ -196,6 +215,8 @@ export class SketchArtist {
     const { storyboardId, sceneIds, reopen, captionSpace } = ctx.params as { storyboardId: string; sceneIds: string[]; reopen?: boolean; captionSpace?: boolean };
     const active = this.s.llm.active();
     if (!active) throw bad('No AI provider selected. Choose one in Settings → AI Provider before drawing scenes.');
+    ctx.progress(0, 'Checking local SVG-to-PNG support before drawing.');
+    await verifySketchRenderer(this.s.config.root, ffmpegBinary(this.s.config.ffprobePath), ctx.signal);
     const st = await active.healthCheck();
     if (!st.ok) throw bad(`${st.detail}. Select a working AI provider in Settings → AI Provider.`);
     let drawn = 0;

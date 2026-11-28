@@ -15,7 +15,7 @@ import { buildAnimatedSketchPrompt } from './prompts.ts';
 import { combineCharacterRigs, extractCharacter, placeCharacter, selectCharacterRig } from './character-rig.ts';
 import { bindMotionClip, exportMotionClip } from './motion-clip.ts';
 import { suggestDialogueCues } from './dialogue-timing.ts';
-import { readAnimatedGenerationControls, readTimedMouthCues } from './generation-controls.ts';
+import { ANIMATED_OPTIONAL_STAGES, readAnimatedGenerationControls, readTimedMouthCues } from './generation-controls.ts';
 
 export const animatedSvgDefaults = {mode:'static',quality:'professional',style:'dark-folklore',fps:30,complexity:'standard',character:true,environment:true,dialogue:false,camera:true,detail:70,strategy:'multi-pass',advancedShading:true,visualReview:true,reuseApproved:true,customDirection:''} as const;
 const styles = 'archival-sepia dark-folklore cinematic-25d professional-cartoon anime folklore graphic-novel watercolor documentary motion-graphics minimalist historical-graphic-novel cinematic-anime painterly-storybook engraved-horror custom'.split(' ');
@@ -107,7 +107,7 @@ export class AnimatedSvgStudio {
   }
   history(id:string,i:number){
     const k=this.locate(id,i),current=this.get(k)?.revision;
-    const rows=this.s.engine.db.prepare("SELECT revision,saved_at,json_extract(package_json,'$.state') AS state,json_extract(package_json,'$.parentRevision') AS parentRevision,json_extract(package_json,'$.artworkHash') AS artworkHash,json_type(package_json,'$.video')='object' AS hasVideo FROM animated_svg_revisions WHERE storyboard_id=? AND scene_id=? ORDER BY rowid DESC LIMIT 50").all(id,k.sceneId);
+    const rows=this.s.engine.db.prepare("SELECT revision,saved_at,json_extract(package_json,'$.state') AS state,json_extract(package_json,'$.parentRevision') AS parentRevision,json_extract(package_json,'$.artworkHash') AS artworkHash,json_type(package_json,'$.animation')='object' AS hasAnimation,json_type(package_json,'$.video')='object' AS hasVideo FROM animated_svg_revisions WHERE storyboard_id=? AND scene_id=? ORDER BY rowid DESC LIMIT 50").all(id,k.sceneId);
     return rows.map(row=>({...row,current:row.revision===current}));
   }
   private fingerprint(k:Key){const {scene_id:_,order_index:__,...scene}=k.scene;return createHash('sha256').update(JSON.stringify({format:k.format,scene})).digest('hex');}
@@ -218,6 +218,11 @@ export class AnimatedSvgStudio {
       if(b.expectedProvider!==undefined&&b.expectedProvider!==provider.id)throw new EngineError('STALE','The active provider changed. Review its name and confirm again.');
       const model=this.s.config.videoModels?.storyboard??this.s.config.selectedLLMModel??undefined;
       const targetLayerIds=b.targetLayerIds;
+      const artworkStrategy=b.artworkStrategy;
+      if(artworkStrategy!==undefined&&(
+        operation!=='artwork'||targetLayerIds!==undefined||
+        (artworkStrategy!=='single-pass'&&artworkStrategy!=='multi-pass')
+      ))return bad('Choose Single pass or Multi-pass only when drawing new layered artwork.');
       if(targetLayerIds!==undefined&&operation==='motion')return bad('Use targeted motion refinement to select layers.');
       if(targetLayerIds!==undefined){
         if(!e||!Array.isArray(targetLayerIds)||!targetLayerIds.length||targetLayerIds.length>6||new Set(targetLayerIds).size!==targetLayerIds.length)
@@ -240,7 +245,7 @@ export class AnimatedSvgStudio {
       }
       const images=this.images(b.references);
       const legacyVision=b.visionConsent===true;
-      const analyzeVision=legacyVision||b.referenceVisionConsent===true, reviewVision=legacyVision||b.reviewVisionConsent===true;
+      const analyzeVision=legacyVision||b.referenceVisionConsent===true, reviewVision=artworkStrategy!=='single-pass'&&(legacyVision||b.reviewVisionConsent===true);
       if(images.length&&!analyzeVision)return bad('Confirm that reference images may be sent to the selected provider.');
       if((analyzeVision||reviewVision)&&typeof provider.generateVision!=='function')return bad('This provider has no image-capable adapter. Use the reference notes or select a supported vision model.');
       if((analyzeVision||reviewVision)&&b.expectedProvider!==provider.id)return bad('Confirm image use for the currently selected provider.');
@@ -248,12 +253,21 @@ export class AnimatedSvgStudio {
       const referenceBatch=randomUUID();
       if(this.referenceBatches.size>=12)throw new EngineError('BUSY','Generation queue is full.');
       if((operation==='motion'||operation==='refine-motion')&&(reuseLayer||libraryReuse||images.length))return bad('Motion-only generation cannot replace artwork or analyze new image references.');
-      const settings=readSettings(k.project.settings.animatedSvg as Record<string,unknown>|undefined);
+      const projectSettings=readSettings(k.project.settings.animatedSvg as Record<string,unknown>|undefined);
+      // An explicit single-pass job draws once. Separately consented reference-image analysis may still run.
+      const settings=artworkStrategy===undefined?projectSettings:{
+        ...projectSettings,strategy:artworkStrategy as 'single-pass'|'multi-pass',
+        ...(artworkStrategy==='single-pass'?{
+          visualReview:false,
+          stages:{...projectSettings.stages,...Object.fromEntries(ANIMATED_OPTIONAL_STAGES
+            .filter(stage=>stage!=='referenceAnalysis').map(stage=>[stage,false]))},
+        }:{}),
+      };
       const dialogueCues=readTimedMouthCues(b.dialogueCues,Math.min(60,Math.max(0.1,k.scene.target_duration??5)));
       if(dialogueCues?.length&&(operation!=='motion'||!settings.dialogue))return bad('Enable dialogue and request motion before supplying timed mouth cues.');
       this.referenceBatches.set(referenceBatch,{provider,model,images,settings});
       setTimeout(()=>this.referenceBatches.delete(referenceBatch),60*60*1000).unref();
-      return {job:this.s.jobs.enqueue(kind,{projectId:k.project.id,artifactId:id,params:{id,i,sceneId:k.sceneId,storyboardVersion:k.a.current_version_id,revision:e?.revision,provider:provider.id,brief,referenceNotes,targetLayerIds,reuseLayer,libraryReuse,analyzeVision,reviewVision,operation,dialogueCues,referenceBatch}})};
+      return {job:this.s.jobs.enqueue(kind,{projectId:k.project.id,artifactId:id,params:{id,i,sceneId:k.sceneId,storyboardVersion:k.a.current_version_id,revision:e?.revision,provider:provider.id,brief,referenceNotes,targetLayerIds,reuseLayer,libraryReuse,analyzeVision,reviewVision,operation,artworkStrategy,dialogueCues,referenceBatch}})};
     }
     if(e)this.current(k,e);
     if(e?.state==='attached')return bad('Save a new draft to render a replacement for an attached clip.');
@@ -436,7 +450,8 @@ export class AnimatedSvgStudio {
     }
     const saved=this.savePackage(k,{...generated,rig:reusedRig??((motionOperation||p.targetLayerIds)?e?.rig:undefined)??('rig' in generated?generated.rig:undefined),revision:p.revision,scene:metadata},{passes:generated.passes,provider:provider.id,prompts,artworkOnly:artOnly,artworkApproved:motionOperation,
       artworkSource:motionOperation&&e?.artworkHash?(e.artworkSource?.kind==='still'?e.artworkSource:{kind:'animated',revision:e.revision,sha256:e.artworkHash}):e&&p.targetLayerIds&&e.artworkHash?{kind:'animated',revision:e.revision,sha256:e.artworkHash}:undefined});
-    return {revision:saved.revision,state:saved.state};
+    const warnings=generated.passes.filter((pass)=>pass.status==='failed').map((pass)=>`${pass.name}: ${pass.note??'This optional generation stage could not be completed.'}`);
+    return {revision:saved.revision,state:saved.state,...(warnings.length?{warnings}:{})};
   }
   async render(ctx:JobCtx){
     const p=ctx.params,k=this.jobKey(ctx),e=this.check(k,p.revision)!;

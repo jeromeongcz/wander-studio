@@ -31,8 +31,9 @@ export function App() {
   const hash = useHash();
   const [theme, toggle] = useTheme();
   const [menu, setMenu] = useState(false);
-  const [, , projectId, stageId] = hash.split('/'); // "/p/<id>/<stage>"
-  const route = hash.startsWith('/p/') || hash.startsWith('/projects') ? 'production' : hash.startsWith('/research') ? 'research' : hash.startsWith('/assets') ? 'assets' : hash.startsWith('/settings') ? 'settings' : 'dashboard';
+  const [routePath] = hash.split('#', 2);
+  const [, , projectId, stageId] = routePath.split('/'); // "/p/<id>/<stage>"
+  const route = routePath.startsWith('/p/') || routePath.startsWith('/projects') ? 'production' : routePath.startsWith('/research') ? 'research' : routePath.startsWith('/assets') ? 'assets' : routePath.startsWith('/settings') ? 'settings' : 'dashboard';
   const [activeAI, setActiveAI] = useState<{ id: string | null; name?: string; model?: string | null } | null>(null);
 
   // Models for the provider model picker modal
@@ -179,7 +180,7 @@ export function App() {
         <main className="content">
           {route === 'dashboard' && <Dashboard />}
           {route === 'research' && <ResearchStudio />}
-          {route === 'production' && (hash.startsWith('/p/') ? <ProjectPage id={projectId} stage={stageId || 'overview'} /> : <VideoProduction stepId={projectId} />)}
+          {route === 'production' && (routePath.startsWith('/p/') ? <ProjectPage id={projectId} stage={stageId || 'overview'} /> : <VideoProduction stepId={projectId} />)}
           {route === 'assets' && <AssetLibrary />}
           {route === 'settings' && <SettingsPage />}
         </main>

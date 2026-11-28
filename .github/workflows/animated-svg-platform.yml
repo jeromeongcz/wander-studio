@@ -13,7 +13,7 @@ concurrency:
 
 jobs:
   smoke:
-    name: ${{ matrix.os }} CPU smoke
+    name: ${{ matrix.os }} CPU and Chromium smoke
     strategy:
       fail-fast: false
       matrix:
@@ -68,8 +68,13 @@ jobs:
       - name: Install locked dependencies
         working-directory: Wander Studio
         run: npm ci --include=dev
+      - name: Install the lockfile-matched Chromium headless shell
+        working-directory: Wander Studio
+        run: node node_modules/playwright-core/cli.js install --only-shell chromium
       - name: Check Storyboard export and mixed composition
         working-directory: Wander Studio
+        env:
+          WANDER_TEST_CHROMIUM: '1'
         run: npm run smoke:animated-svg
       - name: Start the built app and verify the local UI
         working-directory: Wander Studio
@@ -103,6 +108,15 @@ jobs:
             if ($homePage.StatusCode -ne 200 -or !$assetPath) { throw 'Wander did not serve its built UI' }
             if ((Invoke-WebRequest "$base$assetPath" -TimeoutSec 5).StatusCode -ne 200) { throw 'Built JavaScript did not load' }
             Write-Host 'Verified /health, the built UI, and its JavaScript.'
+            $created = node scripts/seed-svg-acceptance.mjs $env:WANDER_PORT
+            if ($LASTEXITCODE -ne 0 -or @($created -match '^Prepared SVG acceptance fixture:').Count -ne 2) {
+              throw 'Both live-acceptance fixture projects must be prepared'
+            }
+            $created | Write-Host
+            $repeated = node scripts/seed-svg-acceptance.mjs $env:WANDER_PORT
+            if ($LASTEXITCODE -ne 0 -or @($repeated -match '^Already exists; not modified:').Count -ne 2) {
+              throw 'Existing acceptance fixtures must not be recreated or modified'
+            }
           } finally {
             if (!$server.HasExited) { Stop-Process -Id $server.Id -Force -ErrorAction SilentlyContinue }
             $null = $server.WaitForExit(5000)

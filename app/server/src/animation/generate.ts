@@ -133,6 +133,7 @@ export type AnimatedArtworkOptions = Omit<GenerateAnimatedSceneOptions, 'validat
 const MAX_SVG = 600_000;
 const MAX_TEXT = 12_000;
 const xmlID = /^[A-Za-z_][A-Za-z0-9_.:-]{0,79}$/;
+const svgID = /^[A-Za-z_][A-Za-z0-9_.:-]{0,95}$/;
 const obj = (value: unknown): Record<string, unknown> => {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new EngineError('PROVIDER_ERROR', 'Animated SVG generation expected a JSON object.');
   return value as Record<string, unknown>;
@@ -142,8 +143,26 @@ const bytes = (text: string) => Buffer.byteLength(text, 'utf8');
 const artError = (message: string) => new EngineError('PROVIDER_ERROR', message);
 function parseObject(answer: string, limit: number, label: string): Record<string, unknown> {
   if (bytes(answer) > limit) throw artError(`${label} exceeded its output budget.`);
-  const clean = answer.trim().replace(/^```(?:json)?\s*\n([\s\S]*?)\n```$/i, '$1').trim();
-  try { return obj(JSON.parse(clean)); } catch { throw artError(`${label} returned invalid JSON. Retry with a capable model or import the artwork manually.`); }
+  const clean = answer.replace(/^\uFEFF/, '').trim().replace(/^```(?:json)?\s*\n([\s\S]*?)\n```$/i, '$1').trim();
+  try { return obj(JSON.parse(clean)); } catch { /* Try a JSON object embedded in provider commentary or a code fence. */ }
+  for (let start = clean.indexOf('{'); start >= 0; start = clean.indexOf('{', start + 1)) {
+    let depth = 0, quoted = false, escaped = false;
+    for (let end = start; end < clean.length; end++) {
+      const char = clean[end];
+      if (quoted) {
+        if (escaped) escaped = false;
+        else if (char === '\\') escaped = true;
+        else if (char === '"') quoted = false;
+        continue;
+      }
+      if (char === '"') quoted = true;
+      else if (char === '{') depth++;
+      else if (char === '}' && --depth === 0) {
+        try { return obj(JSON.parse(clean.slice(start, end + 1))); } catch { break; }
+      }
+    }
+  }
+  throw artError(`${label} returned invalid JSON.`);
 }
 function parseArtwork(answer: string): string {
   if (bytes(answer) > MAX_SVG + 64) throw artError('The drawing exceeded the 600 KB SVG budget.');
@@ -174,6 +193,19 @@ function parsePlan(answer: string): ArtPlan {
 }
 
 interface LayerSpan { id: string; start: number; end: number }
+function svgIdProblems(source: string): { duplicates: string[]; invalid: string[] } {
+  const seen = new Set<string>(), duplicates = new Set<string>(), invalid = new Set<string>();
+  const parser = new SaxesParser();
+  parser.on('opentag', (tag) => {
+    const value = tag.attributes.id;
+    if (typeof value !== 'string') return;
+    if (!svgID.test(value)) invalid.add(value || '(empty)');
+    if (seen.has(value)) duplicates.add(value);
+    seen.add(value);
+  });
+  parser.write(source).close();
+  return { duplicates: [...duplicates], invalid: [...invalid] };
+}
 const drawableTags = new Set(['path', 'rect', 'circle', 'ellipse', 'line', 'polyline', 'polygon', 'text', 'image', 'use']);
 function drawableLayerIds(source: string): Set<string> {
   const result = new Set<string>();
@@ -538,7 +570,7 @@ async function runAnimatedPipeline(o: GenerateAnimatedSceneOptions, artworkOnly:
   }
 
   let artPlan: ArtPlan | undefined, composition: Record<string, string> | undefined, svg: string;
-  let svgXmlRepairUsed = false;
+  let svgValidationRepairUsed = false;
   if (o.motionOnly) {
     svg = o.motionOnly.svg;
     o.validateArtwork(svg);
@@ -549,14 +581,24 @@ async function runAnimatedPipeline(o: GenerateAnimatedSceneOptions, artworkOnly:
   } else {
     if (on('artDirection', multi && !artworkOnly)) {
       step(0.10, 'Planning the composition, lighting and character design');
-      artPlan = parsePlan(await send('artDirection', 'Art direction', `${guidance}\n${artworkRules}\nReturn JSON {staging,palette,lighting,environment,continuity,layers:[{id,role,detail}],characters:[{id,proportions,facialFeatures,expression,wardrobe,views,poses,dialogue}]}. For each character, describe front, profile, rear and three-quarter consistent design references, neutral/emotion poses, costume material, palette and relevant mouth shapes. Include only subjects visible in the shot and intentionally separate action/environment planes.\nScene inputs: ${context}`));
-      record('art-direction', 'complete');
+      try {
+        artPlan = parsePlan(await send('artDirection', 'Art direction', `${guidance}\n${artworkRules}\nReturn JSON {staging,palette,lighting,environment,continuity,layers:[{id,role,detail}],characters:[{id,proportions,facialFeatures,expression,wardrobe,views,poses,dialogue}]}. For each character, describe front, profile, rear and three-quarter consistent design references, neutral/emotion poses, costume material, palette and relevant mouth shapes. Include only subjects visible in the shot and intentionally separate action/environment planes.\nScene inputs: ${context}`));
+        record('art-direction', 'complete');
+      } catch (error) {
+        const reason = error instanceof Error ? error.message.slice(0, 260) : 'The planning response could not be used.';
+        optionalFailure('art-direction', error, `Skipped the unusable art-direction plan and continued with the scene brief. ${reason}`);
+      }
     }
     if (on('composition')) {
       step(0.17, 'Checking visual composition and continuity');
-      const answer = parseObject(await send('composition', 'Composition direction', `${guidance}\nReturn only JSON {focalPoint,valuePlanes,framing,continuity,contact,negativeSpace}. Plan a coherent still illustration. Use the existing required layer IDs, preserve camera and caption-safe geometry, make foreground and background readable, and choose the smallest number of coherent art planes.\nScene inputs: ${context}\nArt plan: ${JSON.stringify(artPlan ?? {})}`), 24_000, 'Composition direction');
-      composition = Object.fromEntries(['focalPoint', 'valuePlanes', 'framing', 'continuity', 'contact', 'negativeSpace'].map((k) => [k, trimmed(answer[k], 650)]));
-      record('composition', 'complete');
+      try {
+        const answer = parseObject(await send('composition', 'Composition direction', `${guidance}\nReturn only JSON {focalPoint,valuePlanes,framing,continuity,contact,negativeSpace}. Plan a coherent still illustration. Use the existing required layer IDs, preserve camera and caption-safe geometry, make foreground and background readable, and choose the smallest number of coherent art planes.\nScene inputs: ${context}\nArt plan: ${JSON.stringify(artPlan ?? {})}`), 24_000, 'Composition direction');
+        composition = Object.fromEntries(['focalPoint', 'valuePlanes', 'framing', 'continuity', 'contact', 'negativeSpace'].map((k) => [k, trimmed(answer[k], 650)]));
+        record('composition', 'complete');
+      } catch (error) {
+        const reason = error instanceof Error ? error.message.slice(0, 260) : 'The planning response could not be used.';
+        optionalFailure('composition', error, `Skipped the unusable composition plan and continued with the scene brief. ${reason}`);
+      }
     }
     step(0.26, 'Drawing the finished layered vector scene');
     const exactDirect = !!o.baseArtworkPrompt && artworkOnly && !artPlan && !composition && !referenceNotes && !reuseLayers.size && !trimmed(s.customDirection, 3_000);
@@ -568,17 +610,25 @@ async function runAnimatedPipeline(o: GenerateAnimatedSceneOptions, artworkOnly:
       const candidate = parseArtwork(await send('baseArtwork', 'Layered vector artwork', prompt));
       try { return materialize(candidate); }
       catch (error) {
-        if (svgXmlRepairUsed || !(error instanceof EngineError) || error.code !== 'VALIDATION' || error.message !== 'Invalid SVG XML.') throw error;
-        svgXmlRepairUsed = true;
-        step(0.28, 'Repairing malformed SVG markup');
-        const repairPrompt = `${prompt}\n\nThe SVG below has malformed XML. Repair the XML so it is well-formed and safe, preserving the complete visual design and every planned group ID. Escape ampersands in text and attributes, quote attribute values, and balance all tags. Return only the corrected complete SVG.\n\nMalformed SVG to repair:\n${candidate}`;
+        const malformedXml = error instanceof EngineError && error.code === 'VALIDATION' && error.message === 'Invalid SVG XML.';
+        const invalidIds = error instanceof EngineError && error.code === 'VALIDATION' && error.message === 'SVG layer IDs must be valid and unique.';
+        if (svgValidationRepairUsed || (!malformedXml && !invalidIds)) throw error;
+        svgValidationRepairUsed = true;
+        step(0.28, invalidIds ? 'Repairing invalid SVG layer IDs' : 'Repairing malformed SVG markup');
+        const idProblems = invalidIds ? svgIdProblems(candidate) : { duplicates: [], invalid: [] };
+        const idDetails = [
+          ...(idProblems.duplicates.length ? [`Repeated IDs: ${idProblems.duplicates.slice(0, 12).join(', ')}`] : []),
+          ...(idProblems.invalid.length ? [`Invalid IDs: ${idProblems.invalid.slice(0, 12).join(', ')}`] : []),
+        ].join('\n');
+        const issue = malformedXml ? 'The SVG XML is malformed.' : `The SVG contains invalid or non-unique IDs.\n${idDetails}`;
+        const repairPrompt = `${prompt}\n\n${issue} Repair the SVG so it is well-formed, safe, and valid. Preserve the complete visual design and every planned layer ID. Every id attribute must be valid and globally unique. For duplicated non-layer IDs, preserve the first occurrence, assign later occurrences unique descriptive IDs, and update their local references. Escape ampersands in text and attributes, quote attribute values, and balance all tags. Return only the corrected complete SVG.\n\nSVG to repair:\n${candidate}`;
         try {
           const repaired = materialize(parseArtwork(await send('baseArtwork', 'Repair malformed layered vector artwork', repairPrompt)));
-          record('layered-art-xml-repair', 'complete', 'Repaired malformed SVG XML before validation.');
+          record('layered-art-validation-repair', 'complete', 'Repaired malformed SVG XML or invalid IDs before validation.');
           return repaired;
         } catch (repairError) {
-          if (repairError instanceof EngineError && repairError.code === 'VALIDATION' && repairError.message === 'Invalid SVG XML.') {
-            throw new EngineError('PROVIDER_ERROR', 'Codex returned malformed SVG XML and the repair attempt was also invalid. Retry or simplify the scene direction.');
+          if (repairError instanceof EngineError && repairError.code === 'VALIDATION' && ['Invalid SVG XML.', 'SVG layer IDs must be valid and unique.'].includes(repairError.message)) {
+            throw new EngineError('PROVIDER_ERROR', 'Codex returned malformed SVG markup or invalid IDs, and the repair attempt was also invalid. Retry or simplify the scene direction.');
           }
           throw repairError;
         }
