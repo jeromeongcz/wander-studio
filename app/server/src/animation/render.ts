@@ -1,6 +1,7 @@
 import { spawn } from 'node:child_process';
 import { mkdir, mkdtemp, open, rename, rm, writeFile } from 'node:fs/promises';
 import { basename, dirname, join, resolve } from 'node:path';
+import { renderAsync } from '@resvg/resvg-js';
 import { EngineError } from '../engine.ts';
 import { ffmpegBinary, ffprobeBinary, run } from '../media.ts';
 import { createChromiumRasterizer } from './chromium.ts';
@@ -15,21 +16,22 @@ export const ANIMATED_SVG_PRESETS = {
 } as const;
 
 export type AnimatedRenderPreset = keyof typeof ANIMATED_SVG_PRESETS;
-export type AnimatedSvgBackend = 'chromium' | 'librsvg';
+export type AnimatedSvgBackend = 'chromium' | 'resvg' | 'librsvg';
 export type AnimatedSvgBackendPreference = AnimatedSvgBackend | 'auto';
+type Rasterizer = ChromiumRasterizer & { backend: 'chromium' | 'resvg' };
 
 /** Resolve deployment configuration without downloading or starting a browser. */
 export function animatedSvgRenderPreference(override?: unknown): AnimatedSvgBackendPreference {
   const preference = override ?? process.env.WANDER_ANIMATION_RENDERER ?? 'auto';
-  if (preference !== 'auto' && preference !== 'librsvg' && preference !== 'chromium') {
-    throw new EngineError('ANIMATION_RENDERER', 'Choose auto, chromium, or librsvg for animated SVG rendering.');
+  if (preference !== 'auto' && preference !== 'librsvg' && preference !== 'chromium' && preference !== 'resvg') {
+    throw new EngineError('ANIMATION_RENDERER', 'Choose auto, chromium, resvg, or librsvg for animated SVG rendering.');
   }
   return preference;
 }
 
 /** A specifically requested backend must never silently reuse a different backend's output. */
 export function animatedSvgRenderCacheMatches(cached: unknown, preferred: AnimatedSvgBackendPreference): boolean {
-  return (cached === 'chromium' || cached === 'librsvg') && (preferred === 'auto' || preferred === cached);
+  return (cached === 'chromium' || cached === 'resvg' || cached === 'librsvg') && (preferred === 'auto' || preferred === cached);
 }
 
 export interface RasterOptions {
@@ -39,7 +41,7 @@ export interface RasterOptions {
   /** Must throw on any untrusted or unsupported SVG. Called for every frame, before rasterization. */
   assertSafeSvg: (svg: string) => unknown;
   ffprobeOverride?: string;
-  /** Defaults to env WANDER_ANIMATION_RENDERER or auto (Chromium, then librsvg only if it cannot start). */
+  /** Defaults to env WANDER_ANIMATION_RENDERER or auto (Chromium, then resvg if it cannot start). */
   backend?: AnimatedSvgBackendPreference;
   /** An installed sandbox-capable Chromium, or env WANDER_CHROMIUM. Default uses Playwright's browser. */
   chromiumExecutable?: string;
@@ -90,21 +92,39 @@ function checkFrame(svg: string, validate: RasterOptions['assertSafeSvg']): numb
   return bytes;
 }
 
-async function createRasterizer(options: RasterOptions, signal: AbortSignal): Promise<ChromiumRasterizer | undefined> {
+function createResvgRasterizer(options: RasterOptions, signal: AbortSignal): Rasterizer {
+  return {
+    backend: 'resvg',
+    capture: async (svg) => {
+      checkSignal(signal);
+      const image = await renderAsync(svg);
+      checkSignal(signal);
+      if (image.width !== options.width || image.height !== options.height) {
+        throw new EngineError('ANIMATION_FRAME', 'The rendered SVG frame has unexpected dimensions.');
+      }
+      return image.asPng();
+    },
+    close: async () => {},
+  };
+}
+
+async function createRasterizer(options: RasterOptions, signal: AbortSignal): Promise<Rasterizer | undefined> {
   const preference = animatedSvgRenderPreference(options.backend);
   if (preference === 'librsvg') return undefined;
+  if (preference === 'resvg') return createResvgRasterizer(options, signal);
   try {
-    return await createChromiumRasterizer({
+    const rasterizer = await createChromiumRasterizer({
       width: options.width, height: options.height, executablePath: options.chromiumExecutable ?? process.env.WANDER_CHROMIUM, signal,
     });
+    return { ...rasterizer, backend: 'chromium' };
   } catch (err) {
-    if (preference === 'auto' && err instanceof EngineError && err.code === 'ANIMATION_CHROMIUM_UNAVAILABLE') return undefined;
+    if (preference === 'auto' && err instanceof EngineError && err.code === 'ANIMATION_CHROMIUM_UNAVAILABLE') return createResvgRasterizer(options, signal);
     throw err;
   }
 }
 
-function reportBackend(options: RasterOptions, rasterizer: ChromiumRasterizer | undefined): AnimatedSvgBackend {
-  const backend = rasterizer ? 'chromium' : 'librsvg';
+function reportBackend(options: RasterOptions, rasterizer: Rasterizer | undefined): AnimatedSvgBackend {
+  const backend = rasterizer?.backend ?? 'librsvg';
   try { options.onBackend?.(backend); } catch { /* Reporting cannot interrupt a render. */ }
   return backend;
 }
@@ -193,7 +213,7 @@ async function validatePng(file: string, width: number, height: number): Promise
 }
 
 /**
- * Rasterize validated SVG frames with sandboxed Playwright Chromium or FFmpeg/librsvg and encode one silent H.264 clip.
+ * Rasterize validated SVG frames with sandboxed Chromium, resvg, or FFmpeg/librsvg and encode one silent H.264 clip.
  * Each isolated frame is resolved from exact timestamps; no frame executes generated JS or SMIL.
  * The validation callback must reject external resource references before calling this library.
  */
@@ -218,7 +238,7 @@ export async function renderAnimatedSvg(options: AnimatedSvgRenderOptions): Prom
     // A UI listener is observational and must not break a local render job.
     try { options.onProgress?.({ stage, completed, total: frames }); } catch { /* ignore listener errors */ }
   };
-  let rasterizer: ChromiumRasterizer | undefined;
+  let rasterizer: Rasterizer | undefined;
   try {
     rasterizer = await createRasterizer(options, signal);
     const backend = reportBackend(options, rasterizer);
@@ -271,7 +291,7 @@ export async function renderAnimatedSvgFrame(options: RasterOptions & { svg: str
   if (!/\.png$/i.test(outputPath)) throw new EngineError('ANIMATION_OUTPUT', 'Export a frame to a .png file.');
   await mkdir(dirname(outputPath), { recursive: true });
   const work = await mkdtemp(join(dirname(outputPath), '.wander-svg-'));
-  let rasterizer: ChromiumRasterizer | undefined;
+  let rasterizer: Rasterizer | undefined;
   try {
     const output = join(work, 'frame.png');
     const signal = AbortSignal.any([AbortSignal.timeout(30_000), ...(options.signal ? [options.signal] : [])]);

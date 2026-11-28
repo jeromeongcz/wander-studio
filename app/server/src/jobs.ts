@@ -35,6 +35,7 @@ const RECOVERY: Record<string, string> = {
   RENDER_INPUT: 'An asset or audio file is missing. Restore it or relink the scene, rebuild the timeline, then retry.',
   RENDER_VERIFY: 'The output did not pass verification and was discarded. Retry; if it repeats, check disk space and FFmpeg.',
   PROVIDER_ERROR: 'The provider could not be reached or refused the request. Check your network or choose another provider, then retry.',
+  ANIMATION_MISSING_LAYERS: 'The model left out required artwork layers twice. Try a simpler scene description or fewer separate layers, then retry.',
   PROTECTED: 'Approved work is protected. Retry with reopen enabled if you intend to replace it.',
   VALIDATION: 'Fix the input described in the message and retry.',
 };

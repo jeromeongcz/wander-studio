@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { api, url } from '../api';
 import { withReopen } from '../actions';
 import { useAsync, useInterval } from '../hooks';
-import { Btn, CopyBtn, Field, Loading, Modal, Pill, useToast } from '../ui';
+import { Btn, CopyBtn, Field, Icon, Loading, Modal, Pill, Tabs, useToast } from '../ui';
 import { MAX_REFERENCE_IMAGES, prepareSceneReference, topLevelSvgGroups } from './animatedReferences';
 import type { SceneReferenceImage } from './animatedReferences';
 import { listAnimatedVectors, VECTOR_KINDS } from '../animatedLibrary';
@@ -178,8 +178,8 @@ function PackageField({ label, value, change, accept, max, required }: { label: 
   );
 }
 
-export function AnimatedSvgSceneModal({ artifactId, projectId, sceneId, index, title, brief, targetDuration, approvedStoryboard, hasApprovedStill, onAttached, onClose }: {
-  artifactId: string; projectId: string; sceneId?: string; index: number; title: string; brief: string; targetDuration: number; approvedStoryboard: boolean; hasApprovedStill?: boolean; onAttached: () => void; onClose: () => void;
+export function AnimatedSvgScenePanel({ artifactId, projectId, sceneId, index, title, brief, targetDuration, approvedStoryboard, hasApprovedStill, onAttached }: {
+  artifactId: string; projectId: string; sceneId?: string; index: number; title: string; brief: string; targetDuration: number; approvedStoryboard: boolean; hasApprovedStill?: boolean; onAttached: () => void;
 }) {
   const path = `/artifacts/${artifactId}/animated-svg/${index}`;
   const data = useAsync(() => api.get<(AnimatedRecord | null)[]>(`/artifacts/${artifactId}/animated-svg`), [artifactId]);
@@ -215,6 +215,7 @@ export function AnimatedSvgSceneModal({ artifactId, projectId, sceneId, index, t
   const [clipBindings, setClipBindings] = useState('');
   const [artworkPreviewed, setArtworkPreviewed] = useState<string>();
   const [artworkPreviewError, setArtworkPreviewError] = useState(false);
+  const [artworkLightbox, setArtworkLightbox] = useState(false);
   const [reuseSource, setReuseSource] = useState('');
   const [reuseGroup, setReuseGroup] = useState('');
   const [reuseTarget, setReuseTarget] = useState('');
@@ -237,6 +238,11 @@ export function AnimatedSvgSceneModal({ artifactId, projectId, sceneId, index, t
   const editRevision = useRef<string | undefined>(undefined);
   const [time, setTime] = useState(0);
   const [previewTime, setPreviewTime] = useState(0);
+  const [previewFrame, setPreviewFrame] = useState<{ src: string; revision: string; time: number }>();
+  const [playing, setPlaying] = useState(false);
+  const playbackStartedAt = useRef(0);
+  const playbackTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const queuePreviewFrameRef = useRef<() => void>(() => {});
   const [previewError, setPreviewError] = useState(false);
   const [previewAttempt, setPreviewAttempt] = useState(0);
   const [previewedRevision, setPreviewedRevision] = useState<string>();
@@ -247,10 +253,19 @@ export function AnimatedSvgSceneModal({ artifactId, projectId, sceneId, index, t
     if (pending && !busyJob(pending) && pending.id !== completedJob.current) {
       completedJob.current = pending.id;
       data.reload();
+      if (jobId === pending.id) {
+        if (pending.state === 'succeeded') {
+          push('ok', pending.kind === 'animated_svg_render' ? 'Animation render completed.' : 'Layered artwork generated. Review and approve the new draft.');
+        } else if (pending.state === 'failed') {
+          fail(new Error(pending.error?.message ?? 'The animated SVG job failed.'));
+        } else if (pending.state === 'cancelled') {
+          push('warn', 'The animated SVG job was cancelled. No new result was saved.');
+        }
+      }
     }
-  }, [pending, data.reload]);
+  }, [pending, data.reload, jobId, push, fail]);
   useEffect(() => {
-    setTime(0); setPreviewTime(0); setPreviewError(false);
+    setPlaying(false); setTime(0); setPreviewTime(0); setPreviewFrame(undefined); setPreviewError(false);
     history.reload();
     setTargetLayers([]);
     setMotionTargets([]);
@@ -260,15 +275,22 @@ export function AnimatedSvgSceneModal({ artifactId, projectId, sceneId, index, t
     setLibraryName('');
   }, [revision]);
   useEffect(() => {
+    if (previewError) return;
+    if (playing) { setPreviewTime(time); return; }
     const timer = setTimeout(() => { setPreviewTime(time); setPreviewError(false); }, 220);
     return () => clearTimeout(timer);
-  }, [time]);
+  }, [time, playing, previewError]);
 
   const start = async (action: 'generate' | 'render', body: ObjectRecord) => {
+    const hasAnimationWork = (jobs.data ?? []).some((job) => job.kind?.startsWith('animated_svg_') && (job.state === 'queued' || job.state === 'running'));
     const r = await api.post<{ job: { id: string } }>(`${path}/${action}`, { revision, ...body });
     setJob(r.job.id);
     jobs.reload();
     data.reload();
+    if (action === 'generate') {
+      const label = body.operation === 'motion' ? 'Motion generation' : body.operation === 'refine-motion' ? 'Motion refinement' : 'Animated artwork';
+      push(hasAnimationWork ? 'warn' : 'ok', hasAnimationWork ? `${label} queued. It will start after the current animation job.` : `${label} started.`);
+    }
   };
   const mutate = async (action: 'import' | 'approve' | 'approve-artwork' | 'from-still' | 'library/place-character' | 'restore' | 'attach' | 'reuse', body?: ObjectRecord) => {
     if (action === 'attach') await withReopen((reopen) => api.post(`${path}/attach`, { revision, reopen, ...body }));
@@ -344,6 +366,23 @@ export function AnimatedSvgSceneModal({ artifactId, projectId, sceneId, index, t
   };
   const duration = record?.duration ?? (typeof record?.animation?.duration === 'number' ? record.animation.duration : targetDuration);
   const maxTime = Number.isFinite(duration) ? Math.max(0, duration - 0.001) : 0;
+  const queuePreviewFrame = () => {
+    if (playbackTimer.current) clearTimeout(playbackTimer.current);
+    if (!playing || tab !== 'animation' || previewError) return;
+    playbackTimer.current = setTimeout(() => {
+      const next = Math.min(maxTime, (performance.now() - playbackStartedAt.current) / 1000);
+      setTime(next);
+      if (next >= maxTime) setPlaying(false);
+    }, 100);
+  };
+  queuePreviewFrameRef.current = queuePreviewFrame;
+  useEffect(() => {
+    if (!playing) return;
+    if (tab !== 'animation' || !record?.animation || previewError || maxTime <= 0) { setPlaying(false); return; }
+    playbackStartedAt.current = performance.now() - (time >= maxTime - 0.02 ? 0 : time) * 1000;
+    queuePreviewFrame();
+    return () => { if (playbackTimer.current) clearTimeout(playbackTimer.current); };
+  }, [playing, tab, revision, previewError, maxTime, !!record?.animation]);
   const tracks = Array.isArray(record?.animation?.tracks) ? record.animation.tracks as ObjectRecord[] : [];
   const layerIds = record?.layers ?? (record?.svg ? [...new Set([...record.svg.matchAll(/<g\b[^>]*\bid=["']([^"'<>]+)["']/g)].map((m) => m[1]))] : []);
   const hasVideo = record?.state === 'rendered' || record?.state === 'attached';
@@ -364,6 +403,27 @@ export function AnimatedSvgSceneModal({ artifactId, projectId, sceneId, index, t
   const packageUrl = (file: string) => url(`${path}/package/${file}?revision=${encodeURIComponent(revision ?? '')}`);
   const artworkPreviewUrl = url(`${path}/preview?revision=${encodeURIComponent(revision ?? '')}&artwork=1`);
   const previewUrl = url(`${path}/preview?revision=${encodeURIComponent(revision ?? '')}&time=${previewTime}&attempt=${previewAttempt}`);
+  useEffect(() => {
+    if (tab !== 'animation' || !record?.animation || !revision) return;
+    const controller = new AbortController();
+    void fetch(previewUrl, { signal: controller.signal }).then(async (response) => {
+      if (!response.ok) throw new Error(`Preview frame failed: HTTP ${response.status}`);
+      const blob = await response.blob();
+      if (controller.signal.aborted) return;
+      const src = URL.createObjectURL(blob);
+      const image = new Image();
+      image.src = src;
+      try { await image.decode(); } catch (error) { URL.revokeObjectURL(src); throw error; }
+      if (controller.signal.aborted) { URL.revokeObjectURL(src); return; }
+      setPreviewFrame({ src, revision, time: previewTime });
+      setPreviewedRevision(revision);
+      queuePreviewFrameRef.current();
+    }).catch(() => {
+      if (!controller.signal.aborted) { setPlaying(false); setPreviewError(true); }
+    });
+    return () => controller.abort();
+  }, [previewUrl, tab, revision, !!record?.animation]);
+  useEffect(() => () => { if (previewFrame) URL.revokeObjectURL(previewFrame.src); }, [previewFrame]);
 
   const exactPrompt = (stage: 'artwork' | 'motion') => {
     if (!revision || !(stage === 'artwork' ? record?.hasArtworkPrompt : record?.hasMotionPrompt)) return null;
@@ -382,33 +442,56 @@ export function AnimatedSvgSceneModal({ artifactId, projectId, sceneId, index, t
     </div>;
   };
 
+  const stage = {
+    artwork: { number: '01', title: 'Build the artwork', detail: 'Create and approve the layered drawing that the motion will use.' },
+    animation: { number: '02', title: 'Shape the motion', detail: 'Preview timing, direct movement and approve the animated scene.' },
+    layers: { number: '03', title: 'Work with layers', detail: 'Inspect groups, refine artwork and save reusable elements.' },
+    render: { number: '04', title: 'Render the scene', detail: 'Export the finished clip and place it in the composition.' },
+  }[tab];
+
   return (
-    <Modal title={`Animated SVG · Scene ${index + 1}${title ? ` · ${title}` : ''}`} wide onClose={onClose}>
+    <section aria-label={`Animated SVG · Scene ${index + 1}${title ? ` · ${title}` : ''}`}>
       <div className="stack animated-svg-studio">
-        <p className="muted small">Create or import detailed layered SVG art with a separate motion timeline. This is optional and does not replace the static scene workflow.</p>
+        <Tabs value={tab} onChange={setTab} items={[
+          { id: 'artwork', label: <><span className="animated-step-number">1</span> Artwork</> },
+          { id: 'animation', label: <><span className="animated-step-number">2</span> Animation</> },
+          { id: 'layers', label: <><span className="animated-step-number">3</span> Layers</> },
+          { id: 'render', label: <><span className="animated-step-number">4</span> Render</> },
+        ]} />
+        <div className="animated-studio-main">
         {data.loading && !data.data && <Loading />}
         {data.error && <div className="notice bad" role="alert">{data.error.message}</div>}
-        {!data.error && <div className="row gap wrap">
+        {!data.error && <div className="animated-studio-status">
+          <span className="animated-studio-label">Animated SVG studio</span>
+          <div className="row gap wrap">
           {record && <Pill tone={record.state === 'draft' ? 'warn' : 'good'}>{record.state}</Pill>}
           <Pill>{duration.toFixed(2)} s</Pill>
+          {layerIds.length > 0 && <Pill>{layerIds.length} layer{layerIds.length === 1 ? '' : 's'}</Pill>}
           {record?.assetId && <Pill tone="good">In Asset Library</Pill>}
           {working && <span className="muted small" role="status">{pending?.message ?? (pending?.state === 'running' ? 'Working…' : 'Queued…')}</span>}
+          </div>
         </div>}
         {working && typeof pending?.progress === 'number' && <progress aria-label="Current animation job progress" max={1} value={Math.max(0, Math.min(1, pending.progress))} />}
         {jobs.error && working && <div className="notice warn">Could not check the job. <Btn small onClick={jobs.reload}>Retry status</Btn></div>}
         {pending?.state === 'cancelled' && <p role="status" className="notice warn">The last animation job was cancelled.</p>}
         {busyJob(pending) && pending && <div><Btn small onClick={async () => { await api.post(`/jobs/${pending.id}/cancel`); jobs.reload(); }}>Cancel current job</Btn></div>}
         {pending?.state === 'failed' && <div role="alert" className="notice bad">{pending.error?.message ?? 'The animation job failed.'}{pending.error?.recovery && <div>{pending.error.recovery}</div>}</div>}
-        <div className="row gap wrap" role="group" aria-label="Animated SVG sections">
-          {(['artwork', 'animation', 'layers', 'render'] as const).map((name) => <button key={name} type="button" className={`chip${tab === name ? ' on' : ''}`} aria-pressed={tab === name} onClick={() => setTab(name)}>{name[0].toUpperCase() + name.slice(1)}</button>)}
-        </div>
+        <div className="animated-stage">
+        <div className="animated-stage-heading"><span className="animated-stage-index">{stage.number}</span><div><h3>{stage.title}</h3><p>{stage.detail}</p></div></div>
         {tab === 'artwork' && <>
-          {record && revision && <>
-            <Pill tone={record.artworkApproved ? 'good' : 'warn'}>{record.artworkApproved ? 'Artwork approved' : 'Artwork awaiting approval'}</Pill>
-            {!artworkPreviewError && <img className="animated-preview" key={artworkPreviewUrl} src={artworkPreviewUrl} alt="Current layered artwork without motion" onLoad={() => setArtworkPreviewed(revision)} onError={() => setArtworkPreviewError(true)} />}
+          <div className="animated-artwork-grid">
+          <div className="animated-artwork-preview">
+            <div className="animated-preview-heading"><span>Layered artwork preview</span><Pill tone={record?.artworkApproved ? 'good' : 'warn'}>{record?.artworkApproved ? 'Artwork approved' : record ? 'Awaiting approval' : 'No artwork yet'}</Pill></div>
+            {record && revision ? <>
+            {!artworkPreviewError && <button type="button" className="animated-artwork-zoom" onClick={() => setArtworkLightbox(true)} aria-label="Open layered artwork preview full size" title="Open full size">
+              <img className="animated-preview" key={artworkPreviewUrl} src={artworkPreviewUrl} alt="Current layered artwork without motion" onLoad={() => setArtworkPreviewed(revision)} onError={() => setArtworkPreviewError(true)} />
+              <span>Click to enlarge</span>
+            </button>}
             {artworkPreviewError && <p role="status" className="notice warn">The artwork preview could not be loaded.</p>}
             {!record.artworkApproved && <Btn kind="primary" disabled={working || artworkPreviewError || artworkPreviewed !== revision} onClick={() => mutate('approve-artwork')}>Approve previewed artwork</Btn>}
-          </>}
+            </> : <div className="animated-empty-preview">Your layered artwork will appear here.</div>}
+          </div>
+          <div className="animated-artwork-direction">
           <Field label="Scene art direction" wide><textarea value={prompt} onChange={(e) => setPrompt(e.target.value)} maxLength={4000} rows={3} placeholder="Anatomy, materials, foreground, background, lighting and mood…" /></Field>
           <Field label="Reference notes (optional)" wide><textarea value={references} onChange={(e) => setReferences(e.target.value)} maxLength={3000} rows={2} placeholder="Describe an approved character, background, costume, palette or style reference." /></Field>
           <Field label="Reference images (optional)" hint="Choose up to two PNG, JPEG, or WebP files. They are resized on this device and not sent until you explicitly agree. A compatible vision model is required." wide>
@@ -429,6 +512,8 @@ export function AnimatedSvgSceneModal({ artifactId, projectId, sceneId, index, t
           </div>}
           <label className="row gap small"><input type="checkbox" checked={reviewPreview} disabled={working}
             onChange={(e) => setReviewPreview(e.target.checked)} /> Allow the model to review rendered previews (optional; compatible vision model required)</label>
+          </div>
+          </div>
           {reusable.some((i) => data.data?.[i]?.layers?.length) && <details className="stack animated-reuse">
             <summary>Keep one approved artwork layer during generation</summary>
             <div className="form">
@@ -475,7 +560,7 @@ export function AnimatedSvgSceneModal({ artifactId, projectId, sceneId, index, t
               }}>Place rigged character without AI</Btn>
             </>}
           </details>
-          <div className="row gap wrap">
+          <div className="row gap wrap animated-primary-actions">
             <Btn kind="primary" disabled={!provider.data?.active || !prompt.trim() || !reuseReady || !libraryReady || working || preparingImages || !!data.error || (data.loading && !data.data)}
               onClick={() => generateScene('artwork')}>Generate layered artwork</Btn>
             {hasApprovedStill && <Btn disabled={working} onClick={async () => {
@@ -502,6 +587,20 @@ export function AnimatedSvgSceneModal({ artifactId, projectId, sceneId, index, t
           {record?.passes && record.passes.length > 0 && <details><summary>Generation passes ({record.passes.length})</summary><pre>{JSON.stringify(record.passes, null, 2)}</pre></details>}
         </>}
         {tab === 'animation' && <>
+          <div className="animated-motion-grid">
+          <div className="animated-motion-preview">
+          <div className="animated-preview-heading"><span>Motion preview</span><Pill>{time.toFixed(2)} / {duration.toFixed(2)} s</Pill></div>
+          {record?.animation && previewFrame && previewFrame.revision === revision && <img className="animated-preview" src={previewFrame.src} alt={`Scene ${index + 1} at ${previewFrame.time.toFixed(2)} seconds`} />}
+          {record?.animation && previewFrame?.revision !== revision && !previewError && <div className="animated-preview-loading" role="status">Loading preview frame…</div>}
+          {record?.animation && previewError && <div className="notice warn">This frame could not be previewed. <Btn small onClick={() => { setPreviewError(false); setPreviewAttempt((x) => x + 1); }}>Retry frame</Btn></div>}
+          {record?.animation ? <div className="animated-playback"><Btn small disabled={previewError || maxTime <= 0} onClick={() => {
+            if (playing) setPlaying(false);
+            else { if (time >= maxTime - 0.02) setTime(0); setPlaying(true); }
+          }}><Icon name={playing ? 'pause' : 'play'} small /> {playing ? 'Pause' : 'Play'}</Btn>
+            <Field label={`Preview playhead · ${time.toFixed(2)} s`} wide><input type="range" aria-label="Preview playhead in seconds" min={0} max={maxTime} step={0.02} value={time} onChange={(e) => { setPlaying(false); setPreviewError(false); setTime(Number(e.target.value)); }} /></Field>
+          </div> : <p className="animated-empty-preview">Generate or import motion to preview this scene.</p>}
+          </div>
+          <div className="animated-motion-direction">
           {exactPrompt('motion')}
           {record?.artworkApproved ? <>
             <Field label="Motion direction" wide><textarea value={motionBrief} onChange={e => setMotionBrief(e.target.value)} maxLength={3000} rows={2} placeholder="Describe the beats, contacts, holds, atmosphere and camera." /></Field>
@@ -570,14 +669,13 @@ export function AnimatedSvgSceneModal({ artifactId, projectId, sceneId, index, t
               <Btn disabled={!provider.data?.active || working || !motionTargets.length || !motionBrief.trim()} onClick={() => generateScene('refine-motion')}>Refine selected motion</Btn>
             </fieldset>}
           </> : <p className="hint">Review and approve the layered artwork before asking for motion.</p>}
-          {record?.animation && !previewError && <img className="animated-preview" key={previewUrl} src={previewUrl} alt={`Scene ${index + 1} at ${previewTime.toFixed(2)} seconds`} onLoad={() => setPreviewedRevision(revision)} onError={() => setPreviewError(true)} />}
-          {record?.animation && previewError && <div className="notice warn">This frame could not be previewed. <Btn small onClick={() => { setPreviewError(false); setPreviewAttempt((x) => x + 1); }}>Retry frame</Btn></div>}
-          {record?.animation ? <Field label={`Preview playhead · ${time.toFixed(2)} s`} wide><input type="range" aria-label="Preview playhead in seconds" min={0} max={maxTime} step={0.02} value={time} onChange={(e) => setTime(Number(e.target.value))} /></Field> : <p className="muted small">Generate or import motion to use the playhead.</p>}
+          </div>
+          </div>
           {tracks.length > 0 && <details className="stack"><summary>Track timeline</summary>
             {tracks.map((track,idx)=><div key={String(track.id ?? idx)} className="row gap wrap">
               <code>{String(track.target)} · {String(track.property)}</code>
               {Array.isArray(track.keys) && (track.keys as {time:number}[]).map((key,i)=><button key={i} type="button" className="chip"
-                title={`Preview ${String(track.target)} at ${key.time.toFixed(2)} seconds`} onClick={()=>setTime(key.time)}>{key.time.toFixed(2)}s</button>)}
+                title={`Preview ${String(track.target)} at ${key.time.toFixed(2)} seconds`} onClick={() => { setPlaying(false); setPreviewError(false); setTime(key.time); }}>{key.time.toFixed(2)}s</button>)}
             </div>)}
           </details>}
           {tracks.length > 0 && <p className="muted small">{tracks.length} motion track{tracks.length === 1 ? '' : 's'} over {duration.toFixed(2)} seconds.</p>}
@@ -658,6 +756,7 @@ export function AnimatedSvgSceneModal({ artifactId, projectId, sceneId, index, t
           </div>
           {!approvedStoryboard && <p className="hint">Approve the storyboard before attaching the clip to composition.</p>}
         </>}
+        </div>
         {editing && <section className="stack animated-import" aria-label="Edit layered scene package">
           <h3>Layered scene package</h3>
           <p className="muted small">The artwork must be a standalone, inert SVG. Its named groups are animated by the JSON tracks, not by scripts embedded in the SVG.</p>
@@ -667,7 +766,11 @@ export function AnimatedSvgSceneModal({ artifactId, projectId, sceneId, index, t
           <PackageField label="Scene JSON (optional)" value={scene} change={setScene} accept=".json,application/json" max={100_000} />
           <div className="row gap"><Btn kind="primary" disabled={working || !svg.trim() || !animation.trim()} onClick={savePackage}>Save as draft</Btn><Btn kind="ghost" onClick={() => setEditing(false)}>Cancel editing</Btn></div>
         </section>}
+        </div>
       </div>
-    </Modal>
+      {artworkLightbox && record && revision && <Modal title={`Layered artwork · Scene ${index + 1}`} wide onClose={() => setArtworkLightbox(false)}>
+        <img className="animated-artwork-full" src={artworkPreviewUrl} alt={`Full size layered artwork for scene ${index + 1}`} />
+      </Modal>}
+    </section>
   );
 }

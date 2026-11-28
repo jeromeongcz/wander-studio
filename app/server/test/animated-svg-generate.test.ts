@@ -77,6 +77,39 @@ test('professional generation validates and renders artwork, reviews by true vis
   assert.equal(f.validated.length, 1);
 });
 
+test('layered artwork retries omitted planned groups and reports repeated omissions accurately', async () => {
+  const incomplete = svg.replace(/\s*<g id="watcher">.*?<\/g>/s, '');
+  const setup = (repair: boolean) => {
+    const f = fake({ 'Art direction': plan, 'Layered vector artwork': incomplete, 'Rig and motion': JSON.stringify({ animation, rig, scene }) }, {
+      settings: { quality: 'standard', visualReview: false },
+    });
+    let artworkCalls = 0;
+    const original = f.opts.provider.generateText;
+    f.opts.provider.generateText = async (args) => {
+      const response = await original(args);
+      if (args.prompt.startsWith('Wander Studio • Layered vector artwork')) {
+        artworkCalls++;
+        return repair && artworkCalls === 2 ? svg : response;
+      }
+      return response;
+    };
+    return { f, calls: () => artworkCalls };
+  };
+  const fixed = setup(true);
+  const artwork = await generateAnimatedScene(fixed.f.opts);
+  assert.equal(artwork.svg, svg);
+  assert.equal(fixed.calls(), 2);
+  assert.match(fixed.f.prompts[2], /omitted these required planned groups: watcher/);
+
+  const broken = setup(false);
+  await assert.rejects(generateAnimatedScene(broken.f.opts), (error: unknown) => {
+    assert.equal((error as { code?: string }).code, 'ANIMATION_MISSING_LAYERS');
+    assert.match((error as Error).message, /watcher/);
+    return true;
+  });
+  assert.equal(broken.calls(), 2);
+});
+
 test('draft uses one direct artwork call and a separate motion call, with no implied visual approval', async () => {
   const f = fake({ 'Layered vector artwork': svg, 'Rig and motion': JSON.stringify({ animation, rig, scene }) }, { settings: { quality: 'draft', style: 'cinematic-anime', dialogue: false } });
   const result = await generateAnimatedScene(f.opts);

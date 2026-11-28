@@ -156,7 +156,10 @@ function id(value: unknown): string {
 }
 function parsePlan(answer: string): ArtPlan {
   const o = parseObject(answer, 48_000, 'Art direction');
-  const layers = (Array.isArray(o.layers) ? o.layers : []).slice(0, 32).map((x) => {
+  if (!Array.isArray(o.layers) || o.layers.length > 32) {
+    throw artError('Art direction must provide between 1 and 32 planned layers. Retry with a shorter layer list.');
+  }
+  const layers = o.layers.map((x) => {
     const a = obj(x);
     return { id: id(a.id), role: trimmed(a.role, 120), detail: trimmed(a.detail, 600) };
   });
@@ -171,6 +174,29 @@ function parsePlan(answer: string): ArtPlan {
 }
 
 interface LayerSpan { id: string; start: number; end: number }
+const drawableTags = new Set(['path', 'rect', 'circle', 'ellipse', 'line', 'polyline', 'polygon', 'text', 'image', 'use']);
+function drawableLayerIds(source: string): Set<string> {
+  const result = new Set<string>();
+  const stack: Array<{ groups: string[]; hidden: boolean; inDefs: boolean }> = [];
+  const parser = new SaxesParser();
+  parser.on('opentag', (tag) => {
+    const parent = stack.at(-1);
+    const attrs = tag.attributes as Record<string, unknown>;
+    const style = typeof attrs.style === 'string' ? attrs.style : '';
+    const attr = (name: string) => typeof attrs[name] === 'string' ? String(attrs[name]).trim().toLowerCase() : '';
+    const opacity = attr('opacity');
+    const hidden = !!parent?.hidden || attr('display') === 'none' || ['hidden', 'collapse'].includes(attr('visibility')) || (opacity !== '' && Number(opacity) === 0) || /(?:^|;)\s*(?:display\s*:\s*none|visibility\s*:\s*(?:hidden|collapse)|opacity\s*:\s*0(?:\.0*)?)\s*(?:;|$)/i.test(style);
+    const inDefs = !!parent?.inDefs || tag.name === 'defs';
+    const groups = parent?.groups ? [...parent.groups] : [];
+    const groupId = tag.name === 'g' ? id(attrs.id) : '';
+    if (groupId) groups.push(groupId);
+    if (drawableTags.has(tag.name) && !hidden && !inDefs) for (const group of groups) result.add(group);
+    stack.push({ groups, hidden, inDefs });
+  });
+  parser.on('closetag', () => { stack.pop(); });
+  parser.write(source).close();
+  return result;
+}
 function spans(source: string): Map<string, LayerSpan> {
   const result = new Map<string, LayerSpan>();
   const stack: Array<{ id: string; start: number }> = [];
@@ -512,6 +538,7 @@ async function runAnimatedPipeline(o: GenerateAnimatedSceneOptions, artworkOnly:
   }
 
   let artPlan: ArtPlan | undefined, composition: Record<string, string> | undefined, svg: string;
+  let svgXmlRepairUsed = false;
   if (o.motionOnly) {
     svg = o.motionOnly.svg;
     o.validateArtwork(svg);
@@ -537,9 +564,38 @@ async function runAnimatedPipeline(o: GenerateAnimatedSceneOptions, artworkOnly:
       baseArtworkPrompt: o.baseArtworkPrompt, guidance, artworkRules,
       context: exactDirect ? undefined : context, artPlan, composition,
     });
-    svg = materialize(parseArtwork(await send('baseArtwork', 'Layered vector artwork', base)));
-    const drawn = spans(svg), missing = artPlan?.layers.filter(({ id }) => !drawn.has(id)) ?? [];
-    if (missing.length) throw artError(`The layered artwork omitted planned groups: ${missing.slice(0, 5).map(({ id }) => id).join(', ')}.`);
+    const drawArtwork = async (prompt: string) => {
+      const candidate = parseArtwork(await send('baseArtwork', 'Layered vector artwork', prompt));
+      try { return materialize(candidate); }
+      catch (error) {
+        if (svgXmlRepairUsed || !(error instanceof EngineError) || error.code !== 'VALIDATION' || error.message !== 'Invalid SVG XML.') throw error;
+        svgXmlRepairUsed = true;
+        step(0.28, 'Repairing malformed SVG markup');
+        const repairPrompt = `${prompt}\n\nThe SVG below has malformed XML. Repair the XML so it is well-formed and safe, preserving the complete visual design and every planned group ID. Escape ampersands in text and attributes, quote attribute values, and balance all tags. Return only the corrected complete SVG.\n\nMalformed SVG to repair:\n${candidate}`;
+        try {
+          const repaired = materialize(parseArtwork(await send('baseArtwork', 'Repair malformed layered vector artwork', repairPrompt)));
+          record('layered-art-xml-repair', 'complete', 'Repaired malformed SVG XML before validation.');
+          return repaired;
+        } catch (repairError) {
+          if (repairError instanceof EngineError && repairError.code === 'VALIDATION' && repairError.message === 'Invalid SVG XML.') {
+            throw new EngineError('PROVIDER_ERROR', 'Codex returned malformed SVG XML and the repair attempt was also invalid. Retry or simplify the scene direction.');
+          }
+          throw repairError;
+        }
+      }
+    };
+    svg = await drawArtwork(base);
+    let drawable = drawableLayerIds(svg);
+    let missing = artPlan?.layers.filter(({ id }) => !drawable.has(id)) ?? [];
+    if (missing.length) {
+      step(0.29, 'Redrawing omitted planned artwork layers');
+      const required = missing.map(({ id }) => id).join(', ');
+      const retryPrompt = `${base}\n\nThe previous SVG omitted these required planned groups: ${required}. Redraw the complete scene as one SVG. Include a visible drawable <g> with each planned layer ID exactly as specified. Do not omit or rename any planned group.`;
+      svg = await drawArtwork(retryPrompt);
+      drawable = drawableLayerIds(svg);
+      missing = artPlan?.layers.filter(({ id }) => !drawable.has(id)) ?? [];
+      if (missing.length) throw new EngineError('ANIMATION_MISSING_LAYERS', `The layered artwork omitted planned groups: ${missing.slice(0, 5).map(({ id }) => id).join(', ')}.`);
+    }
     record('layered-art', 'complete');
   }
 

@@ -95,6 +95,10 @@ export class AnimatedSvgStudio {
     }catch(e){db.exec('ROLLBACK TO wander_animated_revision; RELEASE wander_animated_revision');throw e;}
     return e;
   }
+  private assertNoAnimationWork(projectId:string){
+    const row=this.s.engine.db.prepare("SELECT 1 FROM jobs WHERE project_id=? AND kind IN ('animated_svg_generate','animated_svg_render') AND state IN ('queued','running') LIMIT 1").get(projectId);
+    if(row)throw new EngineError('BUSY','Wait for queued animation jobs to finish before attaching a clip.');
+  }
   private revision(k:Key,revision:string):Stored{
     const row=this.s.engine.db.prepare('SELECT package_json FROM animated_svg_revisions WHERE storyboard_id=? AND scene_id=? AND revision=?')
       .get(k.a.id,k.sceneId,revision) as {package_json:string}|undefined;
@@ -197,13 +201,9 @@ export class AnimatedSvgStudio {
     if(e.state!=='draft')return e;
     return this.put(k,{...e,artworkApproved:true,state:'approved'});
   }
-  private unbusy(projectId:string){
-    const row=this.s.engine.db.prepare("SELECT 1 FROM jobs WHERE project_id=? AND kind IN ('animated_svg_generate','animated_svg_render') AND state IN ('queued','running') LIMIT 1").get(projectId);
-    if(row)throw new EngineError('BUSY','An animation job is already running for this project.');
-  }
   start(id:string,i:number,b:Record<string,unknown>,kind:'animated_svg_generate'|'animated_svg_render'){
     const k=this.locate(id,i), e=this.check(k,b.revision,kind==='animated_svg_generate');
-    this.unbusy(k.project.id);
+    // JobRunner processes every project job serially, so generation, motion, and render requests can queue safely.
     if(kind==='animated_svg_generate'){
       const operation=b.operation??'scene';
       if(typeof operation!=='string'||!generationOperations.includes(operation as GenerationOperation))return bad('Unknown illustration generation operation.');
@@ -548,7 +548,7 @@ export class AnimatedSvgStudio {
     this.current(k,e);
     if(k.a.state!=='approved')return bad('Approve the storyboard before attaching the clip.');
     if(!e.video)return bad('Render the approved animation before attaching it.');
-    this.unbusy(k.project.id);
+    this.assertNoAnimationWork(k.project.id);
     const art=this.s.engine.list(k.project.id,{kind:'scene_asset'}).find(a=>a.scene_id===k.sceneId);
     if(!art)throw new EngineError('NOT_FOUND','Scene asset artifact not found.');
     if(art.state==='approved'&&b.reopen!==true)throw new EngineError('PROTECTED','Reopen the approved scene asset in Visuals before replacing it.');
@@ -574,7 +574,7 @@ export class AnimatedSvgStudio {
     const fresh=this.check(k,b.revision)!;
     this.current(this.locate(id,i),fresh);
     if(fresh.verifiedOutput?.token!==e.verifiedOutput?.token)throw new EngineError('STALE','The render changed before attachment. Review the latest clip.');
-    this.unbusy(k.project.id);
+    this.assertNoAnimationWork(k.project.id);
     if(this.locate(id,i).a.current_version_id!==k.a.current_version_id)throw new EngineError('STALE','Storyboard changed before attachment.');
     this.s.setSceneAssets(k.sceneId,[{asset_id:assetId,role:'primary'}],assetId,{reopen:b.reopen===true});
     return this.put(k,{...fresh,assetId,cameraBaked,state:'attached'});

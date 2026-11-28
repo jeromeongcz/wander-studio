@@ -27,8 +27,8 @@ function frame(seconds: number): string {
 // These tests use only our verified, hand-built fixture, not model or imported SVG content.
 const fixtureValidator = (svg: string) => assert.match(svg, /^<svg xmlns="http:\/\/www.w3.org\/2000\/svg"/);
 
-for (const backend of ['librsvg', 'chromium'] as const) test(`renders and probes real H.264 frames and a storyboard PNG with ${backend}`, {
-  skip: backend === 'librsvg' ? !canRender : !process.env.WANDER_TEST_CHROMIUM, timeout: 60_000,
+for (const backend of ['librsvg', 'chromium', 'resvg'] as const) test(`renders and probes real H.264 frames and a storyboard PNG with ${backend}`, {
+  skip: backend === 'librsvg' ? !canRender : backend === 'chromium' && !process.env.WANDER_TEST_CHROMIUM, timeout: 60_000,
 }, async () => {
   const root = await mkdtemp(join(tmpdir(), 'wander-svg-test-'));
   try {
@@ -93,7 +93,7 @@ test('cancels immediately; cleans stages when any frame fails required validatio
   }
 });
 
-test('auto reports the librsvg fallback, while explicit Chromium fails closed if unavailable', { skip: !canRender, timeout: 30_000 }, async () => {
+test('auto reports the resvg fallback, while explicit Chromium fails closed if unavailable', { timeout: 30_000 }, async () => {
   const root = await mkdtemp(join(tmpdir(), 'wander-svg-fallback-'));
   try {
     const options = {
@@ -102,7 +102,7 @@ test('auto reports the librsvg fallback, while explicit Chromium fails closed if
     };
     let backend: string | undefined;
     await renderAnimatedSvgFrame({ ...options, backend: 'auto', onBackend: (value) => { backend = value; } });
-    assert.equal(backend, 'librsvg');
+    assert.equal(backend, 'resvg');
     await assert.rejects(renderAnimatedSvgFrame({ ...options, backend: 'chromium' }), {
       code: 'ANIMATION_CHROMIUM_UNAVAILABLE',
     });
@@ -116,6 +116,7 @@ test('backend matching permits verified auto output, not a different explicit ba
   assert.equal(animatedSvgRenderPreference('librsvg'), 'librsvg');
   assert.throws(() => animatedSvgRenderPreference('unavailable'), { code: 'ANIMATION_RENDERER' });
   assert.equal(animatedSvgRenderCacheMatches('librsvg', 'auto'), true);
+  assert.equal(animatedSvgRenderCacheMatches('resvg', 'auto'), true);
   assert.equal(animatedSvgRenderCacheMatches('chromium', 'chromium'), true);
   assert.equal(animatedSvgRenderCacheMatches('librsvg', 'chromium'), false);
   assert.equal(animatedSvgRenderCacheMatches(undefined, 'auto'), false);
