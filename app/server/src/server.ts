@@ -74,7 +74,7 @@ const config = {
   selectedLLMModel: settings.selectedModel ?? null,
 };
 
-const app = buildApi(new Engine(openDb(dbPath)), config, llm);
+const app = buildApi(new Engine(openDb(dbPath)), config, llm, process.env.WANDER_ALLOWED_HOST?.trim() || undefined);
 
 // Serve the built web UI (app/web/dist) when it exists. API routes live at /api/* (and, for tools, at the root).
 const dist = join(appRoot, 'app', 'web', 'dist', 'ui');
