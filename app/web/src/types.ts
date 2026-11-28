@@ -1,3 +1,5 @@
+import type { AnimatedSvgSettings } from './stages/AnimatedSvg';
+
 export type State = 'not_started' | 'in_progress' | 'awaiting_review' | 'approved' | 'needs_revision' | 'rejected' | 'failed';
 
 export interface Artifact {
@@ -17,7 +19,7 @@ export interface Project {
   id: string;
   name: string;
   category: string | null;
-  settings: { formats?: string[]; cinematic?: { camera?: string; style?: string; transition?: string; custom_text?: string } };
+  settings: { formats?: string[]; animatedSvg?: Partial<AnimatedSvgSettings>; cinematic?: { camera?: string; style?: string; transition?: string; custom_text?: string } };
   languages: string[];
   artifacts: Artifact[];
 }

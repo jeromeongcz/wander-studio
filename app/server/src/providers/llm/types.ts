@@ -49,6 +49,13 @@ export interface TextLLMProvider extends BaseLLMProvider {
     signal?: AbortSignal;
     onChunk?: (chunk: string) => void; // streaming callback
   }): Promise<string>;
+  /** Optional concrete vision support. Callers must only pass images after consent. */
+  generateVision?(args: {
+    model?: string;
+    prompt: string;
+    images: readonly Uint8Array[];
+    signal?: AbortSignal;
+  }): Promise<string>;
 }
 
 export type LLMProvider = BaseLLMProvider | TextLLMProvider;

@@ -75,8 +75,10 @@ export function buildMixGraph(args: {
   const bed: string[] = ['[narr]'];
   if (music.length) {
     const duck = spec.ducking?.enabled !== false; // ducking on by default when music is present
-    parts.push(`[narr]asplit=2[narr_mix][narr_sc]`);
-    bed[0] = '[narr_mix]';
+    if (duck) {
+      parts.push(`[narr]asplit=2[narr_mix][narr_sc]`);
+      bed[0] = '[narr_mix]';
+    }
     music.forEach((m, i) => {
       inputs.push(m.path);
       const idx = inputs.length - 1;

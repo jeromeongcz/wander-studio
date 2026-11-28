@@ -38,7 +38,7 @@ async function withCodex<T>(
           model: options.model,
           sandbox_mode: 'read-only',
           approval_policy: 'never',
-          web_search: 'disabled',
+          web_search: 'live',
           hooks: {},
           mcp_servers: {},
           features: { shell_tool: false, unified_exec: false, hooks: false, apps: false, plugins: false, multi_agent: false, multi_agent_v2: false },
@@ -114,7 +114,7 @@ export function codexProvider(bin = process.env.WANDER_CODEX_BIN): TextLLMProvid
       }
     },
     async generateText({ prompt, model, signal, onChunk }) {
-      const timeout = AbortSignal.timeout(8 * 60_000);
+      const timeout = AbortSignal.timeout(15 * 60_000);
       const operation = signal ? AbortSignal.any([signal, timeout]) : timeout;
       const options = { cancellationSignal: operation, stopWaitingOnCancel: true };
       let sessionId: string | undefined;
@@ -150,6 +150,10 @@ export function codexProvider(bin = process.env.WANDER_CODEX_BIN): TextLLMProvid
               prompt: [{ type: 'text', text: prompt }],
             }, options);
             const answer = chunks.join('');
+            if (result.stopReason === 'cancelled') {
+              if (signal?.aborted) throw new LLMProviderError('CANCELLED', 'Codex generation was cancelled.');
+              throw new LLMProviderError('PROVIDER_ERROR', 'Codex ended the request before completing its response (stop reason: cancelled). Retry, or select a different provider.');
+            }
             if (result.stopReason !== 'end_turn') throw new LLMProviderError('PROVIDER_ERROR', `Codex stopped early (${result.stopReason})`);
             if (!answer.trim()) throw new LLMProviderError('PROVIDER_ERROR', 'Codex returned an empty answer');
             return answer;
@@ -159,7 +163,7 @@ export function codexProvider(bin = process.env.WANDER_CODEX_BIN): TextLLMProvid
         });
       } catch (error) {
         if (signal?.aborted) throw new LLMProviderError('CANCELLED', 'Cancelled');
-        if (timeout.aborted) throw new LLMProviderError('PROVIDER_ERROR', 'Codex took too long and was stopped');
+        if (timeout.aborted) throw new LLMProviderError('PROVIDER_ERROR', 'Codex did not finish before the 15-minute response limit. Retry, or reduce the scene detail and optional art passes.');
         if (error instanceof LLMProviderError) throw error;
         throw new LLMProviderError('PROVIDER_ERROR', 'Codex ACP generation failed. Check Codex sign-in and ACP status in Settings.');
       }

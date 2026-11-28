@@ -1,3 +1,5 @@
+import { animationPlanPrompt, readSceneAnimation } from '../animation/direction.ts';
+import type { AnimatedGenerationSettings } from '../animation/generate.ts';
 // Writes the base script from the approved research: narration plus a detailed visual brief for every beat.
 // The result is a draft saved by actor 'ai'; only the person can submit and approve it.
 import { EngineError } from '../engine.ts';
@@ -64,6 +66,7 @@ export interface ScriptBrief {
   formats: string[];
   notes?: string;
   cinematic?: CinematicSettings;
+  animation?: AnimatedGenerationSettings;
 }
 
 export function buildScriptPrompt(b: ScriptBrief): string {
@@ -97,6 +100,7 @@ export function buildScriptPrompt(b: ScriptBrief): string {
     b.notes ? `\nExtra notes from the creator: ${b.notes}` : '',
     '',
     ...directionPrompt(b.cinematic ?? DEFAULT_CINEMATIC),
+    ...animationPlanPrompt(b.animation),
     '',
     'Return only JSON, with no text before or after:',
     `{"title":"",${(b.cinematic?.style ?? 'automatic') === 'automatic' ? '"visual_style":"",' : ''}"characters":[{"name":"","description":""}],"sections":[{"kind":"hook|intro|main|payoff|cta","text":"","delivery_note":"","visual":{"setting":"","characters":"","action":"","shot":"","mood":"","props":""},"cinematic":{"camera":{"movement":""},"transition":{"type":""},"look":{"shot":"","composition":"","lighting":"","color":"","atmosphere":"","effects":{}}}}]}`,
@@ -108,7 +112,7 @@ export function buildScriptPrompt(b: ScriptBrief): string {
 const clean = (x: unknown, max: number) => (typeof x === 'string' ? x.replace(/[\u0000-\u0008\u000b-\u001f\u007f]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, max) : '');
 
 /** Check a model answer and turn it into script content. Anything unusable is an error with the reason; nothing is padded or invented. */
-export function parseScriptAnswer(answer: string, o: { title: string; lang: string; seconds: number; cinematic?: CinematicSettings }, dropped: string[] = []): ScriptContent {
+export function parseScriptAnswer(answer: string, o: { title: string; lang: string; seconds: number; cinematic?: CinematicSettings; animation?: AnimatedGenerationSettings }, dropped: string[] = []): ScriptContent {
   const j = parseModelJson(answer) as { title?: unknown; characters?: unknown; sections?: unknown; visual_style?: unknown };
   if (!j || !Array.isArray(j.sections)) throw bad('The answer has no "sections" list');
   if (j.sections.length > MAX_SECTIONS) throw bad(`The answer has too many sections (more than ${MAX_SECTIONS})`);
@@ -130,7 +134,14 @@ export function parseScriptAnswer(answer: string, o: { title: string; lang: stri
       const note = clean(raw?.delivery_note, 200);
       // instructions only count when the writer actually gave some for this scene
       const cinematic = raw?.cinematic ? parseSceneCinematic(raw.cinematic, style, i + 1, dropped) : undefined;
-      sections.push({ id: `s${i + 1}`, kind, text, ...(note ? { delivery_note: note } : {}), visual, ...(cinematic ? { cinematic } : {}) });
+      let animation_plan;
+      if(o.animation&&o.animation.mode!=='static'){
+        try{
+          animation_plan=readSceneAnimation(raw?.animation_plan);
+          if(o.animation.mode==='animated'&&animation_plan.mode!=='animated')throw bad('An animated project needs an animated plan.');
+        }catch{problems.push(`Section ${i+1} has a missing or invalid timed animation plan`);}
+      }
+      sections.push({ ...(animation_plan?{animation_plan}:{}), id: `s${i + 1}`, kind, text, ...(note ? { delivery_note: note } : {}), visual, ...(cinematic ? { cinematic } : {}) });
     }
   });
   if (problems.length) throw bad('The script came back incomplete', problems.slice(0, 8));
@@ -170,6 +181,7 @@ export class ScriptWriter {
       formats: (project.settings.formats as string[] | undefined) ?? ['vertical_9x16'],
       notes: o.notes?.trim().slice(0, 600) || undefined,
       cinematic: validateCinematic(project.settings.cinematic),
+      animation: project.settings.animatedSvg as AnimatedGenerationSettings|undefined,
     };
   }
 
@@ -184,7 +196,7 @@ export class ScriptWriter {
 
   private store(scriptId: string, b: ScriptBrief, answer: string, reopen?: boolean) {
     const dropped: string[] = [];
-    const content = parseScriptAnswer(answer, { title: b.topic, lang: b.lang, seconds: b.seconds, cinematic: b.cinematic }, dropped);
+    const content = parseScriptAnswer(answer, { title: b.topic, lang: b.lang, seconds: b.seconds, cinematic: b.cinematic, animation:b.animation }, dropped);
     const saved = this.s.save(scriptId, content, { actor: 'ai', reopen });
     // report the real count: the person asked for a number and should see if the writer missed it
     const directed = content.sections.filter((s) => s.cinematic).length;

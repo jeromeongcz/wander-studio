@@ -1,0 +1,151 @@
+{
+  "joints": [
+    {
+      "id": "traveler_root",
+      "target": "traveler",
+      "pivot": [
+        350,
+        898
+      ]
+    },
+    {
+      "id": "hips",
+      "target": "traveler_hips",
+      "pivot": [
+        350,
+        772
+      ],
+      "parent": "traveler_root",
+      "min": -4,
+      "max": 4
+    },
+    {
+      "id": "left_leg",
+      "target": "traveler_left_leg",
+      "pivot": [
+        335,
+        771
+      ],
+      "parent": "hips",
+      "min": -32,
+      "max": 27
+    },
+    {
+      "id": "right_leg",
+      "target": "traveler_right_leg",
+      "pivot": [
+        373,
+        769
+      ],
+      "parent": "hips",
+      "min": -31,
+      "max": 29
+    },
+    {
+      "id": "left_boot",
+      "target": "traveler_left_boot",
+      "pivot": [
+        325,
+        880
+      ],
+      "parent": "left_leg",
+      "min": -17,
+      "max": 22
+    },
+    {
+      "id": "right_boot",
+      "target": "traveler_right_boot",
+      "pivot": [
+        383,
+        885
+      ],
+      "parent": "right_leg",
+      "min": -17,
+      "max": 22
+    },
+    {
+      "id": "torso",
+      "target": "traveler_torso",
+      "pivot": [
+        348,
+        770
+      ],
+      "parent": "traveler_root",
+      "min": -14,
+      "max": 14
+    },
+    {
+      "id": "head",
+      "target": "traveler_head",
+      "pivot": [
+        349,
+        647
+      ],
+      "parent": "torso",
+      "min": -22,
+      "max": 19
+    },
+    {
+      "id": "eye",
+      "target": "traveler_eye",
+      "pivot": [
+        367,
+        615
+      ],
+      "parent": "head"
+    },
+    {
+      "id": "mouth",
+      "target": "traveler_mouth",
+      "pivot": [
+        371,
+        629
+      ],
+      "parent": "head"
+    },
+    {
+      "id": "satchel",
+      "target": "traveler_bag",
+      "pivot": [
+        321,
+        662
+      ],
+      "parent": "torso",
+      "min": -15,
+      "max": 15
+    },
+    {
+      "id": "lantern_arm",
+      "target": "traveler_lantern_arm",
+      "pivot": [
+        380,
+        679
+      ],
+      "parent": "torso",
+      "min": -30,
+      "max": 18
+    },
+    {
+      "id": "forearm",
+      "target": "traveler_forearm",
+      "pivot": [
+        400,
+        718
+      ],
+      "parent": "lantern_arm",
+      "min": -22,
+      "max": 21
+    },
+    {
+      "id": "lantern_prop",
+      "target": "lantern",
+      "pivot": [
+        446,
+        702
+      ],
+      "parent": "forearm",
+      "min": -24,
+      "max": 24
+    }
+  ]
+}

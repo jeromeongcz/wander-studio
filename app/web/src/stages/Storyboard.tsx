@@ -1,12 +1,13 @@
 import { directionSummary, useCinematic, words } from './Direction';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { api } from '../api';
 import { ArtifactBar, saveArtifact, withReopen } from '../actions';
 import { useProject } from '../pages/Project';
-import { useAsync, useInterval } from '../hooks';
-import { Btn, Card, Empty, Field, Icon, Loading, Modal, Pill, StateBadge, fmtSec, useToast } from '../ui';
+import { useAsync, useHash, useInterval } from '../hooks';
+import { Btn, Empty, Field, Icon, Loading, Modal, Pill, StateBadge, fmtSec, useToast } from '../ui';
 import { url } from '../api';
 import { ASSET_TYPES } from '../types';
+import { AnimatedSvgScenePanel } from './AnimatedSvg';
 
 
 export function StoryboardStage() {
@@ -18,26 +19,89 @@ export function StoryboardStage() {
   const baseDoc = useAsync(() => api.get<any>(`/artifacts/${base.id}`), [base.id, base.current_version_id]);
   const [c, setC] = useState<any>(null);
   const [dirty, setDirty] = useState(false);
-  // how the scenes are laid out; remembered in this browser
-  const [view, setView] = useState<'list' | 'grid'>(() => { try { return localStorage.getItem('wander-storyboard-view') === 'grid' ? 'grid' : 'list'; } catch { return 'list'; } });
-  const layout = (v: 'list' | 'grid') => { setView(v); try { localStorage.setItem('wander-storyboard-view', v); } catch { /* storage unavailable */ } };
-  const listClass = view === 'grid' ? 'board board-grid' : 'stack';
+  const seededFor = useRef<string | null>(null);
+  const [seedError, setSeedError] = useState<Error | null>(null);
   const [zoom, setZoom] = useState<number | null>(null);
   // custom SVG: paste a drawing to use as a scene's picture instead of generating one
   const [customSvg, setCustomSvg] = useState<number | null>(null);
   const [svgText, setSvgText] = useState('');
+  const [animatedArtworkBatch, setAnimatedArtworkBatch] = useState<{ current: number; total: number } | null>(null);
+  const [motionBatch, setMotionBatch] = useState<{ current: number; total: number } | null>(null);
+  const [animatedRefreshToken, setAnimatedRefreshToken] = useState(0);
+  const routeHash = useHash();
+  const lastSceneAnchor = useRef('');
   const cinematic = useCinematic();
   const moves = cinematic.data?.cameras ?? [];
   const transitions = cinematic.data?.transitions ?? [];
   const directions = (movement: string) => moves.find((m) => m.id === movement)?.directions ?? [];
-  const cardClass = (i: number) => (view === 'grid' ? 'scene-card tall' : 'scene-card wide');
+  const cardClass = `scene-card wide${c ? ' scene-designed animated-open' : ''}`;
   const sketches = useAsync(() => api.get<any[]>(`/artifacts/${art.id}/sketches`), [art.id, art.current_version_id, project.artifacts.map((a) => a.current_version_id).join()]);
+  const animatedArtwork = useAsync(() => api.get<any[]>(`/artifacts/${art.id}/animated-svg`), [art.id, art.current_version_id]);
   const jobs = useAsync(() => api.get<any[]>(`/jobs?project_id=${project.id}`), [project.id]);
   const drawing = (jobs.data ?? []).find((j) => j.kind === 'sketch_scenes' && (j.state === 'queued' || j.state === 'running'));
+  const animationWork = (jobs.data ?? []).some((j) => j.kind?.startsWith('animated_svg_') && (j.state === 'queued' || j.state === 'running'));
   const lastDraw = (jobs.data ?? []).filter((j) => j.kind === 'sketch_scenes').sort((x, y) => (x.id < y.id ? 1 : -1))[0];
-  useInterval(() => { jobs.reload(); if (drawing) sketches.reload(); }, 2000);
+  useInterval(() => { jobs.reload(); if (drawing) sketches.reload(); if (animationWork) animatedArtwork.reload(); }, 2000);
   const status = useAsync(() => api.get<any>('/research/status'), []);
   useEffect(() => { if (loaded.data) { setC(loaded.data.content); setDirty(false); } }, [loaded.data]);
+  useEffect(() => {
+    const anchor = routeHash.split('#').at(-1) ?? '';
+    const match = /^scene([1-9]\d*)$/i.exec(anchor);
+    if (!match) { lastSceneAnchor.current = ''; return; }
+    if (lastSceneAnchor.current === anchor || !Array.isArray(c?.scenes)) return;
+    const index = Number(match[1]) - 1;
+    if (index < 0 || index >= c.scenes.length) return;
+    const card = document.getElementById(`scene${index + 1}`);
+    if (!card) return;
+    lastSceneAnchor.current = anchor;
+    const frame = requestAnimationFrame(() => card.scrollIntoView({ behavior: 'smooth', block: 'start' }));
+    return () => cancelAnimationFrame(frame);
+  }, [c, routeHash]);
+  useEffect(() => {
+    if (!Array.isArray(c?.scenes) || !c.scenes.length) return;
+    let frame = 0;
+    const syncSceneUrl = () => {
+      if (frame) return;
+      frame = requestAnimationFrame(() => {
+        frame = 0;
+        const cards = [...document.querySelectorAll<HTMLElement>('.scene-card[id^="scene"]')];
+        if (!cards.length) return;
+        const markerY = Math.min(180, window.innerHeight * 0.3);
+        const current = cards.find((card) => {
+          const rect = card.getBoundingClientRect();
+          return rect.top <= markerY && rect.bottom > markerY;
+        }) ?? cards
+          .filter((card) => {
+            const rect = card.getBoundingClientRect();
+            return rect.bottom > 0 && rect.top < window.innerHeight;
+          })
+          .sort((a, b) => Math.abs(a.getBoundingClientRect().top - markerY) - Math.abs(b.getBoundingClientRect().top - markerY))[0];
+        if (!current) return;
+        const currentHash = location.hash.slice(1);
+        const [routePath] = currentHash.split('#', 2);
+        const nextHash = `${routePath}#${current.id}`;
+        if (currentHash !== nextHash) history.replaceState(history.state, '', `${location.pathname}${location.search}#${nextHash}`);
+      });
+    };
+    document.addEventListener('scroll', syncSceneUrl, true);
+    syncSceneUrl();
+    return () => {
+      document.removeEventListener('scroll', syncSceneUrl, true);
+      if (frame) cancelAnimationFrame(frame);
+    };
+  }, [c?.scenes?.length]);
+  useEffect(() => {
+    if (base.state !== 'approved' || !loaded.data || loaded.data.content || seededFor.current === art.id) return;
+    seededFor.current = art.id;
+    setSeedError(null);
+    void api.post(`/artifacts/${art.id}/seed-storyboard`).then(() => {
+      loaded.reload();
+      reload();
+    }).catch((error: Error) => {
+      if ((error as { code?: string }).code === 'VALIDATION' && /already has content/i.test(error.message)) loaded.reload();
+      else setSeedError(error);
+    });
+  }, [art.id, base.state, loaded.data, loaded.reload, reload]);
   const done = () => { reload(); loaded.reload(); };
   if (loaded.loading && !loaded.data) return <Loading />;
   const sections: { id: string; kind: string; text: string }[] = baseDoc.data?.content?.sections ?? [];
@@ -65,6 +129,101 @@ export function StoryboardStage() {
     push('ok', `Drawing ${r.scenes} scene${r.scenes === 1 ? '' : 's'}…`);
     jobs.reload();
     done();
+  };
+  const generateAnimatedArtworkBatch = async () => {
+    if (dirty) { push('warn', 'Save the storyboard first, then generate animated artwork.'); return; }
+    const targets = (c?.scenes ?? []).map((scene: any, index: number) => ({ scene, index }))
+      .filter(({ index }: { index: number }) => !animatedArtwork.data?.[index])
+      .slice(0, 10);
+    if (!targets.length) { push('warn', 'All scenes already have animated artwork.'); return; }
+    if ((jobs.data ?? []).some((job) => job.kind?.startsWith('animated_svg_') && (job.state === 'queued' || job.state === 'running'))) {
+      push('warn', 'Wait for the current animated artwork job to finish first.'); return;
+    }
+    try {
+      const selected = await api.get<{ active: string | null }>('/llm/active');
+      if (!selected.active) throw new Error('Select an AI provider in Settings first.');
+      if (!confirm(`Generate layered animated artwork for ${targets.length} scene${targets.length === 1 ? '' : 's'} using ${selected.active}? Each scene is sent to this provider and saved as a draft for your review.`)) return;
+      setAnimatedArtworkBatch({ current: 0, total: targets.length });
+      let succeeded = 0;
+      const failures: string[] = [];
+      for (let n = 0; n < targets.length; n++) {
+        const { scene, index } = targets[n];
+        setAnimatedArtworkBatch({ current: n + 1, total: targets.length });
+        const { job: queued } = await api.post<{ job: { id: string } }>(`/artifacts/${art.id}/animated-svg/${index}/generate`, {
+          operation: 'artwork', brief: scene.visual_description ?? '', consent: true, expectedProvider: selected.active,
+        });
+        let job: any;
+        do {
+          await new Promise((resolve) => setTimeout(resolve, 1000));
+          job = await api.get<any>(`/jobs/${queued.id}`);
+        } while (job.state === 'queued' || job.state === 'running');
+        if (job.state === 'succeeded') succeeded++;
+        else {
+          failures.push(`Scene ${index + 1}: ${job.error?.message ?? (job.state === 'cancelled' ? 'cancelled' : 'generation failed')}`);
+          if (job.state === 'cancelled') break;
+        }
+      }
+      animatedArtwork.reload();
+      jobs.reload();
+      done();
+      if (failures.length) push('warn', `Animated artwork finished: ${succeeded} of ${targets.length} scenes succeeded.`, failures);
+      else push('ok', `Animated artwork generated for ${succeeded} scene${succeeded === 1 ? '' : 's'}. Review each draft in its scene.`);
+    } catch (error) {
+      fail(error);
+    } finally {
+      setAnimatedArtworkBatch(null);
+    }
+  };
+  const possibleMotionIndices = (c?.scenes ?? []).flatMap((scene: any, index: number) => {
+    const entry = animatedArtwork.data?.[index];
+    const sceneBusy = (jobs.data ?? []).some((job) => job.kind === 'animated_svg_generate' && job.params?.sceneId === scene.scene_id && (job.state === 'queued' || job.state === 'running'));
+    return entry?.artworkApproved && !entry.animation && !sceneBusy ? [index] : [];
+  });
+  const generateAllMotion = async () => {
+    if (dirty) { push('warn', 'Save the storyboard first, then generate motion.'); return; }
+    const targets = possibleMotionIndices;
+    if (!targets.length) { push('warn', 'No scenes currently have approved artwork ready for motion.'); return; }
+    try {
+      const selected = await api.get<{ active: string | null }>('/llm/active');
+      if (!selected.active) throw new Error('Select an AI provider in Settings first.');
+      if (!confirm(`Queue motion generation for ${targets.length} scene${targets.length === 1 ? '' : 's'} using ${selected.active}? Each scene’s approved artwork and scene brief will be sent to this provider.`)) return;
+      setMotionBatch({ current: 0, total: targets.length });
+      const queued: Array<{ id: string; index: number }> = [];
+      const failures: string[] = [];
+      for (const index of targets) {
+        const entry = animatedArtwork.data?.[index];
+        try {
+          const response = await api.post<{ job: { id: string } }>(`/artifacts/${art.id}/animated-svg/${index}/generate`, {
+            revision: entry.revision, operation: 'motion', brief: '', consent: true, expectedProvider: selected.active,
+          });
+          queued.push({ id: response.job.id, index });
+        } catch (error) {
+          failures.push(`Scene ${index + 1}: ${(error as Error).message}`);
+        }
+      }
+      jobs.reload();
+      setAnimatedRefreshToken((token) => token + 1);
+      for (let i = 0; i < queued.length; i++) {
+        setMotionBatch({ current: i + 1, total: targets.length });
+        let job: any;
+        do {
+          await new Promise((resolve) => setTimeout(resolve, 1000));
+          job = await api.get<any>(`/jobs/${queued[i].id}`);
+        } while (job.state === 'queued' || job.state === 'running');
+        if (job.state !== 'succeeded') failures.push(`Scene ${queued[i].index + 1}: ${job.error?.message ?? (job.state === 'cancelled' ? 'cancelled' : 'motion generation failed')}`);
+      }
+      animatedArtwork.reload();
+      setAnimatedRefreshToken((token) => token + 1);
+      jobs.reload();
+      done();
+      if (failures.length) push('warn', `Motion jobs finished with ${failures.length} issue${failures.length === 1 ? '' : 's'}.`, failures);
+      else if (queued.length) push('ok', `Motion generated for ${queued.length} scene${queued.length === 1 ? '' : 's'}. Review the new drafts.`);
+      else fail(new Error('No motion jobs could be queued.'));
+    } catch (error) {
+      fail(error);
+    } finally {
+      setMotionBatch(null);
+    }
   };
   const ready = base.state === 'approved' && !!status.data?.loggedIn;
   const preview: any[] = baseDoc.data?.content?.sections ?? [];
@@ -168,23 +327,26 @@ export function StoryboardStage() {
   const picture = (i: number) => {
     const row = sketches.data?.[i];
     return (
-      <div className="frame-col">
+      <aside className="frame-col scene-media" aria-label={`Scene ${i + 1} still picture`}>
+        <div className="scene-media-heading"><span className="scene-eyebrow">Still frame</span><span className="scene-media-count">{row?.asset_id ? 'Ready to review' : 'Awaiting artwork'}</span></div>
         {frame(i)}
-        {drawButton(i)}
-        {row?.asset_id && (row.state === 'approved'
-          ? <span className="approved-mark"><Icon name="check" small /> Approved</span>
-          : <Btn small kind="primary" disabled={!!drawing} onClick={() => approveScene(i)}><Icon name="check" small /> Approve</Btn>)}
-        <div className="row gap" style={{ flexWrap: 'wrap' }}>
+        <div className="scene-media-controls">
+        <div className="scene-media-action">{drawButton(i)}{row?.asset_id && row.state === 'approved' && <span className="approved-mark"><Icon name="check" small /> Approved</span>}</div>
+        <div className="scene-support-actions">
           <Btn small onClick={() => copyPrompt(i)} title="Copy this scene's art-direction prompt">Copy prompt</Btn>
           <Btn small onClick={() => { setCustomSvg(i); setSvgText(''); }} title="Use your own SVG as this scene's picture">Custom SVG</Btn>
         </div>
-      </div>
+        </div>
+      </aside>
     );
   };
 
   return (
     <>
-      <ArtifactBar artifact={art} onChanged={done}>{dirty && <Pill tone="warn">unsaved</Pill>}</ArtifactBar>
+      <ArtifactBar artifact={art} onChanged={done} actions={c && <Btn kind="primary" disabled={!dirty} title={dirty ? 'Save your changes' : 'No changes to save'} onClick={async () => {
+        try { const r = await saveArtifact(art.id, c); push('ok', r.changed ? 'Storyboard saved' : 'No changes'); done(); }
+        catch (error) { fail(error); }
+      }}>Save storyboard</Btn>}>{dirty && <Pill tone="warn">unsaved</Pill>}</ArtifactBar>
       <section className="board-head">
         <div className="grow">
           <h3>{total} scene{total === 1 ? '' : 's'}</h3>
@@ -193,10 +355,10 @@ export function StoryboardStage() {
         </div>
         <div className="board-actions">
           {c && <Btn disabled={!!drawing || (!waiting.length && art.state === 'approved')} title={waiting.length || art.state !== 'approved' ? 'Approve the storyboard and every picture that is waiting' : 'Everything is approved'} onClick={approveAll}><Icon name="check" small /> {waiting.length ? `Approve all (${waiting.length})` : art.state !== 'approved' ? 'Approve all' : have ? 'All approved' : 'Approve all'}</Btn>}
-          <div className="seg" role="group" aria-label="Scene layout">
-            {([['list', 'rows', 'Horizontal'], ['grid', 'grid', 'Grid']] as const).map(([v, icon, label]) => <button key={v} type="button" className={view === v ? 'on' : ''} aria-pressed={view === v} onClick={() => layout(v)}><Icon name={icon} small /> {label}</button>)}
-          </div>
           <Btn kind="primary" disabled={!ready || !!drawing || !total || have === total} onClick={() => generate()}><Icon name="spark" small /> {drawing ? 'Drawing…' : have === total && total ? 'All drawn' : have ? `Generate ${total - have} remaining` : `Generate all ${total}`}</Btn>
+          {c && <Btn disabled={!!drawing || !!animatedArtworkBatch || !animatedArtwork.data || !(c.scenes ?? []).some((_: any, i: number) => !animatedArtwork.data?.[i]) || (jobs.data ?? []).some((job) => job.kind?.startsWith('animated_svg_') && (job.state === 'queued' || job.state === 'running'))} title="Generate layered animated artwork for up to 10 scenes without an existing animated artwork draft" onClick={() => void generateAnimatedArtworkBatch()}>
+            {animatedArtworkBatch ? `Generating Animated Artwork (${animatedArtworkBatch.current}/${animatedArtworkBatch.total})…` : `Generate (${Math.min(10, (c.scenes ?? []).filter((_: any, i: number) => !animatedArtwork.data?.[i]).length)}) Animated Artwork`}
+          </Btn>}
           {c && <>
             {baseDoc.data?.content?.sections?.some((x: any) => x.cinematic) && <Btn disabled={dirty || !!drawing} title={dirty ? 'Save your changes first' : "Use the script's camera, transition and style directions on these scenes"} onClick={async () => {
               if (!confirm("Use the script's camera, transition and style directions on this storyboard?\n\nScenes you set yourself are kept. Changing the storyboard means scene visuals and videos need your approval again. To change only one finished video, use Compose & render instead.")) return;
@@ -204,19 +366,22 @@ export function StoryboardStage() {
               push('ok', r.changed ? `Directions applied${r.kept ? `; ${r.kept} of your own settings kept` : ''}` : 'The storyboard already follows the script directions');
               done();
             }}>Apply script directions</Btn>}
-            <span className="vsep" role="separator" aria-orientation="vertical" />
-            <Btn kind="primary" disabled={!dirty} title={dirty ? 'Save your changes' : 'No changes to save'} onClick={async () => { const r = await saveArtifact(art.id, c); push('ok', r.changed ? 'Storyboard saved' : 'No changes'); done(); }}>Save storyboard</Btn>
+            <Btn disabled={!possibleMotionIndices.length || !!motionBatch || dirty} title={dirty ? 'Save the storyboard first' : `${possibleMotionIndices.length} scene${possibleMotionIndices.length === 1 ? '' : 's'} have approved artwork and no motion yet`} onClick={() => void generateAllMotion()}>
+              {motionBatch ? `Generating motion (${motionBatch.current}/${motionBatch.total})…` : `Generate all motion (${possibleMotionIndices.length} possible)`}
+            </Btn>
           </>}
         </div>
       </section>
       {base.state !== 'approved' && <div className="notice warn">Approve the base script first: the scenes come from it.</div>}
       {status.data && !status.data.loggedIn && <div className="notice warn"><strong>{status.data.detail}.</strong> {status.data.fix}</div>}
       {!drawing && lastDraw?.state === 'failed' && have < total && <div className="notice bad"><strong>Last drawing run had problems.</strong> {lastDraw.error?.message}</div>}
-      {!c ? (
+      {!c && base.state === 'approved' && !seedError && !loaded.error ? <Loading what="Preparing storyboard scenes" /> : !c ? (
         <>
-          <div className={listClass}>
+          {loaded.error && <div className="notice bad" role="alert">Could not load the storyboard: {loaded.error.message} <Btn small onClick={loaded.reload}>Retry</Btn></div>}
+          {seedError && <div className="notice bad" role="alert">Could not prepare the storyboard scenes: {seedError.message} <Btn small onClick={() => { seededFor.current = null; setSeedError(null); loaded.reload(); }}>Retry</Btn></div>}
+          <div className="stack">
             {preview.map((s, i) => (
-              <article key={s.id} className={cardClass(i)}>
+              <article key={s.id} className={cardClass}>
                 {picture(i)}
                 <div className="scene-body">
                   <div className="row gap"><span className="scene-n">{i + 1}</span><strong className="grow">{s.kind}</strong></div>
@@ -229,14 +394,14 @@ export function StoryboardStage() {
         </>
       ) : (
         <>
-          <div className={listClass}>
+          <div className="stack">
             {c.scenes.map((s: any, i: number) => (
-              <div key={s.scene_id ?? i} className={cardClass(i)}>
+              <div key={s.scene_id ?? i} id={`scene${i + 1}`} className={cardClass}>
                 <header className="topic-top scene-top" role="group" aria-label={`Scene ${i + 1} order and removal`}>
                   <span className="topic-state">
                     <span className="scene-n">{i + 1}</span>
                     <span>
-                      <b>Scene {i + 1}</b>
+                      <b>{s.title?.trim() || `Scene ${i + 1}`}</b>
                       {s.draft && <span className="draft-note" title="Written automatically from the script. Edit the description to mark it as yours.">Draft: not edited by you yet</span>}
                       {dirty && <span className="draft-note">Changes are not saved: press Save storyboard at the top.</span>}
                     </span>
@@ -245,35 +410,57 @@ export function StoryboardStage() {
                     <Btn small title="Show this scene one place earlier" onClick={() => move(i, -1)} disabled={i === 0}>↑ Earlier</Btn>
                     <Btn small title="Show this scene one place later" onClick={() => move(i, 1)} disabled={i === c.scenes.length - 1}>↓ Later</Btn>
                     <Btn small kind="danger" title="Delete this scene from the storyboard" onClick={() => { if (confirm(`Delete scene ${i + 1} from the storyboard?\n\nIt is removed when you press Save storyboard.`)) edit({ scenes: c.scenes.filter((_: any, k: number) => k !== i) }); }}><Icon name="trash" small /> Delete</Btn>
+                    {sketches.data?.[i]?.asset_id && sketches.data[i].state !== 'approved' && <>
+                      <span className="vsep" role="separator" aria-orientation="vertical" />
+                      <Btn small kind="primary" disabled={!!drawing} onClick={() => approveScene(i)}><Icon name="check" small /> Approve</Btn>
+                    </>}
                   </div>
                 </header>
+                <div className="scene-workspace">
+                <div className="scene-overview">
                 {picture(i)}
                 <div className="scene-body">
-                {s.segment_text && <p className="quote">“{s.segment_text}”</p>}
-                <div className="scene-text">
-                <p className="visual-text">{s.visual_description}</p>
-                {s.look && <p className="visual-text">{directionSummary({ look: s.look })}</p>}
-                <Field label="What the viewer sees" wide><textarea style={{ marginTop: 6 }} value={s.visual_description} onChange={(e) => setScene(i, { visual_description: e.target.value, draft: false })} /></Field>
-                <div className="row gap wrap">
-                  <input aria-label="Scene title" value={s.title} onChange={(e) => setScene(i, { title: e.target.value })} />
-                </div>
-                <div className="form" style={{ marginTop: 8 }}>
+                <details className="scene-settings">
+                  <summary><span className="scene-settings-title"><span className="scene-settings-icon"><Icon name="gear" small /></span><span><strong>Scene settings</strong><small>Script, visuals, camera and timing</small></span></span><span className="scene-settings-summary"><Pill>{fmtSec(s.target_duration)}</Pill><Pill>{words(s.camera.movement)}</Pill>{sketches.data?.[i] && <StateBadge state={sketches.data[i].state} />}</span></summary>
+                  <div className="scene-settings-content">
+                  {s.segment_text && <div className="scene-cue"><span>Script cue</span><p>“{s.segment_text}”</p></div>}
+                  <div className="scene-main"><Field label="What the viewer sees" wide><textarea value={s.visual_description} onChange={(e) => setScene(i, { visual_description: e.target.value, draft: false })} /></Field></div>
+                  {s.look && <p className="muted small">{directionSummary({ look: s.look })}</p>}
+                  <div className="form">
+                  <Field label="Scene title"><input value={s.title} onChange={(e) => setScene(i, { title: e.target.value })} /></Field>
                   <Field label="Script section"><select value={s.script_segment_id} onChange={(e) => setScene(i, { script_segment_id: e.target.value })}>{sections.map((x) => <option key={x.id} value={x.id}>{x.kind}: {x.text.slice(0, 28)}</option>)}</select></Field>
                   <Field label="Duration (s)"><input type="number" step={0.1} min={0.5} value={s.target_duration} onChange={(e) => setScene(i, { target_duration: Number(e.target.value) })} /></Field>
                   <Field label="Visual type"><select value={s.asset_type} onChange={(e) => setScene(i, { asset_type: e.target.value })}>{ASSET_TYPES.map((t) => <option key={t} value={t}>{t.replace(/_/g, ' ')}</option>)}</select></Field>
+                  {project.settings.animatedSvg?.mode === 'mixed' && <Field label="Scene production mode">
+                    <select value={s.animation_plan?.mode ?? 'auto'} onChange={e => {
+                      const mode=e.target.value;
+                      if(mode==='auto'){setScene(i,{animation_plan:undefined});return;}
+                      const duration=Math.max(.1,Math.min(60,s.target_duration));
+                      setScene(i,{animation_plan:{...s.animation_plan,mode,duration,beats:mode==='static'?[]:
+                        (s.animation_plan?.mode==='animated'&&s.animation_plan.duration===duration?s.animation_plan.beats:
+                          [{start:0,end:duration,actor:'',action:'Follow the saved storyboard direction.'}])}});
+                    }}>
+                      <option value="auto">Use the approved primary visual</option><option value="static">Static illustration</option><option value="animated">Animated SVG clip</option>
+                    </select>
+                  </Field>}
                   <Field label="Look"><input value={s.visual_style ?? ''} onChange={(e) => setScene(i, { visual_style: e.target.value })} /></Field>
                   <Field label="Camera"><select value={s.camera.movement} onChange={(e) => setScene(i, { camera: { ...s.camera, movement: e.target.value, direction: directions(e.target.value)[0] } })}>{moves.map((m) => <option key={m.id} value={m.id}>{m.label}</option>)}</select></Field>
                   {directions(s.camera.movement).length > 0 && <Field label="Direction"><select value={s.camera.direction ?? ''} onChange={(e) => setScene(i, { camera: { ...s.camera, direction: e.target.value } })}>{directions(s.camera.movement).map((d) => <option key={d}>{d}</option>)}</select></Field>}
                   <Field label="Intensity"><select value={s.camera.intensity ?? 'subtle'} onChange={(e) => setScene(i, { camera: { ...s.camera, intensity: e.target.value } })}>{['subtle', 'medium', 'strong'].map((d) => <option key={d}>{d}</option>)}</select></Field>
                   <Field label="Transition in"><select value={s.transition_in ?? 'cut'} onChange={(e) => setScene(i, { transition_in: e.target.value, transition_settings: undefined })}>{transitions.map((t) => <option key={t.id} value={t.id}>{t.label}</option>)}</select></Field>
                   <Field label="Sound effects (comma separated)"><input value={(s.sfx_cues ?? []).join(', ')} onChange={(e) => setScene(i, { sfx_cues: e.target.value.split(',').map((x) => x.trim()).filter(Boolean) })} /></Field>
+                  </div>
+                  </div>
+                </details>
                 </div>
                 </div>
-                <div className="row gap wrap scene-actions">
-                  <Pill>{fmtSec(s.target_duration)}</Pill><Pill>{words(s.camera.movement)}</Pill><Pill>{words(s.transition_in ?? 'cut')} in</Pill>
-                  {sketches.data?.[i] && <StateBadge state={sketches.data[i].state} />}
-                  <span className="grow" />
-                </div>
+                <section className="scene-animation">
+                <AnimatedSvgScenePanel key={s.scene_id ?? i} artifactId={art.id} projectId={project.id} sceneId={s.scene_id} index={i}
+                  title={s.title ?? ''} brief={s.visual_description ?? ''} targetDuration={s.target_duration ?? 0}
+                  projectStrategy={project.settings.animatedSvg?.strategy} refreshToken={animatedRefreshToken}
+                  approvedStoryboard={art.state === 'approved'} hasApprovedStill={sketches.data?.[i]?.state === 'approved'}
+                  onAttached={() => { sketches.reload(); done(); }} />
+                </section>
                 </div>
               </div>
             ))}

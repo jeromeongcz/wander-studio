@@ -29,7 +29,7 @@ export function applyEffects(tl: Timeline, style: EffectStyle | undefined): Time
   const scenes: TimelineScene[] = tl.scenes.map(({ look, ...s }, i) => ({
     ...s,
     ...(look && s.sources?.look === 'scene_override' ? { look } : {}),
-    camera: s.sources?.camera ? s.camera : folkloreCamera(i, tl.scenes.length),
+    camera: s.asset?.animated?.camera_baked || s.sources?.camera ? s.camera : folkloreCamera(i, tl.scenes.length),
     transition_in: s.sources?.transition ? s.transition_in : { type: 'cut', duration: 0 },
   }));
   const { look: _wide, ...rest } = tl;

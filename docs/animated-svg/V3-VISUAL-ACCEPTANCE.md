@@ -1,0 +1,28 @@
+# Wander Animated SVG v3: live visual acceptance
+
+This is a manual acceptance protocol, not a pass or an artwork claim. Test a clean run from the current `animated-svg` branch and an authenticated Codex or Claude provider whose Settings status is ready.
+
+Use a disposable project, 9:16, two synthetic scenes. Do not reuse the rejected Balete draft or change the approved Tondo still.
+
+1. **Archival Sepia.** A bookbinder at a late-afternoon workshop window, three-quarter view, raises a small brass ruler from a workbench. The visible hand bends naturally around the ruler. Workbench and tool rack are separate from the foreground figure; the silhouette remains clear against the window. Use old-paper tones, warm reflections, varied ink density, and subdued headline-free lower space. Request a single shallow breath and steady hand movement, not a full redraw.
+2. **Dark Folklore.** A traveler pauses beside a mangrove inlet at moonrise and turns their head toward a reflected light. Use strong moonlit contours, organic branch shapes, shallow water reflection, distinct mist planes, a foreground reed silhouette and restrained highlights. Keep feet planted and let mist and reflected glow drift independently.
+
+## Optional one-command setup
+
+With Wander running on `animated-svg`, run `node scripts/seed-svg-acceptance.mjs` from the repository root in a second terminal. If you use a custom local port, pass it as the only argument. It creates two clearly marked, fictional test projects, sets both style controls correctly, and prints direct Storyboard links. It does not change existing projects, call a provider, or approve any artwork. An existing fixture with the same name is skipped, not overwritten.
+
+If setting the projects up manually, set the scene's **Look** in Storyboard and its **Visual art style** under **Script → Illustration & Animation Quality** to the same preset, then save each. The regular still uses the first control; the animated-art planner uses the second.
+
+## Verification sequence
+
+- Before running animation, generate a static comparison from each brief. Review the original at normal size as well as a narrow 360 px-wide preview. Preserve the still and its prompt; do not regenerate it from an animated asset.
+- In Storyboard, request detailed layered artwork via Animated SVG. Record provider/model, branch SHA, project settings, and the exact copyable artwork and motion prompts **after** the generation that used them. Inspect the SVG group names and note which layers can move without exposing holes.
+- Check the central silhouette, perspective, natural proportions/pose, light, surface treatment, focal hierarchy and readability in each 360×640 preview. Compare the Archival Sepia result to the approved Tondo still for visual richness, not matching composition. If artwork looks primitive, tangled, flat, or substantially degraded against its static comparison, reject it before approving motion; repeat targeted refinements rather than lowering the quality bar.
+- Preview start, middle and end. Check for planted-foot or anchored-prop drift, contour seams, layer discontinuities, unintended camera movement, moving foreground/background correlation and changes to controlled silhouette. Record discrepancies for correction.
+- Render a short MP4 only after the artwork/motion gates. Confirm playback and correct duration, read dimensions/FPS/codec with FFprobe, then build a mixed timeline against existing audio/transition settings if available. Record the clips and previews separately from implementation tests.
+
+
+## Live motion and lip-sync follow-through
+
+- These two scenes cover subtle hand and head action, not planted-foot walking. Verify walking separately on a generated **side-profile** character with separate upper leg, lower leg, and foot groups on each side. Review several points during each planted interval, not only the keys. Reject sliding, floating, sudden limb reversals, or geometry breaks.
+- Use separate short Filipino, Taglish, and Cebuano WAV excerpts recorded for testing. Run phonetic dialogue timing locally, review the editable cues against the spoken audio, and have a fluent speaker flag missed closed-mouth sounds or early/late transitions. A valid cue file or technically successful MP4 is not evidence of accurate pronunciation timing.

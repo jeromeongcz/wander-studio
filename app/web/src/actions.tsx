@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import type { ReactNode } from 'react';
 import { api, ApiError } from './api';
 import { Btn, Icon, Modal, StateBadge, useToast } from './ui';
 import type { Artifact, State } from './types';
@@ -44,7 +45,7 @@ const LOOK: Record<State | 'empty', { icon: string; title: string; hint: string;
 };
 
 /** Review actions for one artifact: submit, approve, request revision, reject, history. Approval is always a deliberate click. */
-export function ArtifactBar({ artifact, onChanged, children }: { artifact: Artifact; onChanged: () => void; children?: React.ReactNode }) {
+export function ArtifactBar({ artifact, onChanged, children, actions }: { artifact: Artifact; onChanged: () => void; children?: ReactNode; actions?: ReactNode }) {
   const { push, fail } = useToast();
   const [hist, setHist] = useState<any>(null);
   const [burst, setBurst] = useState(false);
@@ -96,7 +97,8 @@ export function ArtifactBar({ artifact, onChanged, children }: { artifact: Artif
             ))}
           </ol>
         </div>
-        <div className="rv-actions">
+        <div className={`rv-actions${actions ? ' rv-actions-forward' : ''}`}>
+          {actions && <div className="rv-save-action">{actions}</div>}
           {a.state === 'awaiting_review' && <button type="button" className="btn btn-primary btn-lg" onClick={() => approve().catch(fail)}><Icon name="check" small /> Approve</button>}
           {a.state !== 'awaiting_review' && a.state !== 'approved' && (
             <Btn kind="primary" onClick={submit} disabled={!a.current_version_id} title={a.current_version_id ? 'Run readiness checks and ask for approval' : 'There is nothing to review yet'}>Submit for review <Icon name="arrow" small /></Btn>

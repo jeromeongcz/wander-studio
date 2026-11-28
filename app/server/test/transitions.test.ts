@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync } from 'node:fs';
+import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DEFAULT_SECONDS, EASABLE, TRANSITIONS, TRANSITION_DIRECTIONS, validateTransition } from '../src/render/transitions.ts';
@@ -20,12 +20,13 @@ const timeline = (spec: TransitionSpec, seconds: number, starts = [0, 1.6, 3.2])
     scenes: starts.map((start, index) => ({ scene_id: `s${index}`, index, start, duration: 1.6, asset: null, focal: { x: 0.5, y: 0.5 }, transition_in: index ? { ...spec, duration: seconds } : { type: 'cut', duration: 0 } })),
   }) as unknown as Timeline;
 
-function render(tl: Timeline, dir: string) {
+function render(tl: Timeline, dir: string, sourceRates: number[] = []) {
   const total = 4.8;
   const inputs = tl.scenes.flatMap((s, i) => {
     const preroll = i === 0 ? 0 : s.transition_in.duration || 1 / FPS;
     const frames = Math.round((s.duration + preroll) * FPS);
-    return ['-f', 'lavfi', '-i', `testsrc=size=240x426:rate=${FPS}:duration=${(frames / FPS).toFixed(4)},hue=h=${i * 120},format=yuv420p`];
+    const sourceRate = sourceRates[i] ?? FPS;
+    return ['-f', 'lavfi', '-i', `testsrc=size=240x426:rate=${sourceRate}:duration=${(frames / FPS).toFixed(4)},hue=h=${i * 120},format=yuv420p`];
   });
   const g = videoGraph(tl);
   const out = execFileSync(ffmpegBinary(), ['-hide_banner', '-loglevel', 'error', ...inputs, '-filter_complex', g.filters.join(';'), '-map', `[${g.out}]`, '-t', String(total), '-pix_fmt', 'yuv420p', '-f', 'framemd5', '-'], { cwd: dir, maxBuffer: 1 << 26 });
@@ -53,6 +54,21 @@ test('slide, wipe and push are different pictures, and direction changes the res
   const of = (spec: TransitionSpec) => render(timeline(spec, 0.6), dir).join();
   const seen = new Set([of({ type: 'slide' }), of({ type: 'slide', direction: 'up' }), of({ type: 'wipe' }), of({ type: 'wipe', direction: 'right' }), of({ type: 'push' })]);
   assert.equal(seen.size, 5);
+});
+
+
+test('mixed input frame rates retain the complete timeline across consecutive blends', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'wander-tr-cfr-'));
+  try {
+    const rates = [24, 30, 60];
+    const blend = render(timeline({ type: 'fade' }, 0.6), dir, rates);
+    assert.equal(blend.length, 72);
+    const cut = render(timeline({ type: 'cut' }, 0), dir, rates);
+    assert.notEqual(blend[20], cut[20], 'first blend is active');
+    assert.notEqual(blend[44], cut[44], 'second blend is active');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 test('every transition renders, keeps the length, and differs from a plain cut', { timeout: 600_000 }, () => {

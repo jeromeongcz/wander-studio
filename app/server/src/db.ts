@@ -309,6 +309,53 @@ const MIGRATIONS: string[] = [
   UPDATE topic_ideas SET video_project_id = (SELECT p.id FROM projects p WHERE p.name = substr(topic_ideas.title, 1, 120) ORDER BY p.id DESC LIMIT 1)
     WHERE status = 'used' AND project_id IS NULL;
   `,
+  // v11: opt-in animated illustration packages and explicitly promoted immutable vector layers.
+  `
+  CREATE TABLE animated_svg_scenes (
+    storyboard_id TEXT NOT NULL REFERENCES artifacts(id) ON DELETE CASCADE,
+    scene_id TEXT NOT NULL,
+    package_json TEXT NOT NULL,
+    PRIMARY KEY(storyboard_id, scene_id)
+  );
+  CREATE TABLE animated_svg_library (
+    id TEXT PRIMARY KEY,
+    revision TEXT NOT NULL,
+    name TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    groupId TEXT NOT NULL,
+    createdAt TEXT NOT NULL,
+    svg TEXT NOT NULL,
+    UNIQUE(revision,groupId)
+  );
+  `,
+  // v12: retain vector originals and version the opt-in derivatives independently.
+  `
+  CREATE TABLE storyboard_svg_sources (
+    asset_id TEXT PRIMARY KEY REFERENCES assets(id) ON DELETE CASCADE,
+    svg TEXT NOT NULL,
+    source_hash TEXT NOT NULL
+  );
+  CREATE TABLE animated_svg_revisions (
+    storyboard_id TEXT NOT NULL REFERENCES artifacts(id) ON DELETE CASCADE,
+    scene_id TEXT NOT NULL,
+    revision TEXT NOT NULL,
+    package_json TEXT NOT NULL,
+    saved_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY(storyboard_id, scene_id, revision)
+  );
+  CREATE TABLE animated_motion_library (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    source_revision TEXT NOT NULL,
+    clip_json TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+  );
+  INSERT INTO animated_svg_revisions(storyboard_id,scene_id,revision,package_json)
+    SELECT storyboard_id,scene_id,json_extract(package_json,'$.revision'),package_json FROM animated_svg_scenes
+    WHERE json_valid(package_json) AND json_type(package_json,'$.revision')='text';
+  `,
+  // v13: approved vector assets may carry the joints for the saved character group.
+  `ALTER TABLE animated_svg_library ADD COLUMN rig_json TEXT;`,
 ];
 
 export function openDb(path: string = ':memory:'): DatabaseSync {

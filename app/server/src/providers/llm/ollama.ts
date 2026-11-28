@@ -39,12 +39,54 @@ async function readStreamBody(res: Response, onChunk?: (chunk: string) => void):
   return out;
 }
 
+const MiB = 1024 * 1024;
+const visionPayload = (image: Uint8Array) => {
+  const bytes = Buffer.from(image.buffer, image.byteOffset, image.byteLength);
+  if (bytes.length >= 8 && bytes.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]))) return true;
+  if (bytes.length >= 4 && bytes[0] === 255 && bytes[1] === 216 && bytes[2] === 255) return true;
+  return bytes.length >= 12 && bytes.toString('ascii', 0, 4) === 'RIFF' && bytes.toString('ascii', 8, 12) === 'WEBP';
+};
+
+/** Cap the decoded body too, since Content-Length can be absent or describe compressed bytes. */
+async function visionJSON(res: Response, limit: number, operation: string): Promise<Record<string, unknown>> {
+  const contentLength = res.headers.get('content-length');
+  if (contentLength !== null && Number(contentLength) > limit) {
+    void res.body?.cancel().catch(() => {});
+    throw new LLMProviderError('PROVIDER_ERROR', `${operation} exceeded the response budget.`);
+  }
+  const reader = res.body?.getReader();
+  if (!reader) throw new LLMProviderError('PROVIDER_ERROR', `${operation} returned no response.`);
+  const chunks: Uint8Array[] = [];
+  let count = 0;
+  try {
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      count += value.byteLength;
+      if (count > limit) {
+        void reader.cancel().catch(() => {});
+        throw new LLMProviderError('PROVIDER_ERROR', `${operation} exceeded the response budget.`);
+      }
+      chunks.push(value);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  try {
+    const data: unknown = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(Buffer.concat(chunks, count)));
+    if (!data || typeof data !== 'object' || Array.isArray(data)) throw new Error('not an object');
+    return data as Record<string, unknown>;
+  } catch {
+    throw new LLMProviderError('PROVIDER_ERROR', `${operation} returned invalid JSON.`);
+  }
+}
+
 export function ollamaProvider(fetchFn: typeof fetch = fetch, host = DEFAULT_HOST): TextLLMProvider {
   const terms: LLMProviderTerms = {
     freeTier: 'Always free and offline; you supply the models',
     requiresKey: false,
     commercialUse: 'Depends on the model you run; check each model license',
-    privacy: 'Runs fully on this machine; prompts never leave your computer',
+    privacy: 'Uses your configured Ollama host. Keep the host and selected model local to keep inputs on your computer.',
   };
 
   async function request(path: string, opts: { signal?: AbortSignal; body?: unknown; stream?: boolean; onChunk?: (chunk: string) => void } = {}): Promise<Response> {
@@ -107,6 +149,66 @@ export function ollamaProvider(fetchFn: typeof fetch = fetch, host = DEFAULT_HOS
         throw new LLMProviderError('PROVIDER_ERROR', `${h.detail}. ${(e as Error).message}`);
       } finally {
         // record latency even on success is handled by health(); keep simple here
+      }
+    },
+
+    /** Verify vision support without sending image bytes first. Do not silently change models or pull anything. */
+    async generateVision({ prompt, model, images, signal }) {
+      const usedModel = model?.trim();
+      if (!usedModel || usedModel.length > 256) throw new LLMProviderError('VALIDATION', 'Choose an installed Ollama vision model in Settings.');
+      if (/(?:[:_-]cloud)(?::[^/]*)?$/i.test(usedModel)) {
+        throw new LLMProviderError('VISION_UNSUPPORTED', 'Choose a local Ollama vision model, not an Ollama Cloud model. No images were sent.');
+      }
+      if (!prompt.trim() || Buffer.byteLength(prompt, 'utf8') > 64 * 1024) throw new LLMProviderError('VALIDATION', 'Ollama vision needs a prompt of at most 64 KiB.');
+      if (!images.length || images.length > 4 || images.some((image) => !(image instanceof Uint8Array) || image.byteLength > 8 * MiB || !visionPayload(image))) {
+        throw new LLMProviderError('VALIDATION', 'Ollama vision accepts one to four PNG, JPEG, or WebP images of at most 8 MiB each.');
+      }
+      const timeout = AbortSignal.timeout(180_000);
+      const overall = signal ? AbortSignal.any([signal, timeout]) : timeout;
+      const showSignal = AbortSignal.any([overall, AbortSignal.timeout(12_000)]);
+      const post = async (path: string, body: Record<string, unknown>, operation: string, abort: AbortSignal) => {
+        abort.throwIfAborted();
+        const res = await fetchFn(`${baseUrl(host)}${path}`, {
+          method: 'POST', redirect: 'error', signal: abort,
+          headers: { accept: 'application/json', 'content-type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+        if (!res.ok) {
+          void res.body?.cancel().catch(() => {});
+          if (path === '/api/show' && res.status === 404) throw new LLMProviderError('VISION_UNSUPPORTED', `Ollama vision could not find “${usedModel}” on the configured host. Pick an installed vision model or use text reference notes.`);
+          throw new LLMProviderError('PROVIDER_ERROR', `${operation} returned HTTP ${res.status}.`);
+        }
+        return res;
+      };
+      let inspected = false;
+      try {
+        // https://docs.ollama.com/api-reference/show-model-details
+        const show = await visionJSON(await post('/api/show', { model: usedModel, verbose: false }, 'Ollama model details', showSignal), 2 * MiB, 'Ollama model details');
+        inspected = true;
+        if (show.remote_host || show.remote_model) {
+          throw new LLMProviderError('VISION_UNSUPPORTED', 'This Ollama model forwards to a remote service. Choose a locally installed vision model. No images were sent.');
+        }
+        if (!Array.isArray(show.capabilities) || !show.capabilities.includes('vision')) {
+          throw new LLMProviderError('VISION_UNSUPPORTED', `Ollama model “${usedModel}” does not declare vision support. Select an installed vision-capable model or use text reference notes. No images were sent.`);
+        }
+        // The native REST API takes bare base64 bytes, not URLs or data URIs.
+        // https://docs.ollama.com/capabilities/vision
+        const result = await visionJSON(await post('/api/chat', {
+          model: usedModel,
+          messages: [{ role: 'user', content: prompt, images: images.map((image) => Buffer.from(image.buffer, image.byteOffset, image.byteLength).toString('base64')) }],
+          stream: false,
+          options: { num_predict: 1536 },
+        }, 'Ollama vision chat', overall), 512 * 1024, 'Ollama vision chat');
+        overall.throwIfAborted();
+        const message = result.message as { content?: unknown } | undefined;
+        if (result.done_reason === 'length') throw new LLMProviderError('PROVIDER_ERROR', 'Ollama vision reached its output budget before completing the answer.');
+        if (result.error || typeof message?.content !== 'string' || !message.content.trim()) throw new LLMProviderError('PROVIDER_ERROR', 'Ollama vision did not return a usable answer.');
+        return message.content.trim();
+      } catch (e) {
+        if (signal?.aborted) throw new LLMProviderError('CANCELLED', 'Ollama vision was cancelled.');
+        if (timeout.aborted || !inspected && showSignal.aborted) throw new LLMProviderError('PROVIDER_ERROR', inspected ? 'Ollama vision exceeded its time budget.' : 'Ollama did not report the selected model’s capabilities in time.');
+        if (e instanceof LLMProviderError) throw e;
+        throw new LLMProviderError('PROVIDER_ERROR', 'Ollama vision could not reach or read the configured host. Check the Ollama connection and model in Settings.');
       }
     },
 

@@ -1,6 +1,7 @@
 // Compatibility guarantee for the cinematic expansion: a composition that uses none of the new options must produce the
-// same FFmpeg arguments, cache keys, captions and sound graph as it did before. The fixture was recorded from the
-// renderer as it was before any of that work. Only re-record it (UPDATE_GOLDEN=1) for a deliberate, agreed change.
+// same cache keys, captions and sound graph as it did before. The all-cut composition still uses the original
+// FFmpeg arguments; the blended composition includes constant-rate normalization for FFmpeg 7 compatibility.
+// Only re-record the fixture (UPDATE_GOLDEN=1) for a deliberate change with a real-render regression test.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
@@ -93,7 +94,7 @@ async function snapshot() {
   };
 }
 
-test('compositions without new options render exactly as before', async () => {
+test('existing compositions keep the recorded graph, timestamps, captions and cache keys', async () => {
   const now = await snapshot();
   if (process.env.UPDATE_GOLDEN === '1') {
     mkdirSync(dirname(FIXTURE), { recursive: true });

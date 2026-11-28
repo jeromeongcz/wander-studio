@@ -102,10 +102,10 @@ export function motionPlan(cam: Camera, focalRel: { x: number; y: number }): Mot
 const f = (n: number) => Number(n.toFixed(5));
 
 /** ffmpeg zoompan expressions. Kept in single quotes by the caller so commas need no escaping. */
-export function zoompanFilter(p: MotionPlan, frames: number, size: { w: number; h: number }, fps: number): string {
+export function zoompanFilter(p: MotionPlan, frames: number, size: { w: number; h: number }, fps: number, videoInput = false): string {
   const n = Math.max(2, frames);
-  const [z, x, y] = motionExpressions(p, `on/${n - 1}`);
-  return `zoompan=z='${z}':x='${x}':y='${y}':d=${n}:s=${size.w}x${size.h}:fps=${fps}`;
+  const [z, x, y] = motionExpressions(p, videoInput ? `min(1,on/${n - 1})` : `on/${n - 1}`);
+  return `zoompan=z='${z}':x='${x}':y='${y}':d=${videoInput ? 1 : n}:s=${size.w}x${size.h}:fps=${fps}`;
 }
 
 function motionExpressions(p: MotionPlan, prog: string): [string, string, string] {
@@ -136,7 +136,7 @@ export function shotsFilter(base: MotionPlan, shots: number, frames: number, siz
 }
 
 export interface SceneClipSpec {
-  asset: { path: string; kind: 'image' | 'video'; width: number; height: number; sha256: string };
+  asset: { path: string; kind: 'image' | 'video'; width: number; height: number; sha256: string; animated?: { camera_baked: boolean; duration_seconds: number } };
   focal: { x: number; y: number };
   camera: Camera;
   crop?: Rect; // normalized override
@@ -161,8 +161,28 @@ export function sceneClipArgs(s: SceneClipSpec, out: string): string[] {
   const crop = coverCrop({ w: s.asset.width, h: s.asset.height }, { w: s.width, h: s.height }, s.focal, s.crop);
   const cropF = `crop=${crop.w}:${crop.h}:${crop.x}:${crop.y}`;
   const enc = ['-an', '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '18', '-pix_fmt', 'yuv420p', '-r', String(s.fps), out];
+  if (s.asset.kind === 'video' && s.asset.animated) {
+    // Authored clips play forward once. Hold their final frame if narration or the incoming transition needs more time.
+    const size = { w: s.width, h: s.height };
+    const focalRel = { x: clamp((s.focal.x * s.asset.width - crop.x) / crop.w, 0, 1), y: clamp((s.focal.y * s.asset.height - crop.y) / crop.h, 0, 1) };
+    const move = !s.asset.animated.camera_baked && s.camera.movement !== 'static';
+    const cameraFrames = Math.min(frames, Math.max(2, Math.round(s.asset.animated.duration_seconds * s.fps)));
+    const camera = !move ? []
+      : isClassicCamera(s.camera) ? [zoompanFilter(motionPlan(s.camera, focalRel), cameraFrames, size, s.fps, true)]
+      : cinematicFilters(s.camera, cameraFrames, size, s.fps, focalRel, motionPlan, true);
+    // Apply the camera to authored frames, then hold the fully composed last frame (including camera framing).
+    const scaled = [
+      cropF, `scale=${s.width * (move ? 2 : 1)}:${s.height * (move ? 2 : 1)}:flags=lanczos`,
+      `fps=${s.fps}`, ...camera, 'setsar=1', `tpad=stop_mode=clone:stop_duration=${s.duration.toFixed(3)}`,
+    ];
+    const glitch = s.effects && s.glitch ? glitchFilters(frames / s.fps) : [];
+    const vf = s.look
+      ? withLook(scaled, s.look, size, s.fps, frames / s.fps, glitch)
+      : [...scaled, ...(s.effects ? LOOK_FILTERS : []), ...glitch, 'format=yuv420p'].join(',');
+    return ['-i', s.asset.path, '-vf', vf, '-frames:v', String(frames), ...enc];
+  }
   if (s.asset.kind === 'video') {
-    // v1: stock video plays as-is (looped or trimmed); camera moves apply to stills only.
+    // Stock video retains its previous loop/trim behavior; composition cameras did not apply to it.
     const plain = [cropF, `scale=${s.width}:${s.height}:flags=lanczos`, `fps=${s.fps}`, 'setsar=1'];
     const vf = s.look ? withLook(plain, s.look, { w: s.width, h: s.height }, s.fps, s.duration) : [...plain, 'format=yuv420p'].join(',');
     return ['-stream_loop', '-1', '-i', s.asset.path, '-t', s.duration.toFixed(3), '-vf', vf, ...enc];

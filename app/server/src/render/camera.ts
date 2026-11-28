@@ -236,7 +236,7 @@ export function cameraMove(cam: Camera, focalRel: Point, classic: (c: Camera, fo
 }
 
 /** The filters that play one movement on an already cropped and oversampled still. */
-export function cinematicFilters(cam: Camera, frames: number, size: { w: number; h: number }, fps: number, focalRel: Point, classic: (c: Camera, focal: Point) => MotionPlan): string[] {
+export function cinematicFilters(cam: Camera, frames: number, size: { w: number; h: number }, fps: number, focalRel: Point, classic: (c: Camera, focal: Point) => MotionPlan, videoInput = false): string[] {
   const n = Math.max(2, frames);
   const m = cameraMove(cam, focalRel, classic);
   const last = Math.max(1, Math.min(n - 1, cam.move_seconds ? Math.round(cam.move_seconds * fps) - 1 : m.whip ? Math.round(n * 0.3) : n - 1));
@@ -255,7 +255,7 @@ export function cinematicFilters(cam: Camera, frames: number, size: { w: number;
   const z = `max(1,${lerp(p.z0, p.z1)})`;
   const x = `max(0,min(iw*${lerp(p.cx0, p.cx1)}-iw/zoom/2${wobble('x')},iw-iw/zoom))`;
   const y = `max(0,min(ih*${lerp(p.cy0, p.cy1)}-ih/zoom/2${wobble('y')},ih-ih/zoom))`;
-  const out = [`zoompan=z='${z}':x='${x}':y='${y}':d=${n}:s=${size.w}x${size.h}:fps=${fps}`];
+  const out = [`zoompan=z='${z}':x='${x}':y='${y}':d=${videoInput ? 1 : n}:s=${size.w}x${size.h}:fps=${fps}`];
 
   if (m.keystone) {
     // sample slightly inside the frame on one side, which reads as a change of viewing angle without black edges

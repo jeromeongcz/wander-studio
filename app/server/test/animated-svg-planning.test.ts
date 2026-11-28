@@ -1,0 +1,21 @@
+import assert from 'node:assert/strict';
+import {test} from 'node:test';
+import { buildScriptPrompt, parseScriptAnswer } from '../src/research/scriptwriter.ts';
+import { draftScenes } from '../src/studios/storyboard.ts';
+const settings={mode:'mixed' as const,style:'dark-folklore',quality:'professional' as const,character:true,environment:true,dialogue:false,camera:true};
+const visual={setting:'Balete forest', action:'Traveler raises a lantern'};
+const staticPlan={mode:'static',duration:6,continuity:'forest and traveler',beats:[]};
+const motion={...staticPlan,mode:'animated',beats:[{start:0.3,end:2.5,actor:'Traveler',action:'Raise lantern with anticipation'}]};
+const answer=JSON.stringify({title:'Balete', sections:[{text:'Watch closely.',visual,animation_plan:motion},{text:'Night falls.',visual,animation_plan:staticPlan}]});
+test('script requests motion, rejects a bad timed plan, and carries mixed timing/IDs into Storyboard',()=>{
+  const prompt=buildScriptPrompt({topic:'Balete',facts:[],lang:'en',langName:'English',seconds:15,scenes:3,words:31,formats:['vertical_9x16'],animation:settings});
+  assert.match(prompt,/Choose static or animated individually/);
+  const opts={title:'Balete',lang:'en',seconds:15,animation:settings};
+  const script=parseScriptAnswer(answer,opts);
+  const sb=draftScenes(script,undefined,{samples:[]});
+  assert.equal(sb.scenes[0].animation_plan?.mode,'animated');
+  assert.equal(sb.scenes[1].animation_plan?.mode,'static');
+  assert.equal(sb.scenes[0].animation_plan?.beats[0].end,2.5);
+  assert.throws(()=>parseScriptAnswer(answer.replace('"end":2.5','"end":12'),opts));
+  assert.doesNotThrow(()=>parseScriptAnswer(answer,{title:'Balete',lang:'en',seconds:15}));
+});
