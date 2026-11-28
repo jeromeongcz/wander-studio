@@ -58,7 +58,7 @@ const body = (req: { body: unknown }): Record<string, any> => (req.body && typeo
  * created by internal provider code calling the service layer with actor 'ai', never via
  * these routes, so approval can never be performed by a provider.
  */
-export function buildApi(engine: Engine, config: Partial<AppConfig> = {}, llm?: LLMProviderRegistry): FastifyInstance {
+export function buildApi(engine: Engine, config: Partial<AppConfig> = {}, llm?: LLMProviderRegistry, allowedHost?: string): FastifyInstance {
   // Backward compatibility: when no registry is supplied (e.g. tests), default to Claude
   // so research/script/storyboard keep working through your own sign-in.
   const registry = llm ?? (() => {
@@ -76,7 +76,8 @@ export function buildApi(engine: Engine, config: Partial<AppConfig> = {}, llm?: 
   // and other websites making your browser call it (cross-origin Origin on state-changing requests).
   const LOCAL = /^(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$/;
   app.addHook('onRequest', async (req, reply) => {
-    if (!LOCAL.test(String(req.headers.host ?? ''))) return reply.status(403).send({ error: { code: 'FORBIDDEN_HOST', message: 'This app only answers on localhost' } });
+    const requestHost = req.headers.host ?? '';
+    if (!LOCAL.test(requestHost) && requestHost.toLowerCase() !== allowedHost?.toLowerCase()) return reply.status(403).send({ error: { code: 'FORBIDDEN_HOST', message: 'This host is not allowed' } });
     const origin = req.headers.origin;
     if (origin && req.method !== 'GET' && req.method !== 'HEAD') {
       let host = '';

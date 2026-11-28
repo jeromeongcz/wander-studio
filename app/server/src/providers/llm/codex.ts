@@ -38,7 +38,7 @@ async function withCodex<T>(
           model: options.model,
           sandbox_mode: 'read-only',
           approval_policy: 'never',
-          web_search: 'disabled',
+          web_search: 'live',
           hooks: {},
           mcp_servers: {},
           features: { shell_tool: false, unified_exec: false, hooks: false, apps: false, plugins: false, multi_agent: false, multi_agent_v2: false },

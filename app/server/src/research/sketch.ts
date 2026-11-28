@@ -3,7 +3,9 @@ import { professionalIllustrationGuidance } from '../animation/generate.ts';
 // model output, so it is checked against an allow-list before it is turned into a PNG and recorded as an asset.
 import { existsSync } from 'node:fs';
 import { createHash } from 'node:crypto';
-import { mkdir, rm, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { renderAsync } from '@resvg/resvg-js';
+import { SaxesParser } from 'saxes';
 import { join } from 'node:path';
 import { EngineError } from '../engine.ts';
 import { ffmpegBinary, run } from '../media.ts';
@@ -51,6 +53,9 @@ export function checkSvg(answer: string, size: { w: number; h: number }): string
     if (name !== 'xmlns' && !name.startsWith('xmlns:') && /(javascript:|data:|https?:|file:|@import|\\)/i.test(value)) throw bad('The drawing refers to something outside itself');
     for (const u of value.matchAll(/url\s*\(\s*["']?\s*([^)"']*)/gi)) if (!u[1].startsWith('#')) throw bad('The drawing refers to something outside itself');
   }
+  const parser = new SaxesParser();
+  parser.on('error', () => { throw bad('The drawing is not well-formed SVG XML'); });
+  parser.write(body).close();
   // fix the canvas size so the picture always comes out at the video's dimensions
   const open = body.slice(0, body.indexOf('>') + 1);
   const attrs = open.replace(/^<svg/, '').replace(/\/?>$/, '').replace(/\s(width|height|xmlns)\s*=\s*("[^"]*"|'[^']*')/g, '');
@@ -119,6 +124,14 @@ function lookNotes(scene: Scene): string[] {
 /** Turn the checked drawing into a PNG with whatever this computer has (see rasterCommands). */
 export async function rasterize(svgPath: string, pngPath: string, ffmpeg: string) {
   const errors: string[] = [];
+  try {
+    const drawing = await readFile(svgPath);
+    const rendered = await renderAsync(drawing);
+    await writeFile(pngPath, rendered.asPng());
+    return;
+  } catch (e) {
+    errors.push(`SVG renderer: ${(e as Error).message.slice(0, 160)}`);
+  }
   for (const c of rasterCommands(svgPath, pngPath, ffmpeg)) {
     try {
       await run(c.bin, c.args, { timeout: 60_000 });
@@ -127,8 +140,7 @@ export async function rasterize(svgPath: string, pngPath: string, ffmpeg: string
       errors.push((e as Error).message.slice(0, 160));
     }
   }
-  const fix = process.platform === 'darwin' ? '' : ' Install an FFmpeg build with librsvg (SVG support), or rsvg-convert.';
-  throw bad(`Could not turn the drawing into a picture.${fix} ${errors.join(' | ')}`);
+  throw bad(`Could not turn the drawing into a picture. ${errors.join(' | ')}`);
 }
 
 export class SketchArtist {
@@ -289,7 +301,14 @@ export class SketchArtist {
     const prompt = buildSketchPrompt(scene, { size, category: project.category ?? undefined, number: index + 1, total: sb.scenes.length, styleNotes: sb.style_notes, captionSpace });
     const active = this.s.llm.active();
     if (!active) throw bad('No AI provider selected. Choose one in Settings → AI Provider before drawing scenes.');
-    const svg = checkSvg(await this.s.llm.generateText({ prompt, model: this.s.config.selectedLLMModel ?? undefined, signal: o.signal }), size);
+    const generate = (instructions: string) => this.s.llm.generateText({ prompt: instructions, model: this.s.config.selectedLLMModel ?? undefined, signal: o.signal });
+    let svg: string;
+    try {
+      svg = checkSvg(await generate(prompt), size);
+    } catch (error) {
+      if ((error as Error).message !== 'The drawing is not well-formed SVG XML') throw error;
+      svg = checkSvg(await generate(`${prompt}\n\nThe previous drawing had invalid SVG XML. Redraw it from scratch. Quote every attribute value, close every element, and use valid XML entities. Return only the complete SVG.`), size);
+    }
     await this.attach(projectId, sb, index, svg, o, `${active.id}-sketch`);
   }
 }

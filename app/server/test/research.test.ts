@@ -11,7 +11,6 @@ import { checkLinks } from '../src/research/links.ts';
 import { researchFromTopic } from '../src/research/service.ts';
 import { buildSketchPrompt, checkSvg, rasterize } from '../src/research/sketch.ts';
 import { ffmpegBinary, run } from '../src/media.ts';
-import { spawnSync } from 'node:child_process';
 
 // ---- a stand-in for the `claude` command ----
 function stubDir() {
@@ -666,6 +665,7 @@ test('model drawings are checked: anything that could run code or reach outside 
     wrap('<rect fill="&xxe;"/>'),
     'no drawing here',
     '<svg><rect/>',
+    wrap('<rect width/="100"/>'),
   ]) assert.throws(() => checkSvg(evil, size), Error, evil);
 });
 
@@ -715,7 +715,7 @@ test('sketch prompt: art direction is open, technical rules stay, caption space 
   assert.match(buildSketchPrompt(scene, { ...base, styleNotes: 'ink and watercolour' }), /ink and watercolour/);
 });
 
-test('a detailed drawing is rasterized with its gradients, filters and text intact', { skip: !/svg/.test(spawnSync('ffmpeg', ['-hide_banner', '-decoders'], { encoding: 'utf8' }).stdout ?? '') && 'this FFmpeg has no SVG (librsvg) support' }, async () => {
+test('a detailed drawing is rasterized with its gradients, filters and text intact', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'wander-raster-'));
   const svg = join(dir, 'a.svg');
   const png = join(dir, 'a.png');
